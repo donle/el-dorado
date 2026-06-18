@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { axialToPixel, type GameState, type Hex, type Axial, type Terrain } from '@eldorado/core';
 import { terrainTexture, groundTexture } from './textures.js';
+import { Decorations, type Placed } from './decor.js';
 
 const HEX_SIZE = 1;
 const GAP = 0.94;
@@ -45,6 +46,8 @@ export class Board {
   private highlights = new Set<string>();
   private hexGeoCache = new Map<string, THREE.CylinderGeometry>();
   private downPos: { x: number; y: number } | null = null;
+  private decor = new Decorations();
+  private clock = new THREE.Clock();
   onHexClick: (c: Axial) => void = () => {};
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -52,7 +55,7 @@ export class Board {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.scene.background = new THREE.Color(0x0a1120);
     this.scene.fog = new THREE.Fog(0x0a1120, 40, 90);
-    this.scene.add(this.hexGroup, this.pieceGroup, this.highlightGroup);
+    this.scene.add(this.hexGroup, this.pieceGroup, this.highlightGroup, this.decor.group);
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.75));
     const key = new THREE.DirectionalLight(0xfff2dd, 1.1);
@@ -99,6 +102,7 @@ export class Board {
   private animate = () => {
     requestAnimationFrame(this.animate);
     this.controls.update();
+    this.decor.update(this.clock.getElapsedTime());
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -136,6 +140,7 @@ export class Board {
     this.highlightGroup.clear();
     this.hexMeshes.clear();
     this.hexTops.clear();
+    const placed: Placed[] = [];
 
     for (const hex of state.hexes) {
       const h = terrainHeight(hex.terrain, hex.cost);
@@ -156,6 +161,7 @@ export class Board {
       this.hexGroup.add(mesh);
       this.hexMeshes.set(`${hex.q},${hex.r}`, mesh);
       this.hexTops.set(`${hex.q},${hex.r}`, { y: h });
+      placed.push({ hex, x, z, top: h });
 
       const label = this.costLabel(hex);
       if (label) {
@@ -163,6 +169,8 @@ export class Board {
         this.hexGroup.add(label);
       }
     }
+
+    this.decor.build(placed);
 
     for (const pl of state.players) {
       if (pl.finished) continue;
