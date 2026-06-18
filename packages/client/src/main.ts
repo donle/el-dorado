@@ -361,8 +361,8 @@ class App {
     let x: number;
     let y: number;
     if (anchor.closest('.hand-tray')) {
-      // hand cards: dock to the right edge so the board stays unobscured
-      x = window.innerWidth - pr.width - 14;
+      // hand cards: dock to the left edge so the board stays unobscured
+      x = 14;
       y = window.innerHeight / 2 - pr.height / 2;
     } else if (ar.left > window.innerWidth / 2) {
       // right-side market: float to the left of the card
