@@ -126,14 +126,12 @@ export class Board {
     const t = this.clock.getElapsedTime();
     this.decor.update(t);
 
-    // Smoothly glide each pawn toward its target hex (frame-rate independent).
+    // Smoothly glide each pawn toward its target hex, staying on the surface
+    // (height is interpolated too, so it never floats).
     const dt = this.moveClock.getDelta();
     const a = 1 - Math.pow(0.0006, dt);
     for (const { group, target } of this.pawns.values()) {
-      const remaining = group.position.distanceTo(target);
       group.position.lerp(target, a);
-      // A little hop while travelling.
-      if (remaining > 0.05) group.position.y += Math.min(remaining, 1) * 0.18;
     }
 
     // Gently pulse the move-target borders.
