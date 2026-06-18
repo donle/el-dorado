@@ -1,6 +1,7 @@
 import './style.css';
 import { Net } from './net.js';
 import { Board } from './board.js';
+import { cardIcon } from './icons.js';
 import {
   getDef,
   movableSymbols,
@@ -59,8 +60,10 @@ class App {
 
   private hud = document.getElementById('hud') as HTMLDivElement;
   private lobby = document.getElementById('lobby') as HTMLDivElement;
+  private preview = el('div', 'card-preview');
 
   constructor() {
+    document.body.appendChild(this.preview);
     this.board = new Board(document.getElementById('board') as HTMLCanvasElement);
     (window as unknown as { __board: Board }).__board = this.board;
     this.board.onHexClick = (c) => this.onHexClick(c);
@@ -267,6 +270,39 @@ class App {
     this.recomputeHighlights();
   }
 
+  // --- card hover preview ---
+
+  private attachPreview(node: HTMLElement, defId: string): void {
+    node.addEventListener('mouseenter', () => this.showPreview(node, defId));
+    node.addEventListener('mouseleave', () => this.hidePreview());
+  }
+
+  private showPreview(anchor: HTMLElement, defId: string): void {
+    this.preview.innerHTML = previewHtml(defId);
+    this.preview.style.display = 'block';
+    const pr = this.preview.getBoundingClientRect();
+    const ar = anchor.getBoundingClientRect();
+    let x: number;
+    let y: number;
+    if (ar.left > window.innerWidth / 2) {
+      // right-side market: float to the left of the card
+      x = ar.left - pr.width - 14;
+      y = ar.top + ar.height / 2 - pr.height / 2;
+    } else {
+      // bottom hand: float above the card
+      x = ar.left + ar.width / 2 - pr.width / 2;
+      y = ar.top - pr.height - 14;
+    }
+    x = Math.max(10, Math.min(x, window.innerWidth - pr.width - 10));
+    y = Math.max(10, Math.min(y, window.innerHeight - pr.height - 10));
+    this.preview.style.left = `${x}px`;
+    this.preview.style.top = `${y}px`;
+  }
+
+  private hidePreview(): void {
+    this.preview.style.display = 'none';
+  }
+
   // --- rendering: lobby ---
 
   private renderLobby(): void {
@@ -347,6 +383,7 @@ class App {
   }
 
   private renderHud(): void {
+    this.hidePreview();
     if (!this.state || this.state.phase === 'lobby') {
       this.hud.innerHTML = '';
       return;
@@ -385,19 +422,31 @@ class App {
     }
     this.hud.appendChild(pp);
 
-    // --- right: market ---
+    // --- right: market (all 18 cards; on-board buyable, others upcoming) ---
     const market = el('div', 'market-panel panel');
-    market.innerHTML = '<h3>市场 · Shop</h3>';
-    for (const pile of s.market.filter((m) => m.onBoard)) {
+    const onBoard = s.market.filter((m) => m.onBoard);
+    const upcoming = s.market.filter((m) => !m.onBoard);
+    const shopCard = (pile: (typeof s.market)[number], locked: boolean): HTMLDivElement => {
       const def = getDef(pile.defId);
       const sub = def.kind === 'action' ? '行动牌' : def.power ? `力量 ${def.power}` : '';
-      const card = el('div', `shop-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${pile.count === 0 ? 'sold' : ''}`);
+      const cls = locked ? 'upcoming' : pile.count === 0 ? 'sold' : '';
+      const card = el('div', `shop-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${cls}`);
       card.innerHTML = `
-        <span class="ic">${KIND_GLYPH[def.kind]}</span>
+        <span class="ic">${cardIcon(def)}</span>
         <span class="nm">${escapeHtml(def.name)}<small>${sub}${def.singleUse ? ' · 单次' : ''}</small></span>
-        <span class="price"><span class="c">${def.cost}💰</span><span class="left">×${pile.count}</span></span>`;
-      if (pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
-      market.appendChild(card);
+        <span class="price"><span class="c">${def.cost}💰</span><span class="left">${locked ? '待补充' : `×${pile.count}`}</span></span>`;
+      if (!locked && pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
+      this.attachPreview(card, pile.defId);
+      return card;
+    };
+    market.innerHTML = '<h3>市场 · 在售</h3>';
+    for (const pile of onBoard) market.appendChild(shopCard(pile, false));
+    if (upcoming.length) {
+      const sub = el('h3', '');
+      sub.textContent = `待补充 · ${upcoming.length}`;
+      sub.style.marginTop = '14px';
+      market.appendChild(sub);
+      for (const pile of upcoming) market.appendChild(shopCard(pile, true));
     }
     this.hud.appendChild(market);
 
@@ -411,14 +460,14 @@ class App {
         const selected = this.selectedCardId === c.id;
         const inPayment = (this.mode === 'buy' || this.mode === 'clear') && this.payment.has(c.id);
         const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''} ${inPayment ? 'payment' : ''}`);
-        const sym = def.kind === 'joker' ? '🃏' : def.symbol ? SYMBOL_GLYPH[def.symbol] : '✨';
         const foot = def.kind === 'action' ? '行动' : `${coinValue(c.defId)}💰`;
         card.innerHTML = `
           <div class="name">${escapeHtml(def.name)}</div>
           ${def.power ? `<span class="corner">${def.power}</span>` : ''}
-          <div class="sym">${sym}</div>
+          <div class="art">${cardIcon(def)}</div>
           <div class="meta"><span>${foot}</span><span>${def.singleUse ? '单次' : ''}</span></div>`;
         if (myTurn) card.onclick = () => this.onCardClick(c.id);
+        this.attachPreview(card, c.defId);
         tray.appendChild(card);
       }
     }
@@ -464,6 +513,57 @@ function cardDefId(cardId: string, state: GameState): string {
   // ids look like "playerId:defId#n"
   const m = cardId.match(/:([a-z_]+)#/);
   return m ? m[1] : cardId;
+}
+
+const KIND_LABEL: Record<string, string> = {
+  green: '丛林 · 砍刀',
+  blue: '水域 · 船桨',
+  yellow: '村庄 · 金币',
+  joker: '万能牌',
+  action: '行动牌',
+};
+
+function cardDescription(defId: string): string {
+  const def = getDef(defId);
+  if (def.kind === 'joker') {
+    return `万能牌：出牌时可当作 🗡️砍刀 / 🛶船桨 / 🪙金币 中任意一种使用（每次选一种，不可混用）。购买时按 ${def.power} 金币计。`;
+  }
+  if (def.kind === 'action') {
+    switch (def.ability) {
+      case 'draw2':
+        return '抽 2 张牌，本回合可立即打出使用。';
+      case 'draw1_remove1':
+        return '抽 1 张牌，然后可将手牌中 1 张永久移出游戏（精简牌库）。';
+      case 'draw3':
+        return '抽 3 张牌。';
+      case 'draw2_remove2':
+        return '抽 2 张牌，并可移除至多 2 张手牌。';
+      case 'take_free':
+        return '免费获得市场上任意一张牌，置入弃牌堆。';
+      case 'native':
+        return '将棋子移动到相邻 1 格，无视该格地形需求（可直接拆除路障）。';
+      default:
+        return '行动牌。';
+    }
+  }
+  const sym = def.symbol === 'machete' ? '丛林（绿）' : def.symbol === 'paddle' ? '水域（蓝）' : '村庄（黄）';
+  let s = `移动牌：提供 ${def.power} 点力量，进入需求 ≤ ${def.power} 的${sym}地格，余力可逐格穿越。`;
+  s += def.symbol === 'coin' ? ` 购买时按 ${def.power} 金币计。` : ' 购买时按 ½ 金币计。';
+  return s;
+}
+
+function previewHtml(defId: string): string {
+  const def = getDef(defId);
+  const cost = def.starting
+    ? '<span class="cp-cost">起始牌 · 不可购买</span>'
+    : `<span class="cp-cost">购买消耗 <b>${def.cost}</b> 💰</span>`;
+  const power = def.power ? `<span class="cp-pow">力量 ${def.power}</span>` : '';
+  return `
+    <div class="cp-art">${cardIcon(def)}</div>
+    <div class="cp-title">${escapeHtml(def.name)}</div>
+    <div class="cp-type">${KIND_LABEL[def.kind] ?? ''}${def.singleUse ? ' · 单次性' : ''}</div>
+    <div class="cp-desc">${cardDescription(defId)}</div>
+    <div class="cp-foot">${cost}${power}</div>`;
 }
 
 function el(tag: string, className = ''): HTMLDivElement {
