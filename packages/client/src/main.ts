@@ -120,7 +120,9 @@ class App {
         const sources = new Map<string, DOMRect>();
         for (const e of buys) {
           const node = this.shopEls.get(e.defId);
-          if (node) sources.set(`${e.defId}|${e.playerId}`, node.getBoundingClientRect());
+          // start from the card-face thumbnail (card-shaped), not the whole row
+          const thumb = node?.querySelector('.card-thumb') ?? node;
+          if (thumb) sources.set(`${e.defId}|${e.playerId}`, thumb.getBoundingClientRect());
         }
         this.state = m.state;
         this.resetSelection();
@@ -324,19 +326,23 @@ class App {
     return pile;
   }
 
-  /** Fly a clone of the bought card from the market to its destination. */
+  /** Fly a card-shaped clone of the bought card from the market to its destination. */
   private flyCard(defId: string, from: DOMRect, to: DOMRect, fade: boolean): void {
+    const W = 70;
+    const H = 98; // card aspect, independent of the source row's shape
+    const fromCx = from.left + from.width / 2;
+    const fromCy = from.top + from.height / 2;
     const fly = el('div', 'fly-card');
     fly.innerHTML = cardFace(getDef(defId));
-    fly.style.left = `${from.left}px`;
-    fly.style.top = `${from.top}px`;
-    fly.style.width = `${from.width}px`;
-    fly.style.height = `${from.height}px`;
+    fly.style.left = `${fromCx - W / 2}px`;
+    fly.style.top = `${fromCy - H / 2}px`;
+    fly.style.width = `${W}px`;
+    fly.style.height = `${H}px`;
     document.body.appendChild(fly);
     requestAnimationFrame(() => {
-      const dx = to.left + to.width / 2 - (from.left + from.width / 2);
-      const dy = to.top + to.height / 2 - (from.top + from.height / 2);
-      fly.style.transform = `translate(${dx}px, ${dy}px) scale(${fade ? 0.45 : 0.7})`;
+      const dx = to.left + to.width / 2 - fromCx;
+      const dy = to.top + to.height / 2 - fromCy;
+      fly.style.transform = `translate(${dx}px, ${dy}px) scale(${fade ? 0.5 : 0.75})`;
       if (fade) fly.style.opacity = '0';
     });
     setTimeout(() => fly.remove(), 850);
