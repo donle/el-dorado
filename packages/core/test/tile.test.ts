@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { buildTileMap, TILE_NEIGHBOR_OFFSETS } from '../src/maps/tile.js';
+import {
+  buildTileMap,
+  assembleTiles,
+  neighborCenter,
+  TILE_EDGES,
+  TILE_NEIGHBOR_OFFSETS,
+  EDGE_OFFSET,
+  OPPOSITE_EDGE,
+  type TileEdge,
+} from '../src/maps/tile.js';
 import { CLASSIC_MAP } from '../src/maps/index.js';
 import { neighbors, key } from '../src/hex.js';
 
@@ -9,15 +18,36 @@ describe('tile composition', () => {
     expect(m.hexes).toHaveLength(37);
   });
 
-  it('two edge-joined tiles do not overlap (74 cells)', () => {
-    const m = buildTileMap('t', 'two', [{ theme: 'jungle', dir: 0 }, { theme: 'river' }]);
-    expect(m.hexes).toHaveLength(74);
-    const keys = new Set(m.hexes.map(key));
-    expect(keys.size).toBe(74);
+  it('two edge-joined tiles do not overlap (74 cells) for every edge', () => {
+    for (const edge of TILE_EDGES) {
+      const m = buildTileMap('t', 'two', [{ theme: 'jungle', connect: edge }, { theme: 'river' }]);
+      expect(m.hexes, edge).toHaveLength(74);
+      expect(new Set(m.hexes.map(key)).size, edge).toBe(74);
+    }
   });
 
-  it('exposes 6 neighbour offsets', () => {
+  it('exposes 6 named edges with offsets', () => {
+    expect(TILE_EDGES).toHaveLength(6);
     expect(TILE_NEIGHBOR_OFFSETS).toHaveLength(6);
+    expect(Object.keys(EDGE_OFFSET)).toHaveLength(6);
+  });
+
+  it('opposite edges have opposite offsets', () => {
+    for (const edge of TILE_EDGES) {
+      const a = EDGE_OFFSET[edge];
+      const b = EDGE_OFFSET[OPPOSITE_EDGE[edge as TileEdge]];
+      expect({ q: a.q + b.q, r: a.r + b.r }, edge).toEqual({ q: 0, r: 0 });
+    }
+  });
+
+  it('neighborCenter + assembleTiles compose two tiles edge-to-edge', () => {
+    const c0 = { q: 0, r: 0 };
+    const c1 = neighborCenter(c0, 'right-up');
+    const m = assembleTiles('t', 'two', [
+      { theme: 'jungle', center: c0 },
+      { theme: 'river', center: c1 },
+    ]);
+    expect(m.hexes).toHaveLength(74);
   });
 
   it('classic map: 5 tiles = 185 cells, 4 start, 3 finish, fully connected', () => {

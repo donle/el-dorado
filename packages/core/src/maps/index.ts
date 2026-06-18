@@ -9,14 +9,15 @@ import { buildTileMap } from './tile.js';
  * Start hexes sit on the back edge of the start tile, the 3 finish hexes on
  * the far edge of the end tile.
  */
-// Directions vary across all four edge types (offsets 5,0,1,2) so the tiles
-// join on different sides — an arcing, winding trail rather than a regular
-// zigzag. Verified overlap-free with no accidental non-consecutive adjacency.
+// Each tile attaches to the next along a named, semantic edge — varying the
+// seam (up / right-up / right-down / down) gives an arcing, winding trail
+// rather than a regular zigzag. Verified overlap-free with no accidental
+// non-consecutive adjacency.
 export const CLASSIC_MAP: GameMap = buildTileMap('classic', 'El Dorado Trail', [
-  { theme: 'start', dir: 5 },
-  { theme: 'jungle', dir: 0 },
-  { theme: 'river', dir: 1 },
-  { theme: 'village', dir: 2 },
+  { theme: 'start', connect: 'up' },
+  { theme: 'jungle', connect: 'right-up' },
+  { theme: 'river', connect: 'right-down' },
+  { theme: 'village', connect: 'down' },
   { theme: 'end' },
 ]);
 
@@ -38,4 +39,14 @@ export function getMap(id: string): GameMap {
 }
 
 export { parseGrid };
-export { buildTileMap, TILE_RADIUS, TILE_NEIGHBOR_OFFSETS } from './tile.js';
+export {
+  buildTileMap,
+  assembleTiles,
+  neighborCenter,
+  TILE_RADIUS,
+  TILE_EDGES,
+  EDGE_OFFSET,
+  OPPOSITE_EDGE,
+  TILE_NEIGHBOR_OFFSETS,
+} from './tile.js';
+export type { TileEdge, TileTheme, TileSpec, PlacedTile } from './tile.js';

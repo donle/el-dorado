@@ -4,23 +4,78 @@
  * - Smallest unit: one hex cell.
  * - One "continent tile" is a regular hexagon of hexes with side length 4 =
  *   37 cells (all cells within cube-distance 3 of the tile centre).
- * - Tiles connect edge-to-edge to form the full route. Two side-4 hexagons
- *   placed at a neighbour offset share a 7-cell border with zero overlap.
+ * - Tiles connect edge-to-edge to form the route. Because a hexagon's edge is
+ *   a zig-zag of cells, the seam between two tiles is staggered. A regular
+ *   hexagon has exactly 6 edges, so there are 6 ways to attach a neighbour —
+ *   captured by the {@link TileEdge} interface below. The four diagonal edges
+ *   come as left/right-staggered pairs (right-up vs right-down, left-up vs
+ *   left-down); the remaining two are the straight up / down seams.
+ *
+ * Two side-4 hexagons placed at an edge offset share a 7-cell border with
+ * zero overlap (verified).
  */
 import type { GameMap, Hex, Terrain, Axial } from '../types.js';
 import { key } from '../hex.js';
 
 export const TILE_RADIUS = 3; // side length 4 → 37 cells
 
-/** Centre-to-centre offsets to the 6 edge-adjacent tiles (rotations of (7,-3)). */
-export const TILE_NEIGHBOR_OFFSETS: Axial[] = [
-  { q: 7, r: -3 },
-  { q: 3, r: 4 },
-  { q: -4, r: 7 },
-  { q: -7, r: 3 },
-  { q: -3, r: -4 },
-  { q: 4, r: -7 },
+// --- Connection abstraction ----------------------------------------------
+
+/**
+ * The six edges along which one tile attaches to a neighbour. The diagonal
+ * edges encode the zig-zag stagger directly in their name:
+ *   right-up / right-down  → rightward seam, staggered up or down
+ *   left-up  / left-down   → leftward seam, staggered up or down
+ *   up / down              → straight vertical seam
+ */
+export type TileEdge =
+  | 'right-up'
+  | 'right-down'
+  | 'left-up'
+  | 'left-down'
+  | 'up'
+  | 'down';
+
+/** Canonical edge order (matches the 6 hexagonal neighbour directions). */
+export const TILE_EDGES: readonly TileEdge[] = [
+  'right-up',
+  'right-down',
+  'down',
+  'left-down',
+  'left-up',
+  'up',
 ];
+
+/** Centre-to-centre axial offset to the neighbour across each edge. */
+export const EDGE_OFFSET: Record<TileEdge, Axial> = {
+  'right-up': { q: 7, r: -3 },
+  'right-down': { q: 3, r: 4 },
+  down: { q: -4, r: 7 },
+  'left-down': { q: -7, r: 3 },
+  'left-up': { q: -3, r: -4 },
+  up: { q: 4, r: -7 },
+};
+
+/** The edge of the neighbour that faces back (B attaches to A here). */
+export const OPPOSITE_EDGE: Record<TileEdge, TileEdge> = {
+  'right-up': 'left-down',
+  'left-down': 'right-up',
+  'right-down': 'left-up',
+  'left-up': 'right-down',
+  up: 'down',
+  down: 'up',
+};
+
+/** Low-level offsets in canonical order — for callers that index numerically. */
+export const TILE_NEIGHBOR_OFFSETS: Axial[] = TILE_EDGES.map((e) => EDGE_OFFSET[e]);
+
+/** The centre of the tile reached by crossing `edge` from `center`. */
+export function neighborCenter(center: Axial, edge: TileEdge): Axial {
+  const o = EDGE_OFFSET[edge];
+  return { q: center.q + o.q, r: center.r + o.r };
+}
+
+// --- Tile content ----------------------------------------------------------
 
 export type TileTheme = 'start' | 'jungle' | 'river' | 'village' | 'end';
 
@@ -99,36 +154,42 @@ function cellSpec(theme: TileTheme, dq: number, dr: number): CellSpec {
   return { terrain, cost };
 }
 
-export interface TileStep {
+// --- Assembly --------------------------------------------------------------
+
+/** A tile placed at an explicit centre — the unit of a general layout. */
+export interface PlacedTile {
   theme: TileTheme;
-  /** Index into TILE_NEIGHBOR_OFFSETS for the NEXT tile (omit on the last). */
-  dir?: number;
+  center: Axial;
 }
 
-/** Build a map by placing tiles edge-to-edge along a path of steps. */
-export function buildTileMap(id: string, name: string, path: TileStep[]): GameMap {
+/** One tile in a linear chain; `connect` is the edge toward the NEXT tile. */
+export interface TileSpec {
+  theme: TileTheme;
+  connect?: TileEdge;
+}
+
+/**
+ * Build a map from tiles placed at explicit centres. Fully general — supports
+ * branching / non-linear layouts. Overlapping cells are de-duplicated.
+ */
+export function assembleTiles(id: string, name: string, placed: PlacedTile[]): GameMap {
   const cells = localCells();
   const hexByKey = new Map<string, Hex>();
   const starts: Array<{ slot: number; coord: Axial }> = [];
   const finishes: Array<{ slot: number; coord: Axial }> = [];
 
-  let center: Axial = { q: 0, r: 0 };
-  for (const step of path) {
+  for (const tile of placed) {
     for (const c of cells) {
-      const q = center.q + c.q;
-      const r = center.r + c.r;
+      const q = tile.center.q + c.q;
+      const r = tile.center.r + c.r;
       const k = `${q},${r}`;
-      if (hexByKey.has(k)) continue; // shared-edge dedupe (shouldn't happen with these offsets)
-      const spec = cellSpec(step.theme, c.q, c.r);
+      if (hexByKey.has(k)) continue; // shared-edge dedupe
+      const spec = cellSpec(tile.theme, c.q, c.r);
       const hex: Hex = { q, r, terrain: spec.terrain, cost: spec.cost };
       if (spec.slot !== undefined) hex.slot = spec.slot;
       hexByKey.set(k, hex);
       if (spec.terrain === 'start') starts.push({ slot: spec.slot!, coord: { q, r } });
       if (spec.terrain === 'finish') finishes.push({ slot: spec.slot!, coord: { q, r } });
-    }
-    if (step.dir !== undefined) {
-      const off = TILE_NEIGHBOR_OFFSETS[step.dir];
-      center = { q: center.q + off.q, r: center.r + off.r };
     }
   }
 
@@ -141,6 +202,21 @@ export function buildTileMap(id: string, name: string, path: TileStep[]): GameMa
     startHexes: starts.map((s) => s.coord),
     finishHexes: finishes.map((f) => f.coord),
   };
+}
+
+/**
+ * Convenience builder for the common case: a chain of tiles, each attached to
+ * the next along a named {@link TileEdge}. Resolves the chain to explicit
+ * centres and delegates to {@link assembleTiles}.
+ */
+export function buildTileMap(id: string, name: string, chain: TileSpec[]): GameMap {
+  const placed: PlacedTile[] = [];
+  let center: Axial = { q: 0, r: 0 };
+  for (const spec of chain) {
+    placed.push({ theme: spec.theme, center });
+    if (spec.connect) center = neighborCenter(center, spec.connect);
+  }
+  return assembleTiles(id, name, placed);
 }
 
 export { key };
