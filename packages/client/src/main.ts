@@ -7,6 +7,7 @@ import {
   coinValue,
   neighbors,
   isAdjacent,
+  distance,
   type GameState,
   type RoomView,
   type ServerMessage,
@@ -332,6 +333,19 @@ class App {
 
   // --- rendering: HUD ---
 
+  /** Rough progress 0..1 toward El Dorado, for the player roster bars. */
+  private progressOf(p: { position: Axial; finished: boolean }): number {
+    const s = this.state;
+    if (!s) return 0;
+    if (p.finished) return 1;
+    const finishes = s.hexes.filter((h) => h.terrain === 'finish');
+    const starts = s.hexes.filter((h) => h.terrain === 'start');
+    if (!finishes.length) return 0;
+    const toFinish = (pos: Axial) => Math.min(...finishes.map((f) => distance(pos, f)));
+    const ref = starts.length ? Math.max(...starts.map((st) => toFinish(st))) : 1;
+    return Math.max(0, Math.min(1, 1 - toFinish(p.position) / Math.max(ref, 1)));
+  }
+
   private renderHud(): void {
     if (!this.state || this.state.phase === 'lobby') {
       this.hud.innerHTML = '';
@@ -340,86 +354,102 @@ class App {
     const s = this.state;
     const myTurn = this.isMyTurn();
     const turnName = s.players.find((p) => p.id === s.turn?.playerId)?.name ?? '';
-
+    const winnerName = s.winnerId ? s.players.find((p) => p.id === s.winnerId)?.name : null;
     this.hud.innerHTML = '';
 
-    // top bar
+    // --- top bar ---
     const top = el('div', 'topbar panel');
-    const winnerName = s.winnerId ? s.players.find((p) => p.id === s.winnerId)?.name : null;
+    let banner = `<div class="turn-banner">⏳ 等待 ${escapeHtml(turnName)}</div>`;
+    if (s.phase === 'finished') banner = `<div class="turn-banner win">🏆 ${escapeHtml(winnerName ?? '')} 抵达黄金城！</div>`;
+    else if (myTurn) banner = `<div class="turn-banner you">🟢 轮到你行动</div>`;
     top.innerHTML = `
-      <span class="code">房间 ${this.room?.code ?? ''}</span>
-      <span class="turn">${s.phase === 'finished' ? `🏆 ${escapeHtml(winnerName ?? '')} 抵达黄金城！` : myTurn ? '🟢 轮到你' : `等待 ${escapeHtml(turnName)}`}</span>
-      <span class="spacer"></span>
-      <span class="players">${s.players
-        .map((p) => {
-          const active = p.id === s.turn?.playerId;
-          return `<span class="player-chip ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}"><span class="dot" style="background:${colorHex(
-            p.color,
-          )}"></span>${escapeHtml(p.name)} · 卡${p.deck.length + p.hand.length + p.discard.length}${p.finished ? ' ✅' : ''}</span>`;
-        })
-        .join('')}</span>`;
+      <div class="brand"><span class="logo">🏆</span><span>冲向黄金城</span><span class="code">${escapeHtml(this.room?.code ?? '')}</span></div>
+      ${banner}
+      <div class="hint-inline">滚轮缩放 · 拖拽平移 · 右键转视角</div>`;
     this.hud.appendChild(top);
 
-    // market
-    const market = el('div', 'market panel');
-    market.innerHTML = '<h3>市场</h3>';
+    // --- left: players ---
+    const pp = el('div', 'players-panel panel');
+    pp.innerHTML = '<h3>探险队</h3>';
+    for (const p of s.players) {
+      const active = p.id === s.turn?.playerId;
+      const row = el('div', `player-row ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}`);
+      const tags = `${p.isAI ? '<span class="tag">AI</span>' : ''}${p.id === this.you ? '<span class="tag">你</span>' : ''}`;
+      row.innerHTML = `
+        <span class="dot" style="background:${colorHex(p.color)}"></span>
+        <span class="pname">${escapeHtml(p.name)} ${tags}</span>
+        <span class="tag">${p.finished ? '🏆' : active ? '▶' : ''}</span>
+        <span class="counts">牌库 <b>${p.deck.length}</b> · 手 <b>${p.hand.length}</b> · 弃 <b>${p.discard.length}</b></span>
+        <span class="progress"><span style="width:${Math.round(this.progressOf(p) * 100)}%"></span></span>`;
+      pp.appendChild(row);
+    }
+    this.hud.appendChild(pp);
+
+    // --- right: market ---
+    const market = el('div', 'market-panel panel');
+    market.innerHTML = '<h3>市场 · Shop</h3>';
     for (const pile of s.market.filter((m) => m.onBoard)) {
       const def = getDef(pile.defId);
-      const card = el('div', `market-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${pile.count === 0 ? 'off' : ''}`);
-      card.innerHTML = `<span>${KIND_GLYPH[def.kind]} ${escapeHtml(def.name)}${def.power ? ` ${def.power}` : ''}</span><span class="cost">${def.cost}💰 ·${pile.count}</span>`;
-      if (pile.count > 0) card.onclick = () => this.onMarketClick(pile.defId);
+      const sub = def.kind === 'action' ? '行动牌' : def.power ? `力量 ${def.power}` : '';
+      const card = el('div', `shop-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${pile.count === 0 ? 'sold' : ''}`);
+      card.innerHTML = `
+        <span class="ic">${KIND_GLYPH[def.kind]}</span>
+        <span class="nm">${escapeHtml(def.name)}<small>${sub}${def.singleUse ? ' · 单次' : ''}</small></span>
+        <span class="price"><span class="c">${def.cost}💰</span><span class="left">×${pile.count}</span></span>`;
+      if (pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
       market.appendChild(card);
     }
     this.hud.appendChild(market);
 
-    // hand
+    // --- bottom dock: hand + actions ---
+    const dock = el('div', 'dock');
     const me = this.me;
+    const tray = el('div', 'hand-tray');
     if (me) {
-      const hand = el('div', 'hand panel');
       for (const c of me.hand) {
         const def = getDef(c.defId);
         const selected = this.selectedCardId === c.id;
         const inPayment = (this.mode === 'buy' || this.mode === 'clear') && this.payment.has(c.id);
         const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''} ${inPayment ? 'payment' : ''}`);
         const sym = def.kind === 'joker' ? '🃏' : def.symbol ? SYMBOL_GLYPH[def.symbol] : '✨';
+        const foot = def.kind === 'action' ? '行动' : `${coinValue(c.defId)}💰`;
         card.innerHTML = `
           <div class="name">${escapeHtml(def.name)}</div>
-          <div class="sym">${sym} ${def.power || ''}</div>
-          <div class="meta">${def.kind === 'action' ? '行动' : `${coinValue(c.defId)}💰`}${def.singleUse ? ' · 单次' : ''}</div>`;
+          ${def.power ? `<span class="corner">${def.power}</span>` : ''}
+          <div class="sym">${sym}</div>
+          <div class="meta"><span>${foot}</span><span>${def.singleUse ? '单次' : ''}</span></div>`;
         if (myTurn) card.onclick = () => this.onCardClick(c.id);
-        hand.appendChild(card);
+        tray.appendChild(card);
       }
-      this.hud.appendChild(hand);
     }
 
-    // action buttons
+    const bar = el('div', 'action-bar');
+    const ctx = el('div', 'ctx');
+    ctx.textContent = myTurn ? this.hint : `等待 ${turnName} 行动…`;
+    bar.appendChild(ctx);
     if (myTurn && s.phase === 'playing') {
-      const actions = el('div', 'actions panel');
       if (this.mode === 'buy') {
         const cost = this.buyTargetDefId ? getDef(this.buyTargetDefId).cost : 0;
         const have = [...this.payment].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-        const buy = button(`确认购买 (${have}/${cost}💰)`, () => this.confirmBuy());
+        const buy = button(`确认购买 (${have}/${cost}💰)`, () => this.confirmBuy(), false);
+        buy.className = 'gold';
         buy.disabled = have < cost;
-        actions.appendChild(buy);
-        actions.appendChild(button('取消', () => this.cancelMode(), true));
+        bar.appendChild(buy);
+        bar.appendChild(button('取消', () => this.cancelMode(), true));
       } else if (this.mode === 'clear') {
-        actions.appendChild(button('取消', () => this.cancelMode(), true));
+        bar.appendChild(button('取消', () => this.cancelMode(), true));
       } else {
-        actions.appendChild(button('结束回合', () => this.act({ type: 'EndTurn' }), true));
+        bar.appendChild(button('结束回合', () => this.act({ type: 'EndTurn' }), true));
       }
-      this.hud.appendChild(actions);
     }
+    dock.appendChild(tray);
+    dock.appendChild(bar);
+    this.hud.appendChild(dock);
 
-    if (this.hint && myTurn) {
-      const hint = el('div', 'hint panel');
-      hint.textContent = this.hint;
-      this.hud.appendChild(hint);
-    }
     if (this.error) {
-      const e = el('div', 'hint panel');
-      e.style.background = '#a33';
-      e.textContent = this.error;
-      this.hud.appendChild(e);
+      const t = el('div', 'toast');
+      t.textContent = this.error;
+      this.hud.appendChild(t);
     }
   }
 }

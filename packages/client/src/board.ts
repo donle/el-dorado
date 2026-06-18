@@ -119,8 +119,11 @@ export class Board {
   private hexGeo(key: string, height: number): THREE.CylinderGeometry {
     let g = this.hexGeoCache.get(key);
     if (!g) {
+      // CylinderGeometry's 6-gon already has a vertex on +Z (pointy-top), which
+      // matches axialToPixel's pointy-top spacing — so NO extra rotation. The
+      // earlier rotateY(30°) made flat-top hexes on pointy-top centres → the
+      // honeycomb stopped tessellating.
       g = new THREE.CylinderGeometry(HEX_SIZE * GAP, HEX_SIZE * GAP, height, 6);
-      g.rotateY(Math.PI / 6); // pointy-top alignment
       this.hexGeoCache.set(key, g);
     }
     return g;
@@ -256,19 +259,19 @@ export class Board {
 
   private applyHighlights(): void {
     this.highlightGroup.clear();
-    const ringGeo = new THREE.RingGeometry(HEX_SIZE * 0.55, HEX_SIZE * 0.92, 6);
+    // A thin hex prism overlay, same orientation as the hexes, that pokes out
+    // past the GAP so it reads as a glowing rim.
+    const geo = new THREE.CylinderGeometry(HEX_SIZE * 0.99, HEX_SIZE * 0.99, 0.12, 6);
     for (const k of this.highlights) {
       const mesh = this.hexMeshes.get(k);
       const top = this.hexTops.get(k);
       if (!mesh || !top) continue;
-      const ring = new THREE.Mesh(
-        ringGeo,
-        new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
+      const overlay = new THREE.Mesh(
+        geo,
+        new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.4 }),
       );
-      ring.rotation.x = -Math.PI / 2;
-      ring.rotation.z = Math.PI / 6;
-      ring.position.set(mesh.position.x, top.y + 0.06, mesh.position.z);
-      this.highlightGroup.add(ring);
+      overlay.position.set(mesh.position.x, top.y + 0.06, mesh.position.z);
+      this.highlightGroup.add(overlay);
     }
   }
 }
