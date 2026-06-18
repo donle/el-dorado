@@ -90,6 +90,11 @@ export class Board {
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.ROTATE,
     };
+    // Touch: one finger pans the board (map-like), two fingers pinch-zoom + pan.
+    this.controls.touches = {
+      ONE: THREE.TOUCH.PAN,
+      TWO: THREE.TOUCH.DOLLY_PAN,
+    };
 
     window.addEventListener('resize', () => this.resize());
     // Distinguish a click (select hex) from a drag (camera move).

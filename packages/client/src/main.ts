@@ -69,6 +69,8 @@ class App {
   clearTarget: Axial | null = null;
   hint = '';
   error = '';
+  /** Which panel is open as a bottom sheet on mobile (null = none). */
+  mobilePanel: 'players' | 'market' | null = null;
   nameValue = localStorage.getItem('eldorado.name') ?? '';
 
   private hud = document.getElementById('hud') as HTMLDivElement;
@@ -269,6 +271,8 @@ class App {
     this.selectedCardId = null;
     this.payment.clear();
     this.hint = this.mode === 'buy' ? '选手牌支付，然后点「确认购买」' : '';
+    // On mobile, close the market sheet so the hand is reachable for payment.
+    if (this.mode === 'buy') this.mobilePanel = null;
     this.renderHud();
     this.recomputeHighlights();
   }
@@ -442,8 +446,22 @@ class App {
       <div class="hint-inline">滚轮缩放 · 拖拽平移 · 右键转视角</div>`;
     this.hud.appendChild(top);
 
+    // --- mobile toolbar (toggles the bottom-sheet panels) ---
+    const toolbar = el('div', 'mobile-toolbar');
+    const toggle = (which: 'players' | 'market', label: string) => {
+      const btn = button(label, () => {
+        this.mobilePanel = this.mobilePanel === which ? null : which;
+        this.renderHud();
+      });
+      if (this.mobilePanel === which) btn.classList.add('active');
+      return btn;
+    };
+    toolbar.appendChild(toggle('players', '👥 队伍'));
+    toolbar.appendChild(toggle('market', '🛒 市场'));
+    this.hud.appendChild(toolbar);
+
     // --- left: players ---
-    const pp = el('div', 'players-panel panel');
+    const pp = el('div', `players-panel panel ${this.mobilePanel === 'players' ? 'open' : ''}`);
     pp.innerHTML = '<h3>探险队</h3>';
     for (const p of s.players) {
       const active = p.id === s.turn?.playerId;
@@ -460,7 +478,7 @@ class App {
     this.hud.appendChild(pp);
 
     // --- right: market (all 18 cards; on-board buyable, others upcoming) ---
-    const market = el('div', 'market-panel panel');
+    const market = el('div', `market-panel panel ${this.mobilePanel === 'market' ? 'open' : ''}`);
     const onBoard = s.market.filter((m) => m.onBoard);
     const upcoming = s.market.filter((m) => !m.onBoard);
     const shopCard = (pile: (typeof s.market)[number], locked: boolean): HTMLDivElement => {

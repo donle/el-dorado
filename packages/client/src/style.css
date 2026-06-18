@@ -16,7 +16,10 @@ html, body { margin: 0; height: 100%; overflow: hidden;
   font-family: system-ui, -apple-system, "PingFang SC", "Segoe UI", sans-serif;
   color: var(--ink); background: var(--bg); }
 #app { position: relative; width: 100vw; height: 100vh; }
-#board { display: block; width: 100%; height: 100%; }
+#board { display: block; width: 100%; height: 100%; touch-action: none; }
+
+/* Mobile-only toolbar (toggles the panels). Hidden on desktop. */
+.mobile-toolbar { display: none; }
 
 /* ---------- HUD shell ---------- */
 #hud { position: absolute; inset: 0; pointer-events: none; }
@@ -162,3 +165,40 @@ button:disabled { opacity: .4; cursor: not-allowed; filter: none; }
   background: rgba(255,255,255,0.04); border-radius: 10px; font-size: 14px; }
 .lobby-players .dot { width: 12px; height: 12px; border-radius: 50%; }
 .error { color: #ff8080; font-size: 13px; min-height: 18px; margin-top: 10px; }
+
+/* ============ Mobile / touch layout ============ */
+@media (max-width: 760px) {
+  .topbar { top: 8px; gap: 8px; padding: 6px 10px; font-size: 13px; }
+  .brand span:not(.code):not(.logo) { display: none; } /* hide the long title */
+  .hint-inline { display: none; }
+  .turn-banner { font-size: 12px; padding: 5px 12px; }
+
+  /* Players & market become bottom sheets, hidden until toggled open. */
+  .players-panel, .market-panel {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    width: auto; max-height: 56vh; border-radius: 18px 18px 0 0;
+    transform: translateY(110%); transition: transform 0.25s ease;
+    z-index: 30; padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+  }
+  .players-panel.open, .market-panel.open { transform: translateY(0); }
+  .market-panel { overflow-y: auto; }
+
+  /* Toggle bar, top-right under the status bar. */
+  .mobile-toolbar { display: flex; gap: 8px; position: absolute; top: 8px; right: 8px; z-index: 31; }
+  .mobile-toolbar button { padding: 8px 12px; font-size: 13px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border-strong); }
+  .mobile-toolbar button.active { background: var(--accent); }
+
+  /* Hand: horizontally scrollable strip of smaller cards. */
+  .dock { padding: 0 8px calc(10px + env(safe-area-inset-bottom)); gap: 8px; align-items: flex-end; }
+  .hand-tray { overflow-x: auto; overflow-y: visible; justify-content: flex-start;
+    flex: 1; padding: 12px 10px; -webkit-overflow-scrolling: touch; }
+  .card { width: 72px; height: 102px; flex: 0 0 auto; }
+  .card .art svg { width: 40px; height: 40px; }
+  .action-bar { min-width: 0; flex-direction: column; }
+  .action-bar button { padding: 12px 14px; }
+  .action-bar .ctx { display: none; }
+
+  /* Smaller hover/pinned preview so it doesn't swamp the screen. */
+  .card-preview { width: 200px; padding: 12px; }
+  .card-preview .cp-art, .card-preview .cp-art svg { width: 84px; height: 84px; }
+}
