@@ -1,7 +1,7 @@
 import './style.css';
 import { Net } from './net.js';
 import { Board } from './board.js';
-import { cardIcon } from './icons.js';
+import { cardFace } from './cardFaces.js';
 import {
   getDef,
   movableSymbols,
@@ -61,6 +61,8 @@ class App {
   private hud = document.getElementById('hud') as HTMLDivElement;
   private lobby = document.getElementById('lobby') as HTMLDivElement;
   private preview = el('div', 'card-preview');
+  private handEls = new Map<string, HTMLElement>();
+  private shopEls = new Map<string, HTMLElement>();
 
   constructor() {
     document.body.appendChild(this.preview);
@@ -270,11 +272,32 @@ class App {
     this.recomputeHighlights();
   }
 
-  // --- card hover preview ---
+  // --- card preview (hover on desktop; pinned on selection for touch) ---
+
+  /** A card is "pinned" while it's selected — its preview stays open. */
+  private isPinned(): boolean {
+    return !!this.selectedCardId || !!this.buyTargetDefId;
+  }
 
   private attachPreview(node: HTMLElement, defId: string): void {
     node.addEventListener('mouseenter', () => this.showPreview(node, defId));
-    node.addEventListener('mouseleave', () => this.hidePreview());
+    node.addEventListener('mouseleave', () => {
+      if (this.isPinned()) this.refreshPinnedPreview();
+      else this.hidePreview();
+    });
+  }
+
+  /** Show the preview for the currently-selected card, anchored to its element. */
+  private refreshPinnedPreview(): void {
+    if (this.selectedCardId && this.state) {
+      const node = this.handEls.get(this.selectedCardId);
+      if (node) return this.showPreview(node, cardDefId(this.selectedCardId, this.state));
+    }
+    if (this.buyTargetDefId) {
+      const node = this.shopEls.get(this.buyTargetDefId);
+      if (node) return this.showPreview(node, this.buyTargetDefId);
+    }
+    this.hidePreview();
   }
 
   private showPreview(anchor: HTMLElement, defId: string): void {
@@ -393,6 +416,8 @@ class App {
     const turnName = s.players.find((p) => p.id === s.turn?.playerId)?.name ?? '';
     const winnerName = s.winnerId ? s.players.find((p) => p.id === s.winnerId)?.name : null;
     this.hud.innerHTML = '';
+    this.handEls.clear();
+    this.shopEls.clear();
 
     // --- top bar ---
     const top = el('div', 'topbar panel');
@@ -432,11 +457,12 @@ class App {
       const cls = locked ? 'upcoming' : pile.count === 0 ? 'sold' : '';
       const card = el('div', `shop-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${cls}`);
       card.innerHTML = `
-        <span class="ic">${cardIcon(def)}</span>
+        <span class="ic card-thumb">${cardFace(def)}</span>
         <span class="nm">${escapeHtml(def.name)}<small>${sub}${def.singleUse ? ' · 单次' : ''}</small></span>
         <span class="price"><span class="c">${def.cost}💰</span><span class="left">${locked ? '待补充' : `×${pile.count}`}</span></span>`;
       if (!locked && pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
       this.attachPreview(card, pile.defId);
+      this.shopEls.set(pile.defId, card);
       return card;
     };
     market.innerHTML = '<h3>市场 · 在售</h3>';
@@ -462,12 +488,11 @@ class App {
         const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''} ${inPayment ? 'payment' : ''}`);
         const foot = def.kind === 'action' ? '行动' : `${coinValue(c.defId)}💰`;
         card.innerHTML = `
-          <div class="name">${escapeHtml(def.name)}</div>
-          ${def.power ? `<span class="corner">${def.power}</span>` : ''}
-          <div class="art">${cardIcon(def)}</div>
-          <div class="meta"><span>${foot}</span><span>${def.singleUse ? '单次' : ''}</span></div>`;
+          ${cardFace(def)}
+          <div class="card-value" title="${escapeHtml(foot)}">${escapeHtml(foot)}${def.singleUse ? ' · 单次' : ''}</div>`;
         if (myTurn) card.onclick = () => this.onCardClick(c.id);
         this.attachPreview(card, c.defId);
+        this.handEls.set(c.id, card);
         tray.appendChild(card);
       }
     }
@@ -494,6 +519,9 @@ class App {
     dock.appendChild(tray);
     dock.appendChild(bar);
     this.hud.appendChild(dock);
+
+    // Keep the selected card's preview open (no hover needed — for touch).
+    this.refreshPinnedPreview();
 
     if (this.error) {
       const t = el('div', 'toast');
@@ -559,7 +587,7 @@ function previewHtml(defId: string): string {
     : `<span class="cp-cost">购买消耗 <b>${def.cost}</b> 💰</span>`;
   const power = def.power ? `<span class="cp-pow">力量 ${def.power}</span>` : '';
   return `
-    <div class="cp-art">${cardIcon(def)}</div>
+    <div class="cp-art">${cardFace(def)}</div>
     <div class="cp-title">${escapeHtml(def.name)}</div>
     <div class="cp-type">${KIND_LABEL[def.kind] ?? ''}${def.singleUse ? ' · 单次性' : ''}</div>
     <div class="cp-desc">${cardDescription(defId)}</div>

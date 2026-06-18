@@ -62,16 +62,17 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 /* ---------- Right: market ---------- */
 .market-panel { position: absolute; top: 76px; right: 14px; width: 224px; padding: 14px;
   max-height: calc(100vh - 230px); overflow-y: auto; }
-.shop-card { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px;
-  padding: 8px 10px; border-radius: 10px; margin-bottom: 6px; cursor: pointer;
+.shop-card { display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 9px;
+  min-height: 52px; padding: 6px 10px; border-radius: 10px; margin-bottom: 6px; cursor: pointer;
   background: rgba(255,255,255,0.04); border: 1px solid transparent; transition: .12s; }
 .shop-card:hover { border-color: var(--accent); transform: translateX(-2px); }
 .shop-card.target { border-color: var(--gold); background: rgba(255,209,102,0.1); }
 .shop-card.sold { opacity: 0.4; pointer-events: none; }
 .shop-card.upcoming { opacity: 0.5; filter: grayscale(0.35); cursor: default; }
 .shop-card.upcoming:hover { border-color: transparent; transform: none; }
-.shop-card .ic { width: 26px; height: 26px; }
-.shop-card .ic svg { width: 26px; height: 26px; display: block; }
+.shop-card .ic { width: 32px; height: 44px; border-radius: 4px; overflow: hidden;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.28); }
+.shop-card .ic svg { width: 100%; height: 100%; display: block; }
 .shop-card .nm { font-size: 12.5px; font-weight: 600; }
 .shop-card .nm small { display: block; color: var(--muted); font-weight: 500; font-size: 10.5px; }
 .shop-card .price { display: flex; flex-direction: column; align-items: flex-end; }
@@ -86,16 +87,21 @@ html, body { margin: 0; height: 100%; overflow: hidden;
   padding: 14px 18px; border-radius: 16px 16px 0 0;
   background: linear-gradient(180deg, rgba(18,26,44,0) 0%, rgba(12,18,32,0.9) 60%); }
 .card {
-  width: 92px; height: 128px; border-radius: 11px; padding: 9px;
-  background: linear-gradient(160deg, #243149, #1a2333);
-  border: 1.5px solid #30405d; cursor: pointer; position: relative;
+  width: 96px; height: 134px; border-radius: 10px; padding: 0;
+  background: transparent;
+  border: 0; cursor: pointer; position: relative;
   display: flex; flex-direction: column; justify-content: space-between;
   transition: transform .12s, border-color .12s, box-shadow .12s; user-select: none;
   box-shadow: 0 6px 14px rgba(0,0,0,0.4);
 }
 .card:hover { transform: translateY(-10px); box-shadow: 0 14px 24px rgba(0,0,0,0.5); }
-.card.selected { border-color: var(--gold); transform: translateY(-16px); box-shadow: 0 0 0 2px var(--gold), 0 14px 24px rgba(0,0,0,.5); }
-.card.payment { border-color: #4cc9f0; box-shadow: 0 0 0 2px #4cc9f0; }
+.card.selected { transform: translateY(-16px); box-shadow: 0 0 0 2px var(--gold), 0 14px 24px rgba(0,0,0,.5); }
+.card.payment { box-shadow: 0 0 0 2px #4cc9f0, 0 10px 20px rgba(0,0,0,.45); }
+.card .card-face-svg { width: 100%; height: 100%; display: block; border-radius: 10px; }
+.card-value { position: absolute; left: 7px; right: 7px; bottom: -19px; height: 17px;
+  display: flex; align-items: center; justify-content: center; padding: 0 4px;
+  color: var(--muted); background: rgba(10,17,32,0.76); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px; font-size: 9.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .name { font-size: 11.5px; font-weight: 700; line-height: 1.2; }
 .card .art { flex: 1; display: flex; align-items: center; justify-content: center; padding: 6px 0; }
 .card .art svg { width: 52px; height: 52px; }
@@ -119,11 +125,11 @@ button.gold { background: linear-gradient(180deg, #ffd877, #f0b73e); color: #2a1
 button:disabled { opacity: .4; cursor: not-allowed; filter: none; }
 
 /* ---------- Card hover preview ---------- */
-.card-preview { position: fixed; z-index: 60; width: 236px; display: none; pointer-events: none;
+.card-preview { position: fixed; z-index: 60; width: 292px; display: none; pointer-events: none;
   background: var(--panel-solid); border: 1px solid var(--border-strong); border-radius: 16px;
   padding: 16px; box-shadow: var(--shadow); }
-.card-preview .cp-art { width: 104px; height: 104px; margin: 0 auto 6px; }
-.card-preview .cp-art svg { width: 104px; height: 104px; }
+.card-preview .cp-art { width: 174px; height: 242px; margin: 0 auto 10px; }
+.card-preview .cp-art svg { width: 100%; height: 100%; display: block; }
 .card-preview .cp-title { font-size: 17px; font-weight: 800; text-align: center; }
 .card-preview .cp-type { font-size: 11px; color: var(--muted); text-align: center;
   letter-spacing: 1px; margin-bottom: 10px; }
