@@ -48,6 +48,11 @@ export class Board {
   private downPos: { x: number; y: number } | null = null;
   private decor = new Decorations();
   private clock = new THREE.Clock();
+  private moveClock = new THREE.Clock();
+  // Persistent pawns so movement can tween instead of snapping.
+  private pawns = new Map<string, { group: THREE.Group; target: THREE.Vector3 }>();
+  private highlightMeshes: THREE.Mesh[] = [];
+  private ringGeo: THREE.BufferGeometry | null = null;
   onHexClick: (c: Axial) => void = () => {};
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -107,7 +112,23 @@ export class Board {
   private animate = () => {
     requestAnimationFrame(this.animate);
     this.controls.update();
-    this.decor.update(this.clock.getElapsedTime());
+    const t = this.clock.getElapsedTime();
+    this.decor.update(t);
+
+    // Smoothly glide each pawn toward its target hex (frame-rate independent).
+    const dt = this.moveClock.getDelta();
+    const a = 1 - Math.pow(0.0006, dt);
+    for (const { group, target } of this.pawns.values()) {
+      const remaining = group.position.distanceTo(target);
+      group.position.lerp(target, a);
+      // A little hop while travelling.
+      if (remaining > 0.05) group.position.y += Math.min(remaining, 1) * 0.18;
+    }
+
+    // Gently pulse the move-target borders.
+    const pulse = 0.5 + 0.35 * Math.sin(t * 4);
+    for (const m of this.highlightMeshes) (m.material as THREE.MeshBasicMaterial).opacity = pulse;
+
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -141,7 +162,6 @@ export class Board {
   render(state: GameState): void {
     const first = this.hexMeshes.size === 0;
     this.hexGroup.clear();
-    this.pieceGroup.clear();
     this.highlightGroup.clear();
     this.hexMeshes.clear();
     this.hexTops.clear();
@@ -177,11 +197,27 @@ export class Board {
 
     this.decor.build(placed);
 
+    // Reconcile persistent pawns (so movement tweens instead of snapping).
+    const present = new Set<string>();
     for (const pl of state.players) {
-      if (pl.finished) continue;
+      present.add(pl.id);
       const { x, z } = this.worldXZ(pl.position);
       const y = this.hexTops.get(`${pl.position.q},${pl.position.r}`)?.y ?? 0.3;
-      this.pieceGroup.add(this.makePawn(PLAYER_COLOR[pl.color] ?? 0xffffff, x, y, z));
+      let pawn = this.pawns.get(pl.id);
+      if (!pawn) {
+        const group = this.makePawn(PLAYER_COLOR[pl.color] ?? 0xffffff, x, y, z);
+        this.pieceGroup.add(group);
+        pawn = { group, target: new THREE.Vector3(x, y, z) };
+        this.pawns.set(pl.id, pawn);
+      } else {
+        pawn.target.set(x, y, z);
+      }
+    }
+    for (const [id, pawn] of this.pawns) {
+      if (!present.has(id)) {
+        this.pieceGroup.remove(pawn.group);
+        this.pawns.delete(id);
+      }
     }
 
     this.applyHighlights();
@@ -272,19 +308,41 @@ export class Board {
 
   private applyHighlights(): void {
     this.highlightGroup.clear();
-    // A thin hex prism overlay, same orientation as the hexes, that pokes out
-    // past the GAP so it reads as a glowing rim.
-    const geo = new THREE.CylinderGeometry(HEX_SIZE * 0.99, HEX_SIZE * 0.99, 0.12, 6);
+    this.highlightMeshes = [];
+    // A glowing hexagonal border ring (aligned to the hex), pulsing in animate.
+    if (!this.ringGeo) this.ringGeo = hexRingGeometry(HEX_SIZE * 0.82, HEX_SIZE * 1.02);
     for (const k of this.highlights) {
       const mesh = this.hexMeshes.get(k);
       const top = this.hexTops.get(k);
       if (!mesh || !top) continue;
-      const overlay = new THREE.Mesh(
-        geo,
-        new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.4 }),
+      const ring = new THREE.Mesh(
+        this.ringGeo,
+        new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }),
       );
-      overlay.position.set(mesh.position.x, top.y + 0.06, mesh.position.z);
-      this.highlightGroup.add(overlay);
+      ring.position.set(mesh.position.x, top.y + 0.07, mesh.position.z);
+      this.highlightGroup.add(ring);
+      this.highlightMeshes.push(ring);
     }
   }
+}
+
+/** A flat hexagonal ring band in the XZ plane, aligned to the hex prisms. */
+function hexRingGeometry(inner: number, outer: number): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i * Math.PI) / 3;
+    pos.push(outer * Math.sin(a), 0, outer * Math.cos(a)); // outer i → 2i
+    pos.push(inner * Math.sin(a), 0, inner * Math.cos(a)); // inner i → 2i+1
+  }
+  for (let i = 0; i < 6; i++) {
+    const j = (i + 1) % 6;
+    const o0 = 2 * i, in0 = 2 * i + 1, o1 = 2 * j, in1 = 2 * j + 1;
+    idx.push(o0, o1, in0, in0, o1, in1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
 }
