@@ -101,8 +101,9 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .card.selected { transform: translateY(-16px); box-shadow: 0 0 0 2px var(--gold), 0 14px 24px rgba(0,0,0,.5); }
 .card.payment { box-shadow: 0 0 0 2px #4cc9f0, 0 10px 20px rgba(0,0,0,.45); }
 .card .card-face-svg { width: 100%; height: 100%; display: block; border-radius: 10px; }
-.action-bar { pointer-events: auto; display: flex; flex-direction: column; gap: 8px;
-  align-items: stretch; min-width: 150px; padding-bottom: 6px; }
+.action-bar { position: absolute; right: 18px; bottom: 18px; z-index: 20;
+  pointer-events: auto; display: flex; flex-direction: column; gap: 8px;
+  align-items: stretch; min-width: 140px; }
 .action-bar .ctx { font-size: 12px; color: var(--muted); text-align: center; min-height: 16px; }
 button { pointer-events: auto; padding: 11px 16px; border-radius: 10px; border: none;
   background: linear-gradient(180deg, #3b7bf6, #2f6fed); color: #fff; font-size: 14px;
@@ -206,18 +207,20 @@ button:disabled { opacity: .4; cursor: not-allowed; filter: none; }
 .pcard .pc-progress { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden; margin-top: 6px; }
 .pcard .pc-progress > span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--gold)); }
 
-/* ---------- Your draw / discard piles ---------- */
-.pile { position: absolute; bottom: 150px; pointer-events: none; text-align: center; }
-.pile.draw { left: 22px; }
-.pile.discard { right: 22px; }
-.pile-stack { position: relative; width: 52px; height: 72px; margin: 0 auto; }
-.pile-stack span { position: absolute; inset: 0; border-radius: 7px; border: 1.5px solid var(--border-strong);
-  background: linear-gradient(160deg, #2a3a57, #1a2740); box-shadow: 0 3px 8px rgba(0,0,0,0.4); }
-.pile-stack span:nth-child(1) { transform: translate(-4px, 4px) rotate(-5deg); opacity: 0.7; }
-.pile-stack span:nth-child(2) { transform: translate(2px, 2px) rotate(3deg); opacity: 0.85; }
-.pile.draw .pile-stack span:nth-child(3) { background: linear-gradient(160deg, #2f6fed, #1f3a78); }
-.pile.discard .pile-stack span:nth-child(3) { background: linear-gradient(160deg, #6b5326, #3a2b12); }
-.pile-label { font-size: 11px; color: var(--muted); margin-top: 6px; }
+/* ---------- Your draw / discard piles (flank the hand in the dock) ---------- */
+.pile { pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  flex: 0 0 auto; align-self: flex-end; padding-bottom: 4px; }
+.pile-stack { position: relative; width: 58px; height: 82px; }
+.pile-card { position: absolute; inset: 0; border-radius: 8px; overflow: hidden;
+  box-shadow: 0 3px 9px rgba(0,0,0,0.45); }
+.pile-card:not(.top) { background: linear-gradient(160deg, #213861, #0d1a33); border: 1px solid rgba(0,0,0,0.4); }
+.pile-card:nth-child(1) { transform: translate(-3px, 4px) rotate(-4deg); }
+.pile-card:nth-child(2) { transform: translate(2px, 2px) rotate(3deg); }
+.pile-card.top { transform: none; }
+.pile-card.top svg { width: 100%; height: 100%; display: block; }
+.pile-stack.empty .pile-card { opacity: 0.28; filter: grayscale(0.6); }
+.pile.discard .pile-card.top { filter: hue-rotate(28deg) saturate(1.15); } /* warmer for discard */
+.pile-label { font-size: 11px; color: var(--muted); }
 .pile-label b { color: var(--ink); font-size: 13px; }
 
 /* ---------- Flying bought-card animation ---------- */

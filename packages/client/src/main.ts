@@ -313,8 +313,13 @@ class App {
 
   private makePile(kind: 'draw' | 'discard', label: string, count: number): HTMLElement {
     const pile = el('div', `pile ${kind}`);
+    const empty = count === 0;
     pile.innerHTML = `
-      <div class="pile-stack"><span></span><span></span><span></span></div>
+      <div class="pile-stack ${empty ? 'empty' : ''}">
+        <span class="pile-card"></span>
+        <span class="pile-card"></span>
+        <span class="pile-card top">${cardBack()}</span>
+      </div>
       <div class="pile-label">${label} <b>${count}</b></div>`;
     return pile;
   }
@@ -612,16 +617,7 @@ class App {
       this.attachSheetDismiss(market);
     }
 
-    // --- your draw / discard piles (first-person), flanking the hand ---
-    const me0 = this.me;
-    if (me0) {
-      this.drawPileEl = this.makePile('draw', '摸牌堆', me0.deck.length);
-      this.discardPileEl = this.makePile('discard', '弃牌堆', me0.discard.length);
-      this.hud.appendChild(this.drawPileEl);
-      this.hud.appendChild(this.discardPileEl);
-    } else {
-      this.drawPileEl = this.discardPileEl = null;
-    }
+    // (draw/discard piles are built into the bottom dock, flanking the hand)
 
     // --- bottom dock: hand + actions ---
     const dock = el('div', 'dock');
@@ -661,9 +657,19 @@ class App {
         bar.appendChild(button('结束回合', () => this.act({ type: 'EndTurn' }), true));
       }
     }
-    dock.appendChild(tray);
-    dock.appendChild(bar);
+    // Piles flank the hand on the same row; draw on the left, discard on the right.
+    if (me) {
+      this.drawPileEl = this.makePile('draw', '摸牌', me.deck.length);
+      this.discardPileEl = this.makePile('discard', '弃牌', me.discard.length);
+      dock.appendChild(this.drawPileEl);
+      dock.appendChild(tray);
+      dock.appendChild(this.discardPileEl);
+    } else {
+      this.drawPileEl = this.discardPileEl = null;
+      dock.appendChild(tray);
+    }
     this.hud.appendChild(dock);
+    this.hud.appendChild(bar); // floats bottom-right
 
     // Keep the selected card's preview open (no hover needed — for touch).
     this.refreshPinnedPreview();
@@ -737,6 +743,26 @@ function previewHtml(defId: string): string {
     <div class="cp-type">${KIND_LABEL[def.kind] ?? ''}${def.singleUse ? ' · 单次性' : ''}</div>
     <div class="cp-desc">${cardDescription(defId)}</div>
     <div class="cp-foot">${cost}${power}</div>`;
+}
+
+/** Original procedural card-back art for the deck/discard piles. */
+function cardBack(): string {
+  return `<svg viewBox="0 0 60 84" width="100%" height="100%" preserveAspectRatio="none">
+    <defs><linearGradient id="cb" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#21386180"/><stop offset="0" stop-color="#213861"/>
+      <stop offset="1" stop-color="#0d1a33"/></linearGradient></defs>
+    <rect x="1.5" y="1.5" width="57" height="81" rx="7" fill="url(#cb)" stroke="#c8a24c" stroke-width="1.5"/>
+    <rect x="5" y="5" width="50" height="74" rx="4.5" fill="none" stroke="#c8a24c" stroke-opacity="0.45"/>
+    <g transform="translate(30 42)">
+      <circle r="13" fill="none" stroke="#e7c264" stroke-opacity="0.45" stroke-width="1.2"/>
+      <path d="M0 -15 L3.4 -3.4 15 0 3.4 3.4 0 15 -3.4 3.4 -15 0 -3.4 -3.4 Z" fill="#e7c264" fill-opacity="0.9"/>
+      <circle r="3" fill="#0d1a33" stroke="#e7c264" stroke-width="1.1"/>
+    </g>
+    <g fill="#c8a24c" fill-opacity="0.7">
+      <circle cx="10" cy="10" r="1.4"/><circle cx="50" cy="10" r="1.4"/>
+      <circle cx="10" cy="74" r="1.4"/><circle cx="50" cy="74" r="1.4"/>
+    </g>
+  </svg>`;
 }
 
 function el(tag: string, className = ''): HTMLDivElement {
