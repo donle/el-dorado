@@ -53,6 +53,10 @@ export class Board {
   private pawns = new Map<string, { group: THREE.Group; target: THREE.Vector3 }>();
   private highlightMeshes: THREE.Mesh[] = [];
   private ringGeo: THREE.BufferGeometry | null = null;
+  // Hover marker for the cell currently under the cursor (if it's reachable).
+  private hoverGroup = new THREE.Group();
+  private hoverArrow!: THREE.Mesh;
+  private hoverKey: string | null = null;
   onHexClick: (c: Axial) => void = () => {};
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -101,10 +105,17 @@ export class Board {
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
 
+    this.buildHoverMarker();
+
     window.addEventListener('resize', () => this.resize());
     // Distinguish a click (select hex) from a drag (camera move).
     canvas.addEventListener('pointerdown', (e) => (this.downPos = { x: e.clientX, y: e.clientY }));
     canvas.addEventListener('pointerup', (e) => this.handlePointerUp(e));
+    canvas.addEventListener('pointermove', (e) => {
+      if (this.downPos) return; // mid-drag — don't hover
+      this.setHoverHex(this.pickHexKey(e));
+    });
+    canvas.addEventListener('pointerleave', () => this.setHoverHex(null));
     this.resize();
     this.animate();
   }
@@ -128,6 +139,9 @@ export class Board {
     // Gently pulse the move-target borders.
     const pulse = 0.5 + 0.35 * Math.sin(t * 4);
     for (const m of this.highlightMeshes) (m.material as THREE.MeshBasicMaterial).opacity = pulse;
+
+    // Bob the hover arrow.
+    if (this.hoverGroup.visible) this.hoverArrow.position.y = 1.0 + Math.sin(t * 6) * 0.14;
 
     this.renderer.render(this.scene, this.camera);
   };
@@ -282,12 +296,26 @@ export class Board {
     this.controls.update();
   }
 
-  private handlePointerUp(e: PointerEvent): void {
-    if (!this.downPos) return;
-    const moved = Math.hypot(e.clientX - this.downPos.x, e.clientY - this.downPos.y);
-    this.downPos = null;
-    if (moved > 6) return; // it was a drag (pan/rotate), not a click
+  private buildHoverMarker(): void {
+    const fill = new THREE.Mesh(
+      new THREE.CylinderGeometry(HEX_SIZE * 0.9, HEX_SIZE * 0.9, 0.05, 6),
+      new THREE.MeshBasicMaterial({ color: 0xfff2a8, transparent: true, opacity: 0.5, depthWrite: false }),
+    );
+    fill.position.y = 0.08;
+    const arrow = new THREE.Mesh(
+      new THREE.ConeGeometry(0.18, 0.36, 14),
+      new THREE.MeshBasicMaterial({ color: 0xffd166 }),
+    );
+    arrow.rotation.x = Math.PI; // point downward
+    arrow.position.y = 1.0;
+    this.hoverArrow = arrow;
+    this.hoverGroup.add(fill, arrow);
+    this.hoverGroup.visible = false;
+    this.scene.add(this.hoverGroup);
+  }
 
+  /** The hex key under a pointer event, or null. */
+  private pickHexKey(e: PointerEvent): string | null {
     const rect = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -295,15 +323,43 @@ export class Board {
     );
     this.raycaster.setFromCamera(ndc, this.camera);
     const hits = this.raycaster.intersectObjects([...this.hexMeshes.values()]);
-    if (hits.length > 0) {
-      const c = hits[0].object.userData as Axial;
-      this.onHexClick({ q: c.q, r: c.r });
+    if (!hits.length) return null;
+    const c = hits[0].object.userData as Axial;
+    return `${c.q},${c.r}`;
+  }
+
+  /** Show the hover marker on a reachable cell under the cursor. */
+  private setHoverHex(key: string | null): void {
+    this.hoverKey = key;
+    const reachable = !!key && this.highlights.has(key);
+    if (reachable) {
+      const mesh = this.hexMeshes.get(key!)!;
+      const top = this.hexTops.get(key!)!;
+      this.hoverGroup.position.set(mesh.position.x, top.y, mesh.position.z);
+      this.hoverGroup.visible = true;
+      this.canvas.style.cursor = 'pointer';
+    } else {
+      this.hoverGroup.visible = false;
+      this.canvas.style.cursor = '';
+    }
+  }
+
+  private handlePointerUp(e: PointerEvent): void {
+    if (!this.downPos) return;
+    const moved = Math.hypot(e.clientX - this.downPos.x, e.clientY - this.downPos.y);
+    this.downPos = null;
+    if (moved > 6) return; // it was a drag (pan/rotate), not a click
+    const key = this.pickHexKey(e);
+    if (key) {
+      const [q, r] = key.split(',').map(Number);
+      this.onHexClick({ q, r });
     }
   }
 
   setHighlights(coords: Axial[]): void {
     this.highlights = new Set(coords.map((c) => `${c.q},${c.r}`));
     this.applyHighlights();
+    this.setHoverHex(this.hoverKey); // re-validate hover against new reachables
   }
 
   private applyHighlights(): void {
