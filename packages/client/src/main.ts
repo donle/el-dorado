@@ -360,12 +360,15 @@ class App {
     const ar = anchor.getBoundingClientRect();
     let x: number;
     let y: number;
-    if (ar.left > window.innerWidth / 2) {
+    if (anchor.closest('.hand-tray')) {
+      // hand cards: dock to the right edge so the board stays unobscured
+      x = window.innerWidth - pr.width - 14;
+      y = window.innerHeight / 2 - pr.height / 2;
+    } else if (ar.left > window.innerWidth / 2) {
       // right-side market: float to the left of the card
       x = ar.left - pr.width - 14;
       y = ar.top + ar.height / 2 - pr.height / 2;
     } else {
-      // bottom hand: float above the card
       x = ar.left + ar.width / 2 - pr.width / 2;
       y = ar.top - pr.height - 14;
     }
