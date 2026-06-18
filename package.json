@@ -1,0 +1,17 @@
+{
+  "name": "el-dorando",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The Quest for El Dorado — online multiplayer (TypeScript + LayaAir)",
+  "type": "module",
+  "scripts": {
+    "test": "pnpm -r --if-present test",
+    "build": "pnpm -r --if-present build",
+    "dev:server": "pnpm --filter @eldorado/server dev",
+    "dev:client": "pnpm --filter @eldorado/client dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "packageManager": "pnpm@11.5.0"
+}
