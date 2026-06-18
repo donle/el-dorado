@@ -184,8 +184,12 @@ button:disabled { opacity: .4; cursor: not-allowed; filter: none; }
     flex: 1; padding: 12px 10px; -webkit-overflow-scrolling: touch; }
   .card { width: 72px; height: 102px; flex: 0 0 auto; }
   .card .art svg { width: 40px; height: 40px; }
-  .action-bar { min-width: 0; flex-direction: column; }
-  .action-bar button { padding: 12px 14px; }
+  /* Actions: a centred horizontal row floating just above the hand, so they
+     don't collide with the discard pile / hand in the bottom-right corner. */
+  .action-bar { right: auto; bottom: calc(142px + env(safe-area-inset-bottom));
+    left: 50%; transform: translateX(-50%); flex-direction: row; flex-wrap: wrap;
+    justify-content: center; gap: 8px; min-width: 0; max-width: 94vw; }
+  .action-bar button { padding: 10px 14px; font-size: 13.5px; box-shadow: 0 4px 14px rgba(0,0,0,0.45); }
   .action-bar .ctx { display: none; }
 
   /* Smaller hover/pinned preview so it doesn't swamp the screen. */
