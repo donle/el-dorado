@@ -78,6 +78,9 @@ class App {
   private preview = el('div', 'card-preview');
   private handEls = new Map<string, HTMLElement>();
   private shopEls = new Map<string, HTMLElement>();
+  private playerCardEls = new Map<string, HTMLElement>();
+  private drawPileEl: HTMLElement | null = null;
+  private discardPileEl: HTMLElement | null = null;
 
   constructor() {
     document.body.appendChild(this.preview);
@@ -107,14 +110,27 @@ class App {
         this.room = m.room;
         if (m.room.phase === 'lobby') this.renderLobby();
         break;
-      case 'state':
+      case 'state': {
+        const buys = (m.events ?? []).filter((e) => e.type === 'bought') as Array<{
+          type: 'bought';
+          playerId: string;
+          defId: string;
+        }>;
+        // Capture market source rects BEFORE the DOM is rebuilt.
+        const sources = new Map<string, DOMRect>();
+        for (const e of buys) {
+          const node = this.shopEls.get(e.defId);
+          if (node) sources.set(`${e.defId}|${e.playerId}`, node.getBoundingClientRect());
+        }
         this.state = m.state;
         this.resetSelection();
         this.lobby.classList.add('hidden');
         this.board.render(m.state);
         this.renderHud();
         this.recomputeHighlights();
+        for (const e of buys) this.animateBuy(e.playerId, e.defId, sources.get(`${e.defId}|${e.playerId}`));
         break;
+      }
       case 'error':
         this.error = m.message;
         this.renderLobby();
@@ -291,6 +307,47 @@ class App {
   private closeMobilePanel(): void {
     this.mobilePanel = null;
     this.renderHud();
+  }
+
+  // --- piles & buy animation ---
+
+  private makePile(kind: 'draw' | 'discard', label: string, count: number): HTMLElement {
+    const pile = el('div', `pile ${kind}`);
+    pile.innerHTML = `
+      <div class="pile-stack"><span></span><span></span><span></span></div>
+      <div class="pile-label">${label} <b>${count}</b></div>`;
+    return pile;
+  }
+
+  /** Fly a clone of the bought card from the market to its destination. */
+  private flyCard(defId: string, from: DOMRect, to: DOMRect, fade: boolean): void {
+    const fly = el('div', 'fly-card');
+    fly.innerHTML = cardFace(getDef(defId));
+    fly.style.left = `${from.left}px`;
+    fly.style.top = `${from.top}px`;
+    fly.style.width = `${from.width}px`;
+    fly.style.height = `${from.height}px`;
+    document.body.appendChild(fly);
+    requestAnimationFrame(() => {
+      const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+      const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+      fly.style.transform = `translate(${dx}px, ${dy}px) scale(${fade ? 0.45 : 0.7})`;
+      if (fade) fly.style.opacity = '0';
+    });
+    setTimeout(() => fly.remove(), 850);
+  }
+
+  private animateBuy(playerId: string, defId: string, source?: DOMRect): void {
+    const toEl = playerId === this.you ? this.discardPileEl : this.playerCardEls.get(playerId);
+    if (!toEl) return;
+    let from = source;
+    const offscreen =
+      !from || from.width === 0 || from.bottom < 0 || from.top > window.innerHeight || from.left > window.innerWidth;
+    if (offscreen) {
+      // market not visible (e.g. closed sheet) → fall back to the right edge
+      from = new DOMRect(window.innerWidth - 56, window.innerHeight / 2 - 30, 40, 56);
+    }
+    this.flyCard(defId, from!, toEl.getBoundingClientRect(), playerId !== this.you);
   }
 
   /** Let a bottom sheet be dragged down (when scrolled to top) to dismiss it. */
@@ -486,36 +543,37 @@ class App {
       <div class="hint-inline">滚轮缩放 · 拖拽平移 · 右键转视角</div>`;
     this.hud.appendChild(top);
 
-    // --- mobile toolbar (toggles the bottom-sheet panels) ---
+    // --- mobile toolbar (market sheet toggle) ---
     const toolbar = el('div', 'mobile-toolbar');
-    const toggle = (which: 'players' | 'market', label: string) => {
-      const btn = button(label, () => {
-        this.mobilePanel = this.mobilePanel === which ? null : which;
-        this.renderHud();
-      });
-      if (this.mobilePanel === which) btn.classList.add('active');
-      return btn;
-    };
-    toolbar.appendChild(toggle('players', '👥 队伍'));
-    toolbar.appendChild(toggle('market', '🛒 市场'));
+    const mbtn = button('🛒 市场', () => {
+      this.mobilePanel = this.mobilePanel === 'market' ? null : 'market';
+      this.renderHud();
+    });
+    if (this.mobilePanel === 'market') mbtn.classList.add('active');
+    toolbar.appendChild(mbtn);
     this.hud.appendChild(toolbar);
 
-    // --- left: players ---
-    const pp = el('div', `players-panel panel ${this.mobilePanel === 'players' ? 'open' : ''}`);
-    pp.innerHTML = '<h3>探险队</h3>';
+    // --- top-centre: players as cards ---
+    this.playerCardEls.clear();
+    const pcards = el('div', 'player-cards');
     for (const p of s.players) {
       const active = p.id === s.turn?.playerId;
-      const row = el('div', `player-row ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}`);
-      const tags = `${p.isAI ? '<span class="tag">AI</span>' : ''}${p.id === this.you ? '<span class="tag">你</span>' : ''}`;
-      row.innerHTML = `
-        <span class="dot" style="background:${colorHex(p.color)}"></span>
-        <span class="pname">${escapeHtml(p.name)} ${tags}</span>
-        <span class="tag">${p.finished ? '🏆' : active ? '▶' : ''}</span>
-        <span class="counts">牌库 <b>${p.deck.length}</b> · 手 <b>${p.hand.length}</b> · 弃 <b>${p.discard.length}</b></span>
-        <span class="progress"><span style="width:${Math.round(this.progressOf(p) * 100)}%"></span></span>`;
-      pp.appendChild(row);
+      const card = el('div', `pcard ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}`);
+      card.style.setProperty('--pc', colorHex(p.color));
+      const tags = `${p.isAI ? '<span class="ptag">AI</span>' : ''}${p.id === this.you ? '<span class="ptag you">你</span>' : ''}`;
+      card.innerHTML = `
+        <div class="pc-top">
+          <span class="pc-dot"></span>
+          <span class="pc-name">${escapeHtml(p.name)}</span>
+          ${tags}
+          <span class="pc-flag">${p.finished ? '🏆' : active ? '▶' : ''}</span>
+        </div>
+        <div class="pc-counts"><span>🂠 ${p.deck.length + p.hand.length}</span><span>♻ ${p.discard.length}</span></div>
+        <div class="pc-progress"><span style="width:${Math.round(this.progressOf(p) * 100)}%"></span></div>`;
+      pcards.appendChild(card);
+      this.playerCardEls.set(p.id, card);
     }
-    this.hud.appendChild(pp);
+    this.hud.appendChild(pcards);
 
     // --- right: market (all 18 cards; on-board buyable, others upcoming) ---
     const market = el('div', `market-panel panel ${this.mobilePanel === 'market' ? 'open' : ''}`);
@@ -547,11 +605,22 @@ class App {
     this.hud.appendChild(market);
 
     // Mobile: a tap-to-dismiss scrim + swipe-down-to-close on the open sheet.
-    if (this.mobilePanel) {
+    if (this.mobilePanel === 'market') {
       const scrim = el('div', 'sheet-scrim');
       scrim.onclick = () => this.closeMobilePanel();
       this.hud.appendChild(scrim);
-      this.attachSheetDismiss(this.mobilePanel === 'players' ? pp : market);
+      this.attachSheetDismiss(market);
+    }
+
+    // --- your draw / discard piles (first-person), flanking the hand ---
+    const me0 = this.me;
+    if (me0) {
+      this.drawPileEl = this.makePile('draw', '摸牌堆', me0.deck.length);
+      this.discardPileEl = this.makePile('discard', '弃牌堆', me0.discard.length);
+      this.hud.appendChild(this.drawPileEl);
+      this.hud.appendChild(this.discardPileEl);
+    } else {
+      this.drawPileEl = this.discardPileEl = null;
     }
 
     // --- bottom dock: hand + actions ---
