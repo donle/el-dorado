@@ -101,21 +101,6 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .card.selected { transform: translateY(-16px); box-shadow: 0 0 0 2px var(--gold), 0 14px 24px rgba(0,0,0,.5); }
 .card.payment { box-shadow: 0 0 0 2px #4cc9f0, 0 10px 20px rgba(0,0,0,.45); }
 .card .card-face-svg { width: 100%; height: 100%; display: block; border-radius: 10px; }
-.card-value { position: absolute; left: 7px; right: 7px; bottom: -19px; height: 17px;
-  display: flex; align-items: center; justify-content: center; padding: 0 4px;
-  color: var(--muted); background: rgba(10,17,32,0.76); border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 999px; font-size: 9.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card .name { font-size: 11.5px; font-weight: 700; line-height: 1.2; }
-.card .art { flex: 1; display: flex; align-items: center; justify-content: center; padding: 6px 0; }
-.card .art svg { width: 52px; height: 52px; }
-.card .meta { font-size: 10.5px; color: var(--muted); display: flex; justify-content: space-between; }
-.card .corner { position: absolute; top: 7px; right: 9px; font-size: 13px; font-weight: 800; }
-.card.green { border-top: 4px solid #3f9457; }
-.card.blue { border-top: 4px solid #3a86c8; }
-.card.yellow { border-top: 4px solid #d8b34a; }
-.card.joker { border-top: 4px solid #9b6cff; }
-.card.action { border-top: 4px solid #e0567f; }
-
 .action-bar { pointer-events: auto; display: flex; flex-direction: column; gap: 8px;
   align-items: stretch; min-width: 150px; padding-bottom: 6px; }
 .action-bar .ctx { font-size: 12px; color: var(--muted); text-align: center; min-height: 16px; }
@@ -200,5 +185,20 @@ button:disabled { opacity: .4; cursor: not-allowed; filter: none; }
 
   /* Smaller hover/pinned preview so it doesn't swamp the screen. */
   .card-preview { width: 200px; padding: 12px; }
-  .card-preview .cp-art, .card-preview .cp-art svg { width: 84px; height: 84px; }
+  .card-preview .cp-art { width: 132px; height: 184px; }
+}
+
+/* Scrim behind an open bottom sheet — tap it to dismiss. */
+.sheet-scrim { position: fixed; inset: 0; z-index: 29; pointer-events: auto;
+  background: rgba(0, 0, 0, 0.45); animation: scrim-in 0.2s ease; }
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Short / landscape phones: shrink the hand so it doesn't eat the board. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .topbar { top: 4px; }
+  .mobile-toolbar { top: 4px; }
+  .dock { padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
+  .hand-tray { padding: 6px 8px; gap: 6px; }
+  .card { width: 54px; height: 76px; }
+  .players-panel, .market-panel { max-height: 88vh; }
 }

@@ -288,6 +288,43 @@ class App {
     this.recomputeHighlights();
   }
 
+  private closeMobilePanel(): void {
+    this.mobilePanel = null;
+    this.renderHud();
+  }
+
+  /** Let a bottom sheet be dragged down (when scrolled to top) to dismiss it. */
+  private attachSheetDismiss(panel: HTMLElement): void {
+    let startY = 0;
+    let dragging = false;
+    panel.addEventListener(
+      'touchstart',
+      (e) => {
+        dragging = panel.scrollTop <= 0;
+        startY = e.touches[0].clientY;
+        if (dragging) panel.style.transition = 'none';
+      },
+      { passive: true },
+    );
+    panel.addEventListener(
+      'touchmove',
+      (e) => {
+        if (!dragging) return;
+        const dy = e.touches[0].clientY - startY;
+        if (dy > 0) panel.style.transform = `translateY(${dy}px)`;
+      },
+      { passive: true },
+    );
+    panel.addEventListener('touchend', (e) => {
+      if (!dragging) return;
+      const dy = e.changedTouches[0].clientY - startY;
+      panel.style.transition = '';
+      panel.style.transform = '';
+      dragging = false;
+      if (dy > 70) this.closeMobilePanel();
+    });
+  }
+
   // --- card preview (hover on desktop; pinned on selection for touch) ---
 
   /** A card is "pinned" while it's selected — its preview stays open. */
@@ -506,6 +543,14 @@ class App {
     }
     this.hud.appendChild(market);
 
+    // Mobile: a tap-to-dismiss scrim + swipe-down-to-close on the open sheet.
+    if (this.mobilePanel) {
+      const scrim = el('div', 'sheet-scrim');
+      scrim.onclick = () => this.closeMobilePanel();
+      this.hud.appendChild(scrim);
+      this.attachSheetDismiss(this.mobilePanel === 'players' ? pp : market);
+    }
+
     // --- bottom dock: hand + actions ---
     const dock = el('div', 'dock');
     const me = this.me;
@@ -516,10 +561,8 @@ class App {
         const selected = this.selectedCardId === c.id;
         const inPayment = (this.mode === 'buy' || this.mode === 'clear') && this.payment.has(c.id);
         const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''} ${inPayment ? 'payment' : ''}`);
-        const foot = def.kind === 'action' ? '行动' : `${coinValue(c.defId)}💰`;
         card.innerHTML = `
-          ${cardFace(def)}
-          <div class="card-value" title="${escapeHtml(foot)}">${escapeHtml(foot)}${def.singleUse ? ' · 单次' : ''}</div>`;
+          ${cardFace(def)}`;
         if (myTurn) card.onclick = () => this.onCardClick(c.id);
         this.attachPreview(card, c.defId);
         this.handEls.set(c.id, card);
