@@ -39,6 +39,19 @@ function terrainSymbol(t: Terrain): MoveSymbol | null {
   return null;
 }
 
+/** Symbol a hex demands to enter (the El Dorado gate may require coin). */
+function requiredFor(hex: Hex): MoveSymbol | null {
+  if (hex.terrain === 'finish') return hex.reqSymbol ?? null;
+  return terrainSymbol(hex.terrain);
+}
+
+/** Power a single step onto this hex costs. */
+function stepCost(hex: Hex): number {
+  if (hex.terrain === 'start') return 1;
+  if (hex.terrain === 'finish') return Math.max(hex.cost, 1);
+  return hex.cost;
+}
+
 type Mode = 'idle' | 'buy' | 'clear';
 
 class App {
@@ -145,10 +158,9 @@ class App {
     if (hex.terrain === 'mountain') return false;
     if (hex.occupant && hex.occupant !== me.id) return false;
     if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') return false;
-    const req = terrainSymbol(hex.terrain);
+    const req = requiredFor(hex);
     if (req !== null && req !== symbol) return false;
-    const deduct = hex.terrain === 'start' || hex.terrain === 'finish' ? 1 : hex.cost;
-    return power >= deduct;
+    return power >= stepCost(hex);
   }
 
   private recomputeHighlights(): void {
@@ -210,7 +222,7 @@ class App {
     // 3) Play the selected card to move.
     if (this.selectedCardId) {
       const def = getDef(cardDefId(this.selectedCardId, this.state!));
-      const req = terrainSymbol(hex.terrain);
+      const req = requiredFor(hex);
       const syms = movableSymbols(def.defId);
       const sym: MoveSymbol | undefined = req && syms.includes(req) ? req : syms[0];
       if (sym && this.canEnter(hex, sym, def.power)) {

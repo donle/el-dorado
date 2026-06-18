@@ -23,8 +23,16 @@ function terrainSymbol(t: Terrain): MoveSymbol | null {
   return null;
 }
 
+/** Symbol a hex demands to enter (finish gate may require coin). */
+function requiredFor(h: Hex): MoveSymbol | null {
+  if (h.terrain === 'finish') return h.reqSymbol ?? null;
+  return terrainSymbol(h.terrain);
+}
+
 function enterCost(h: Hex): number {
-  return h.terrain === 'start' || h.terrain === 'finish' ? 1 : h.cost;
+  if (h.terrain === 'start') return 1;
+  if (h.terrain === 'finish') return Math.max(h.cost, 1);
+  return h.cost;
 }
 
 type Capability = Record<MoveSymbol, number>;
@@ -49,7 +57,10 @@ function canTraverse(h: Hex, p: Player, cap: Capability, owned: number): boolean
   if (h.terrain === 'green') return cap.machete >= h.cost;
   if (h.terrain === 'blue') return cap.paddle >= h.cost;
   if (h.terrain === 'yellow') return cap.coin >= h.cost;
-  return cap.machete + cap.paddle + cap.coin > 0; // start / finish
+  if (h.terrain === 'finish') {
+    return h.reqSymbol ? cap[h.reqSymbol] >= Math.max(h.cost, 1) : cap.machete + cap.paddle + cap.coin > 0;
+  }
+  return cap.machete + cap.paddle + cap.coin > 0; // start
 }
 
 /** Lowest-cost hex path from start to any finish using a custom passability test. */
@@ -134,7 +145,7 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   // Only commit to a route the current deck can actually traverse.
   const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned));
   for (const hex of path) {
-    const required = terrainSymbol(hex.terrain);
+    const required = requiredFor(hex);
     const isClear = hex.terrain === 'rubble' || hex.terrain === 'basecamp';
 
     if (isClear) {
@@ -185,8 +196,7 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   let gap: Need | null = null;
   for (const h of ideal) {
     if (canTraverse(h, p, cap, owned)) continue;
-    const sym = terrainSymbol(h.terrain);
-    gap = { symbol: sym, cost: h.cost };
+    gap = { symbol: requiredFor(h), cost: enterCost(h) };
     break;
   }
 

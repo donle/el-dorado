@@ -50,10 +50,18 @@ describe('tile composition', () => {
     expect(m.hexes).toHaveLength(74);
   });
 
-  it('classic map: 5 tiles = 185 cells, 4 start, 3 finish, fully connected', () => {
-    expect(CLASSIC_MAP.hexes).toHaveLength(185);
+  it('classic map: 5 tiles + El Dorado gate, 4 start, 1 fully-connected finish', () => {
+    expect(CLASSIC_MAP.hexes.length).toBeGreaterThanOrEqual(186); // 185 tile cells + gate (+arms)
     expect(CLASSIC_MAP.startHexes).toHaveLength(4);
-    expect(CLASSIC_MAP.finishHexes).toHaveLength(3);
+    expect(CLASSIC_MAP.finishHexes).toHaveLength(1);
+
+    // The El Dorado gate demands gold (coin) power and is wrapped on 3 sides.
+    const gate = CLASSIC_MAP.hexes.find((h) => h.terrain === 'finish')!;
+    expect(gate.reqSymbol).toBe('coin');
+    expect(gate.cost).toBeGreaterThan(0);
+    const tileKeys = new Set(CLASSIC_MAP.hexes.filter((h) => h.terrain !== 'finish').map(key));
+    const wrap = neighbors(gate).filter((n) => tileKeys.has(key(n))).length;
+    expect(wrap).toBeGreaterThanOrEqual(3);
 
     const passable = CLASSIC_MAP.hexes.filter((h) => h.terrain !== 'mountain');
     const byKey = new Map(passable.map((h) => [key(h), h]));

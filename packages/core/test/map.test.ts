@@ -3,9 +3,9 @@ import { CLASSIC_MAP } from '../src/maps/index.js';
 import { neighbors, key } from '../src/hex.js';
 
 describe('classic map', () => {
-  it('has 4 start hexes and at least 2 finish hexes', () => {
+  it('has 4 start hexes and the El Dorado gate', () => {
     expect(CLASSIC_MAP.startHexes).toHaveLength(4);
-    expect(CLASSIC_MAP.finishHexes.length).toBeGreaterThanOrEqual(2);
+    expect(CLASSIC_MAP.finishHexes.length).toBeGreaterThanOrEqual(1);
   });
 
   it('is fully connected (BFS reaches every non-mountain hex from a start)', () => {

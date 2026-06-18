@@ -50,10 +50,58 @@ function hutGeometry(): THREE.BufferGeometry {
 const VERTEX_MAT = () =>
   new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true });
 
+/**
+ * A flat hexagon mesh (in the XZ plane) subdivided for wave animation, aligned
+ * to the same orientation as the board's hex prisms.
+ */
+function hexWaterGeometry(radius: number, n: number): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const index: number[] = [];
+  const map = new Map<string, number>();
+  const corners: [number, number][] = [];
+  for (let i = 0; i < 6; i++) {
+    corners.push([radius * Math.sin((i * Math.PI) / 3), radius * Math.cos((i * Math.PI) / 3)]);
+  }
+  const addV = (x: number, z: number): number => {
+    const k = `${x.toFixed(4)},${z.toFixed(4)}`;
+    let idx = map.get(k);
+    if (idx === undefined) {
+      idx = positions.length / 3;
+      positions.push(x, 0, z);
+      map.set(k, idx);
+    }
+    return idx;
+  };
+  for (let s = 0; s < 6; s++) {
+    const p1 = corners[s];
+    const p2 = corners[(s + 1) % 6];
+    const grid: number[][] = [];
+    for (let i = 0; i <= n; i++) {
+      grid[i] = [];
+      for (let j = 0; j <= n - i; j++) {
+        const x = (i / n) * p1[0] + (j / n) * p2[0];
+        const z = (i / n) * p1[1] + (j / n) * p2[1];
+        grid[i][j] = addV(x, z);
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n - i; j++) {
+        index.push(grid[i][j], grid[i][j + 1], grid[i + 1][j]);
+        if (j < n - 1 - i) index.push(grid[i + 1][j], grid[i][j + 1], grid[i + 1][j + 1]);
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(index);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 /** All per-terrain 3D props + animated effects, kept in one group. */
 export class Decorations {
   readonly group = new THREE.Group();
-  private waterGeo: THREE.PlaneGeometry | null = null;
+  private waterGeo: THREE.BufferGeometry | null = null;
   private waterBase: Float32Array | null = null;
   private fires: { light: THREE.PointLight; base: number; phase: number }[] = [];
   private glows: THREE.Mesh[] = [];
@@ -196,15 +244,16 @@ export class Decorations {
   }
 
   private addWater(water: Placed[]): void {
-    const geo = new THREE.PlaneGeometry(1.5, 1.5, 12, 12).rotateX(-Math.PI / 2);
+    const geo = hexWaterGeometry(0.92, 4);
     this.waterGeo = geo;
     this.waterBase = (geo.attributes.position.array as Float32Array).slice();
     const mat = new THREE.MeshStandardMaterial({
       color: 0x2f7fc0,
       transparent: true,
-      opacity: 0.86,
-      roughness: 0.22,
-      metalness: 0.15,
+      opacity: 0.88,
+      roughness: 0.2,
+      metalness: 0.2,
+      side: THREE.DoubleSide,
     });
     const inst = new THREE.InstancedMesh(geo, mat, water.length);
     const dummy = new THREE.Object3D();

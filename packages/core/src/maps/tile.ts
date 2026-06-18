@@ -15,7 +15,7 @@
  * zero overlap (verified).
  */
 import type { GameMap, Hex, Terrain, Axial } from '../types.js';
-import { key } from '../hex.js';
+import { key, neighbors, distance } from '../hex.js';
 
 export const TILE_RADIUS = 3; // side length 4 → 37 cells
 
@@ -137,10 +137,8 @@ function cellSpec(theme: TileTheme, dq: number, dr: number): CellSpec {
   if (theme === 'start' && dq === -TILE_RADIUS) {
     return { terrain: 'start', cost: 0, slot: dr + 1 };
   }
-  // Finish hexes: the far edge (dq = +3, three cells dr -2..0) → El Dorado.
-  if (theme === 'end' && dq === TILE_RADIUS && dr >= -2 && dr <= 0) {
-    return { terrain: 'finish', cost: 0, slot: dr + 3 };
-  }
+  // The end tile is ordinary terrain; El Dorado is a separate gate tile
+  // attached at one of its corners (see attachEldorado).
   // Interior specials (only placed at ring <= 2, so connecting edges stay open).
   const sp = SPECIALS[theme].find((s) => s.q === dq && s.r === dr);
   if (sp) {
@@ -204,10 +202,57 @@ export function assembleTiles(id: string, name: string, placed: PlacedTile[]): G
   };
 }
 
+/** Power/symbol required to step onto the El Dorado gate. */
+export const ELDORADO_COST = 2;
+export const ELDORADO_SYMBOL = 'coin' as const;
+
+/**
+ * Attach El Dorado as a separate, irregular gate hex nestled into a forward
+ * corner of the end tile: a single golden gate cell embraced on three sides
+ * (the tile corner plus two flanking "arm" cells). Stepping onto it requires
+ * gold (coin) power — it is not a free finish. Returns a new map with it added.
+ */
+function attachEldorado(map: GameMap, placed: PlacedTile[]): GameMap {
+  const end = placed.find((t) => t.theme === 'end');
+  if (!end) return map;
+  const start = placed[0]?.center ?? { q: 0, r: 0 };
+  const occupied = new Set(map.hexes.map(key));
+  const adj = (a: Axial, b: Axial) => neighbors(a).some((n) => n.q === b.q && n.r === b.r);
+
+  // Forward-most boundary cell of the end tile (cube-ring 3, farthest from start).
+  const boundary = localCells()
+    .filter((c) => Math.max(Math.abs(c.q), Math.abs(c.r), Math.abs(c.q + c.r)) === TILE_RADIUS)
+    .map((c) => ({ q: end.center.q + c.q, r: end.center.r + c.r }));
+  const byStartDist = (cells: Axial[]) =>
+    cells.slice().sort((a, b) => distance(b, start) - distance(a, start) || key(a).localeCompare(key(b)));
+  const k = byStartDist(boundary)[0];
+
+  // Exterior cells just beyond K. The gate sits at the one most flanked by its
+  // siblings, so the corner wraps it on three sides.
+  const ext = neighbors(k).filter((n) => !occupied.has(key(n)));
+  if (!ext.length) return map;
+  const flankCount = (c: Axial) => ext.filter((o) => o !== c && adj(o, c)).length;
+  const gate = ext
+    .slice()
+    .sort((a, b) => flankCount(b) - flankCount(a) || distance(b, start) - distance(a, start))[0];
+  const arms = ext.filter((o) => o !== gate && adj(o, gate)).slice(0, 2);
+
+  const hexes = map.hexes.slice();
+  // Two grassy "arm" cells embrace the gate (kept off the finish list).
+  for (const a of arms) {
+    if (occupied.has(key(a))) continue;
+    occupied.add(key(a));
+    hexes.push({ q: a.q, r: a.r, terrain: 'yellow', cost: 1 });
+  }
+  hexes.push({ q: gate.q, r: gate.r, terrain: 'finish', cost: ELDORADO_COST, reqSymbol: ELDORADO_SYMBOL, slot: 1 });
+  return { ...map, hexes, finishHexes: [{ q: gate.q, r: gate.r }] };
+}
+
 /**
  * Convenience builder for the common case: a chain of tiles, each attached to
  * the next along a named {@link TileEdge}. Resolves the chain to explicit
- * centres and delegates to {@link assembleTiles}.
+ * centres and delegates to {@link assembleTiles}, then attaches the El Dorado
+ * gate if the chain ends with an `end` tile.
  */
 export function buildTileMap(id: string, name: string, chain: TileSpec[]): GameMap {
   const placed: PlacedTile[] = [];
@@ -216,7 +261,8 @@ export function buildTileMap(id: string, name: string, chain: TileSpec[]): GameM
     placed.push({ theme: spec.theme, center });
     if (spec.connect) center = neighborCenter(center, spec.connect);
   }
-  return assembleTiles(id, name, placed);
+  const map = assembleTiles(id, name, placed);
+  return attachEldorado(map, placed);
 }
 
 export { key };

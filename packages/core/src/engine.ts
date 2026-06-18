@@ -159,12 +159,23 @@ function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent
     throw new RuleError('Use ClearSpace to enter this terrain');
   }
 
-  const required = terrainSymbol(hex.terrain);
+  // The El Dorado gate (finish) may demand a specific symbol + cost; the start
+  // tile is a free wildcard; other terrains use their symbol + cost.
+  let required: MoveSymbol | null;
+  let deduct: number;
+  if (hex.terrain === 'finish') {
+    required = hex.reqSymbol ?? null;
+    deduct = Math.max(hex.cost, 1);
+  } else if (hex.terrain === 'start') {
+    required = null;
+    deduct = 1;
+  } else {
+    required = terrainSymbol(hex.terrain);
+    deduct = hex.cost;
+  }
   if (required !== null && required !== mover.symbol) {
     throw new RuleError(`Need ${required} to enter`);
   }
-  // Start/finish are cost-0 wildcards but a step always costs at least 1 power.
-  const deduct = hex.terrain === 'start' || hex.terrain === 'finish' ? 1 : hex.cost;
   if (mover.remaining < deduct) throw new RuleError('Not enough movement power');
 
   mover.remaining -= deduct;

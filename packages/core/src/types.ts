@@ -66,8 +66,13 @@ export interface Hex {
   q: number;
   r: number;
   terrain: Terrain;
-  /** Power/count required to enter (1–4). 0 for start/finish/mountain. */
+  /** Power/count required to enter (1–4). 0 for start/mountain. */
   cost: number;
+  /**
+   * Required movement symbol to enter (used by the El Dorado finish gate,
+   * which demands `coin`/gold power). Undefined = wildcard (any symbol).
+   */
+  reqSymbol?: MoveSymbol;
   /** Player id occupying this hex, if any. */
   occupant?: string;
   /** Index of a start hex (1–4) or finish hex, for setup/ordering. */
