@@ -9,11 +9,14 @@ import { buildTileMap } from './tile.js';
  * Start hexes sit on the back edge of the start tile, the 3 finish hexes on
  * the far edge of the end tile.
  */
+// Directions vary across all four edge types (offsets 5,0,1,2) so the tiles
+// join on different sides — an arcing, winding trail rather than a regular
+// zigzag. Verified overlap-free with no accidental non-consecutive adjacency.
 export const CLASSIC_MAP: GameMap = buildTileMap('classic', 'El Dorado Trail', [
-  { theme: 'start', dir: 0 },
-  { theme: 'jungle', dir: 1 },
-  { theme: 'river', dir: 0 },
-  { theme: 'village', dir: 1 },
+  { theme: 'start', dir: 5 },
+  { theme: 'jungle', dir: 0 },
+  { theme: 'river', dir: 1 },
+  { theme: 'village', dir: 2 },
   { theme: 'end' },
 ]);
 

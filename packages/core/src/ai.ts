@@ -27,11 +27,40 @@ function enterCost(h: Hex): number {
   return h.terrain === 'start' || h.terrain === 'finish' ? 1 : h.cost;
 }
 
-/** Lowest-cost hex path from start to any finish, avoiding mountains/occupants. */
-export function pathToFinish(state: GameState, p: Player): Hex[] {
+type Capability = Record<MoveSymbol, number>;
+
+/** Best single-card power the player can field for each symbol (jokers count for all). */
+function capability(p: Player): Capability {
+  const cap: Capability = { machete: 0, paddle: 0, coin: 0 };
+  for (const c of [...p.deck, ...p.hand, ...p.discard]) {
+    const def = getDef(c.defId);
+    for (const s of movableSymbols(def.defId)) {
+      if (def.power > cap[s]) cap[s] = def.power;
+    }
+  }
+  return cap;
+}
+
+/** Whether the player could enter `h` at all given a capability + owned-card count. */
+function canTraverse(h: Hex, p: Player, cap: Capability, owned: number): boolean {
+  if (h.terrain === 'mountain') return false;
+  if (h.occupant && h.occupant !== p.id) return false;
+  if (h.terrain === 'rubble' || h.terrain === 'basecamp') return owned >= h.cost;
+  if (h.terrain === 'green') return cap.machete >= h.cost;
+  if (h.terrain === 'blue') return cap.paddle >= h.cost;
+  if (h.terrain === 'yellow') return cap.coin >= h.cost;
+  return cap.machete + cap.paddle + cap.coin > 0; // start / finish
+}
+
+/** Lowest-cost hex path from start to any finish using a custom passability test. */
+export function pathToFinish(
+  state: GameState,
+  p: Player,
+  passable: (h: Hex) => boolean = (h) =>
+    h.terrain !== 'mountain' && (!h.occupant || h.occupant === p.id),
+): Hex[] {
   const byKey = new Map(state.hexes.map((h) => [key(h), h]));
-  const blocked = (h: Hex) =>
-    h.terrain === 'mountain' || (!!h.occupant && h.occupant !== p.id);
+  const blocked = (h: Hex) => !passable(h);
 
   const startKey = key(p.position);
   const dist = new Map<string, number>([[startKey, 0]]);
@@ -98,10 +127,12 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   const used = new Set<string>();
   const available = () => p.hand.filter((c) => !used.has(c.id));
   let mover: { symbol: MoveSymbol; remaining: number } | null = null;
-  let need: Need | null = null;
   let moved = false;
 
-  const path = pathToFinish(state, p);
+  const cap = capability(p);
+  const owned = p.deck.length + p.hand.length + p.discard.length;
+  // Only commit to a route the current deck can actually traverse.
+  const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned));
   for (const hex of path) {
     const required = terrainSymbol(hex.terrain);
     const isClear = hex.terrain === 'rubble' || hex.terrain === 'basecamp';
@@ -132,10 +163,7 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       .map((c) => ({ c, sym: declareSymbol(c.defId, required), pow: getDef(c.defId).power }))
       .filter((x) => x.sym !== null && x.pow >= deduct)
       .sort((a, b) => a.pow - b.pow);
-    if (candidates.length === 0) {
-      need = { symbol: required, cost: deduct };
-      break;
-    }
+    if (candidates.length === 0) break; // traversable, but not with this turn's hand
 
     const chosen = candidates[0];
     used.add(chosen.c.id);
@@ -149,12 +177,23 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   const rest = available();
   const coins = rest.reduce((sum, c) => sum + coinValue(c.defId), 0);
   const onBoard = state.market.filter((m) => m.onBoard && m.count > 0);
+  const affordable = onBoard.filter((m) => getDef(m.defId).cost <= coins);
 
-  const buyableEntering = (n: Need) =>
-    onBoard
+  // What capability do we lack? Look at the ideal (unrestricted) route and find
+  // the first hex our current deck can't traverse — buy toward closing that gap.
+  const ideal = pathToFinish(state, p);
+  let gap: Need | null = null;
+  for (const h of ideal) {
+    if (canTraverse(h, p, cap, owned)) continue;
+    const sym = terrainSymbol(h.terrain);
+    gap = { symbol: sym, cost: h.cost };
+    break;
+  }
+
+  const buyableForGap = (n: Need) =>
+    affordable
       .filter((m) => {
         const d = getDef(m.defId);
-        if (d.cost > coins) return false;
         const syms = movableSymbols(d.defId);
         const ok = n.symbol === null ? syms.length > 0 : syms.includes(n.symbol);
         return ok && d.power >= n.cost;
@@ -162,23 +201,25 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       .sort((a, b) => getDef(a.defId).cost - getDef(b.defId).cost);
 
   let target: string | null = null;
-  if (need) {
-    const unblock = buyableEntering(need);
+  if (gap) {
+    const unblock = buyableForGap(gap);
     if (unblock.length > 0) {
-      target = unblock[0].defId; // cheapest card that unblocks us
+      target = unblock[0].defId; // cheapest card that opens the route
     } else {
-      // Can't afford the unblocker yet → build economy with the best coin card.
-      const econ = onBoard
-        .filter((m) => getDef(m.defId).cost <= coins && coinValue(m.defId) >= 1)
+      // Can't yet afford the unblocker → build economy with the best coin card,
+      // otherwise grab the cheapest movement card to widen our options.
+      const econ = affordable
+        .filter((m) => coinValue(m.defId) >= 1)
         .sort((a, b) => coinValue(b.defId) - coinValue(a.defId));
+      const mvmt = affordable
+        .filter((m) => movableSymbols(m.defId).length > 0)
+        .sort((a, b) => getDef(a.defId).cost - getDef(b.defId).cost);
       if (econ.length > 0) target = econ[0].defId;
+      else if (mvmt.length > 0) target = mvmt[0].defId;
     }
-  } else {
-    // Already moved as far as planned → buy the most valuable affordable card.
-    const best = onBoard
-      .filter((m) => getDef(m.defId).cost <= coins)
-      .sort((a, b) => getDef(b.defId).cost - getDef(a.defId).cost);
-    if (best.length > 0) target = best[0].defId;
+  } else if (affordable.length > 0) {
+    // Route is fully traversable → buy the most valuable affordable card.
+    target = affordable.slice().sort((a, b) => getDef(b.defId).cost - getDef(a.defId).cost)[0].defId;
   }
 
   if (target) {
