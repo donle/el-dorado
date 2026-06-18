@@ -86,6 +86,7 @@ class App {
     document.body.appendChild(this.preview);
     this.board = new Board(document.getElementById('board') as HTMLCanvasElement);
     (window as unknown as { __board: Board }).__board = this.board;
+    (window as unknown as { __app: App }).__app = this;
     this.board.onHexClick = (c) => this.onHexClick(c);
     this.net.onMessage = (m) => this.onMessage(m);
     this.net.connect();
@@ -197,7 +198,7 @@ class App {
 
     if (this.mode === 'clear' || this.mode === 'buy') {
       // selection happens in the hand panel; no hex highlight
-    } else if (mover) {
+    } else if (mover && mover.remaining > 0) {
       for (const h of adj) if (this.canEnter(h, mover.symbol, mover.remaining)) out.push(h);
     } else if (this.selectedCardId) {
       const def = getDef(cardDefId(this.selectedCardId, this.state!));
@@ -283,7 +284,11 @@ class App {
   }
 
   private onMarketClick(defId: string): void {
-    if (!this.isMyTurn() || this.state!.turn?.hasBought) return;
+    if (!this.isMyTurn()) return;
+    if (this.state!.turn?.hasBought) {
+      this.flash('本回合已购买 · 每回合限买 1 张');
+      return;
+    }
     this.mode = this.buyTargetDefId === defId ? 'idle' : 'buy';
     this.buyTargetDefId = this.mode === 'buy' ? defId : null;
     this.selectedCardId = null;
@@ -309,6 +314,18 @@ class App {
   private closeMobilePanel(): void {
     this.mobilePanel = null;
     this.renderHud();
+  }
+
+  private flashTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Briefly show a transient hint toast. */
+  private flash(msg: string): void {
+    this.error = msg;
+    this.renderHud();
+    clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => {
+      this.error = '';
+      this.renderHud();
+    }, 1800);
   }
 
   // --- piles & buy animation ---
@@ -425,21 +442,10 @@ class App {
     this.preview.innerHTML = previewHtml(defId);
     this.preview.style.display = 'block';
     const pr = this.preview.getBoundingClientRect();
-    const ar = anchor.getBoundingClientRect();
-    let x: number;
-    let y: number;
-    if (anchor.closest('.hand-tray')) {
-      // hand cards: dock to the left edge so the board stays unobscured
-      x = 14;
-      y = window.innerHeight / 2 - pr.height / 2;
-    } else if (ar.left > window.innerWidth / 2) {
-      // right-side market: float to the left of the card
-      x = ar.left - pr.width - 14;
-      y = ar.top + ar.height / 2 - pr.height / 2;
-    } else {
-      x = ar.left + ar.width / 2 - pr.width / 2;
-      y = ar.top - pr.height - 14;
-    }
+    // Dock every card preview (hand AND market) to the left edge, vertically
+    // centered, so it never covers the board.
+    let x = 14;
+    let y = window.innerHeight / 2 - pr.height / 2;
     x = Math.max(10, Math.min(x, window.innerWidth - pr.width - 10));
     y = Math.max(10, Math.min(y, window.innerHeight - pr.height - 10));
     this.preview.style.left = `${x}px`;
@@ -604,7 +610,8 @@ class App {
       this.shopEls.set(pile.defId, card);
       return card;
     };
-    market.innerHTML = '<h3>市场 · 在售</h3>';
+    const bought = myTurn && !!s.turn?.hasBought;
+    market.innerHTML = `<h3>市场 · ${bought ? '本回合已购买' : '在售'}</h3>`;
     for (const pile of onBoard) market.appendChild(shopCard(pile, false));
     if (upcoming.length) {
       const sub = el('h3', '');
