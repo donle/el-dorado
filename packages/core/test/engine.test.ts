@@ -11,7 +11,7 @@ function game(players = 2): GameState {
     { id: 'p2', name: 'C', color: 'green' as const },
     { id: 'p3', name: 'D', color: 'yellow' as const },
   ].slice(0, players);
-  return createGame(seeds, 'classic', 42);
+  return createGame(seeds, 'corridor', 42);
 }
 
 function giveHand(s: GameState, pid: string, defs: string[]): void {

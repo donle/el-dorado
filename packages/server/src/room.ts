@@ -144,8 +144,10 @@ export class Room {
 
   /** Run AI turns until it's a human's turn or the game ends. */
   runAITurns(): void {
+    // Safety backstop against a pathological no-progress loop. A full
+    // all-AI game on a large map can legitimately take many hundreds of turns.
     let guard = 0;
-    while (this.game && this.game.phase === 'playing' && guard++ < 100) {
+    while (this.game && this.game.phase === 'playing' && guard++ < 5000) {
       const cur = this.currentPlayerId();
       if (!cur) break;
       const m = this.member(cur);

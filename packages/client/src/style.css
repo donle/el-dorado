@@ -1,0 +1,92 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; font-family: system-ui, -apple-system, "PingFang SC", sans-serif; }
+#app { position: relative; width: 100vw; height: 100vh; background: #0e1726; color: #e8edf4; }
+#board { display: block; width: 100%; height: 100%; }
+
+/* HUD overlay */
+#hud { position: absolute; inset: 0; pointer-events: none; }
+#hud .panel { pointer-events: auto; }
+
+.topbar {
+  position: absolute; top: 0; left: 0; right: 0; height: 52px;
+  display: flex; align-items: center; gap: 16px; padding: 0 16px;
+  background: linear-gradient(#0e1726ee, #0e172600);
+  font-size: 14px;
+}
+.topbar .code { font-weight: 700; letter-spacing: 2px; color: #ffd166; }
+.topbar .turn { font-weight: 600; }
+.topbar .spacer { flex: 1; }
+
+.players { display: flex; gap: 10px; }
+.player-chip { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; background: #1b273b; font-size: 12px; }
+.player-chip .dot { width: 10px; height: 10px; border-radius: 50%; }
+.player-chip.active { outline: 2px solid #ffd166; }
+.player-chip.finished { opacity: 0.6; }
+
+/* Hand */
+.hand {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  display: flex; gap: 8px; justify-content: center; align-items: flex-end;
+  padding: 12px; flex-wrap: wrap;
+}
+.card {
+  width: 96px; height: 132px; border-radius: 10px; padding: 8px;
+  background: #1e2a3f; border: 2px solid #2c3a55; cursor: pointer;
+  display: flex; flex-direction: column; justify-content: space-between;
+  transition: transform .1s, border-color .1s; user-select: none;
+}
+.card:hover { transform: translateY(-6px); }
+.card.selected { border-color: #ffd166; transform: translateY(-10px); }
+.card.payment { border-color: #4cc9f0; }
+.card .name { font-size: 12px; font-weight: 600; }
+.card .sym { font-size: 22px; }
+.card .meta { font-size: 11px; opacity: .8; }
+.card.green { background: #1f3a2a; } .card.blue { background: #1c2f4a; }
+.card.yellow { background: #3d3520; } .card.joker { background: #33244a; }
+.card.action { background: #3a2230; }
+
+/* Side market */
+.market {
+  position: absolute; top: 60px; right: 12px; width: 180px;
+  max-height: calc(100vh - 200px); overflow-y: auto;
+  background: #16213399; border-radius: 10px; padding: 8px;
+}
+.market h3 { margin: 4px 0 8px; font-size: 13px; }
+.market-card {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; cursor: pointer;
+  background: #1e2a3f; font-size: 12px; border: 1px solid transparent;
+}
+.market-card:hover { border-color: #4cc9f0; }
+.market-card.target { border-color: #ffd166; }
+.market-card .cost { color: #ffd166; font-weight: 700; }
+.market-card.off { opacity: .45; }
+
+/* Buttons */
+.actions { position: absolute; bottom: 150px; right: 16px; display: flex; flex-direction: column; gap: 8px; }
+button {
+  pointer-events: auto; padding: 9px 14px; border-radius: 8px; border: none;
+  background: #2f6fed; color: white; font-size: 14px; cursor: pointer; font-weight: 600;
+}
+button.secondary { background: #2c3a55; }
+button:disabled { opacity: .4; cursor: not-allowed; }
+
+.hint { position: absolute; bottom: 152px; left: 50%; transform: translateX(-50%);
+  background: #000a; padding: 6px 14px; border-radius: 999px; font-size: 13px; }
+
+/* Lobby / modal */
+#lobby {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: #0e1726; z-index: 10;
+}
+#lobby.hidden { display: none; }
+.modal { width: 420px; max-width: 92vw; background: #16213a; border-radius: 16px; padding: 28px; }
+.modal h1 { margin: 0 0 4px; font-size: 24px; }
+.modal .sub { opacity: .7; margin: 0 0 20px; font-size: 13px; }
+.modal label { display: block; font-size: 12px; margin: 12px 0 4px; opacity: .8; }
+.modal input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2c3a55; background: #0e1726; color: #fff; font-size: 15px; }
+.modal .row { display: flex; gap: 10px; margin-top: 18px; }
+.modal .row button { flex: 1; }
+.lobby-players { margin-top: 16px; display: flex; flex-direction: column; gap: 6px; }
+.error { color: #ff6b6b; font-size: 13px; min-height: 18px; margin-top: 8px; }
+.winner { color: #ffd166; font-size: 18px; font-weight: 700; text-align: center; margin-bottom: 8px; }
