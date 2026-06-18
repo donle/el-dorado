@@ -5,8 +5,8 @@ import {
   MARKET_DEF_IDS,
   MARKET_COPIES,
   HAND_SIZE,
-  makeCards,
 } from './cards.js';
+import type { Card } from './types.js';
 import { getMap } from './maps/index.js';
 import { shuffle } from './rng.js';
 import { key } from './hex.js';
@@ -37,9 +37,12 @@ export function createGame(
   let rngState = seed;
 
   const players: Player[] = seeds.map((s, i) => {
-    // Build and shuffle the starting deck with player-unique card ids.
-    let deck = STARTING_DECK.flatMap((entry) =>
-      makeCards(`${s.id}:${entry.defId}`, entry.count),
+    // Build and shuffle the starting deck with player-unique ids (clean defId).
+    let deck: Card[] = STARTING_DECK.flatMap((entry) =>
+      Array.from({ length: entry.count }, (_, i) => ({
+        id: `${s.id}:${entry.defId}#${i}`,
+        defId: entry.defId,
+      })),
     );
     [deck, rngState] = shuffle(deck, rngState);
     const hand = deck.splice(0, HAND_SIZE);

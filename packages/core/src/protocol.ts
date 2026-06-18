@@ -1,0 +1,34 @@
+/** Wire protocol shared by server and client. */
+import type { GameState, PlayerColor } from './types.js';
+import type { Action, GameEvent } from './actions.js';
+
+export interface RoomPlayer {
+  id: string;
+  name: string;
+  color: PlayerColor;
+  isAI: boolean;
+  connected: boolean;
+}
+
+export interface RoomView {
+  code: string;
+  hostId: string;
+  phase: 'lobby' | 'playing' | 'finished';
+  mapId: string;
+  players: RoomPlayer[];
+}
+
+export type ClientMessage =
+  | { type: 'createRoom'; name: string }
+  | { type: 'joinRoom'; code: string; name: string }
+  | { type: 'rejoin'; code: string; playerId: string }
+  | { type: 'addAI' }
+  | { type: 'removePlayer'; playerId: string }
+  | { type: 'startGame'; mapId?: string }
+  | { type: 'action'; action: Action };
+
+export type ServerMessage =
+  | { type: 'joined'; code: string; playerId: string }
+  | { type: 'room'; room: RoomView }
+  | { type: 'state'; state: GameState; events?: GameEvent[] }
+  | { type: 'error'; message: string };

@@ -5,4 +5,6 @@ export * from './rng.js';
 export * from './cards.js';
 export * from './setup.js';
 export * from './engine.js';
+export * from './protocol.js';
+export * from './ai.js';
 export { getMap, MAPS, CLASSIC_MAP, parseGrid } from './maps/index.js';
