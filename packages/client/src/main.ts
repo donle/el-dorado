@@ -52,7 +52,7 @@ function stepCost(hex: Hex): number {
   return hex.cost;
 }
 
-type Mode = 'idle' | 'buy' | 'clear';
+type Mode = 'idle' | 'buy' | 'clear' | 'discard';
 
 class App {
   net = new Net();
@@ -66,6 +66,7 @@ class App {
   mode: Mode = 'idle';
   buyTargetDefId: string | null = null;
   payment = new Set<string>();
+  discardSet = new Set<string>();
   clearTarget: Axial | null = null;
   hint = '';
   error = '';
@@ -168,6 +169,7 @@ class App {
     this.mode = 'idle';
     this.buyTargetDefId = null;
     this.payment.clear();
+    this.discardSet.clear();
     this.clearTarget = null;
     this.hint = '';
   }
@@ -196,7 +198,7 @@ class App {
     const out: Axial[] = [];
     const mover = this.state!.turn?.activeMover;
 
-    if (this.mode === 'clear' || this.mode === 'buy') {
+    if (this.mode === 'clear' || this.mode === 'buy' || this.mode === 'discard') {
       // selection happens in the hand panel; no hex highlight
     } else if (mover && mover.remaining > 0) {
       for (const h of adj) if (this.canEnter(h, mover.symbol, mover.remaining)) out.push(h);
@@ -272,6 +274,12 @@ class App {
         this.act({ type: 'ClearSpace', to: this.clearTarget, cardIds: [...this.payment] });
         return;
       }
+      this.renderHud();
+      return;
+    }
+    if (this.mode === 'discard') {
+      if (this.discardSet.has(cardId)) this.discardSet.delete(cardId);
+      else this.discardSet.add(cardId);
       this.renderHud();
       return;
     }
@@ -641,7 +649,8 @@ class App {
         const def = getDef(c.defId);
         const selected = this.selectedCardId === c.id;
         const inPayment = (this.mode === 'buy' || this.mode === 'clear') && this.payment.has(c.id);
-        const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''} ${inPayment ? 'payment' : ''}`);
+        const discarding = this.mode === 'discard' && this.discardSet.has(c.id);
+        const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''} ${inPayment ? 'payment' : ''} ${discarding ? 'discarding' : ''}`);
         card.innerHTML = `
           ${cardFace(def)}`;
         if (myTurn) card.onclick = () => this.onCardClick(c.id);
@@ -666,8 +675,26 @@ class App {
         bar.appendChild(button('取消', () => this.cancelMode(), true));
       } else if (this.mode === 'clear') {
         bar.appendChild(button('取消', () => this.cancelMode(), true));
+      } else if (this.mode === 'discard') {
+        const n = this.discardSet.size;
+        const all = button('全部弃掉', () => {
+          (this.me?.hand ?? []).forEach((c) => this.discardSet.add(c.id));
+          this.renderHud();
+        }, true);
+        const done = button(n > 0 ? `弃 ${n} 张并结束` : '不弃，结束回合', () =>
+          this.act({ type: 'EndTurn', discardCardIds: [...this.discardSet] }),
+        );
+        bar.appendChild(all);
+        bar.appendChild(done);
+        bar.appendChild(button('取消', () => this.cancelMode(), true));
       } else {
         bar.appendChild(button('结束回合', () => this.act({ type: 'EndTurn' }), true));
+        bar.appendChild(button('弃牌…', () => {
+          this.mode = 'discard';
+          this.discardSet.clear();
+          this.hint = '点手牌选择要弃掉的牌（可全弃）';
+          this.renderHud();
+        }, true));
       }
     }
     // Piles flank the hand on the same row; draw on the left, discard on the right.

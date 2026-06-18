@@ -100,6 +100,10 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .card:hover { transform: translateY(-10px); box-shadow: 0 14px 24px rgba(0,0,0,0.5); }
 .card.selected { transform: translateY(-16px); box-shadow: 0 0 0 2px var(--gold), 0 14px 24px rgba(0,0,0,.5); }
 .card.payment { box-shadow: 0 0 0 2px #4cc9f0, 0 10px 20px rgba(0,0,0,.45); }
+.card.discarding { box-shadow: 0 0 0 2px #ff6b6b, 0 10px 20px rgba(0,0,0,.45);
+  filter: grayscale(0.5) brightness(0.7); transform: translateY(6px); }
+.card.discarding::after { content: '弃'; position: absolute; top: 4px; left: 5px; z-index: 2;
+  background: #d23b3b; color: #fff; font-size: 11px; font-weight: 700; border-radius: 5px; padding: 1px 5px; }
 .card .card-face-svg { width: 100%; height: 100%; display: block; border-radius: 10px; }
 .action-bar { position: absolute; right: 18px; bottom: 18px; z-index: 20;
   pointer-events: auto; display: flex; flex-direction: column; gap: 8px;
