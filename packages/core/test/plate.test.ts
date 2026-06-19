@@ -18,6 +18,8 @@ const FULL: PlateDef = {
 describe('plate parser', () => {
   it('maps row/col to local axial (centre 0,0)', () => {
     expect(localFromRowCol(0, 0)).toEqual({ q: 0, r: -3 }); // top row leftmost
+    expect(localFromRowCol(1, 0)).toEqual({ q: -1, r: -2 }); // row 1 leftmost
+    expect(localFromRowCol(2, 0)).toEqual({ q: -2, r: -1 }); // row 2 leftmost
     expect(localFromRowCol(3, 0)).toEqual({ q: -3, r: 0 }); // middle row leftmost
     expect(localFromRowCol(3, 6)).toEqual({ q: 3, r: 0 }); // middle row rightmost
     expect(localFromRowCol(6, 0)).toEqual({ q: -3, r: 3 }); // bottom row leftmost

@@ -33,7 +33,7 @@ const TERRAIN_BY_LETTER: Record<string, Terrain> = {
   C: 'basecamp',
 };
 
-/** odd row/col within the hex layout → local axial coordinate. */
+/** Zero-based row/col within the hex layout → local axial coordinate (centre 0,0). */
 export function localFromRowCol(row: number, col: number): Axial {
   const r = row - 3;
   const qStart = Math.max(-3, -3 - r);
