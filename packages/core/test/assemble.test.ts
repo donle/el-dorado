@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { assembleMap, placePlates, type MapDef } from '../src/maps/assemble.js';
 import type { PlateDef } from '../src/maps/plate.js';
-import { key, neighbors, isAdjacent } from '../src/hex.js';
+import { key, neighbors, isAdjacent, distance } from '../src/hex.js';
 import type { Terrain, MoveSymbol } from '../src/types.js';
 
 function symbolForTerrain(t: Terrain): MoveSymbol | undefined {
@@ -189,5 +189,53 @@ describe('assemble: declared seam blockades', () => {
       connections: [{ from: 'p0', edge: 'right-up', to: 'p1' }],
     };
     expect(assembleMap(def, LIB2).blockades).toHaveLength(0);
+  });
+});
+
+describe('assemble: El Dorado terminal on role:end', () => {
+  const solidRows = [
+    'g1 g1 g1 g1',
+    'g1 g1 g1 g1 g1',
+    'g1 g1 g1 g1 g1 g1',
+    'g1 g1 g1 g1 g1 g1 g1',
+    'g1 g1 g1 g1 g1 g1',
+    'g1 g1 g1 g1 g1',
+    'g1 g1 g1 g1',
+  ];
+  const LIB3: Record<string, PlateDef> = {
+    s: { id: 's', theme: 'start', rows: solidRows },
+    e: { id: 'e', theme: 'end', rows: solidRows },
+  };
+
+  const def: MapDef = {
+    id: 'se',
+    name: '起终',
+    plates: [
+      { id: 'p0', ref: 's' },
+      { id: 'end', ref: 'e', role: 'end' },
+    ],
+    connections: [{ from: 'p0', edge: 'up', to: 'end' }],
+  };
+
+  it('adds three coin-gated entrances touching a 3-hex golden city', () => {
+    const m = assembleMap(def, LIB3);
+    const entrances = m.hexes.filter((h) => h.terrain === 'finish');
+    const city = m.hexes.filter((h) => h.terrain === 'eldorado');
+    expect(entrances).toHaveLength(3);
+    expect(city).toHaveLength(3);
+    expect(m.finishHexes).toHaveLength(3);
+    const cityKeys = new Set(city.map((h) => `${h.q},${h.r}`));
+    for (const e of entrances) {
+      expect(e.reqSymbol).toBe('coin');
+      expect(e.cost).toBeGreaterThan(0);
+      expect(neighbors(e).some((n) => cityKeys.has(`${n.q},${n.r}`))).toBe(true);
+    }
+  });
+
+  it('does nothing when no plate has role:end', () => {
+    const noEnd: MapDef = { ...def, plates: [{ id: 'p0', ref: 's' }, { id: 'end', ref: 'e' }] };
+    const m = assembleMap(noEnd, LIB3);
+    expect(m.hexes.some((h) => h.terrain === 'eldorado')).toBe(false);
+    expect(m.finishHexes).toHaveLength(0);
   });
 });

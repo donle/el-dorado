@@ -3,8 +3,8 @@
  * 障碍与黄金城在同文件后续函数中追加（见 buildSeamBlockades / attachEldorado）。
  */
 import type { GameMap, Hex, Axial, MoveSymbol, Blockade, BlockadeEdge, Terrain } from '../types.js';
-import { key, neighbors, axialToPixel } from '../hex.js';
-import { OPPOSITE_EDGE, neighborCenter, type TileEdge } from './geometry.js';
+import { key, neighbors, axialToPixel, distance } from '../hex.js';
+import { OPPOSITE_EDGE, neighborCenter, localCells, TILE_RADIUS, type TileEdge } from './geometry.js';
 import { parsePlate, type PlateDef, type ParsedPlate } from './plate.js';
 
 export type BlockadeType = MoveSymbol | 'discard';
@@ -205,11 +205,58 @@ function buildSeamBlockades(def: MapDef, placed: PlacedPlate[], hexes: Hex[]): B
   return blockades;
 }
 
+export const ELDORADO_COST = 2;
+export const ELDORADO_SYMBOL = 'coin' as const;
+
+function eldoradoCity(gate: Axial, arms: Axial[], occupied: Set<string>): Axial[] {
+  const entrances = [gate, ...arms];
+  return neighbors(gate)
+    .filter((c) => !occupied.has(key(c)))
+    .filter((c) => entrances.some((e) => neighbors(c).some((n) => n.q === e.q && n.r === e.r)))
+    .sort((a, b) => key(a).localeCompare(key(b)))
+    .slice(0, 3)
+    .map((c) => ({ q: c.q, r: c.r }));
+}
+
+function attachEldorado(map: GameMap, endCenter: Axial, startCenter: Axial): GameMap {
+  const occupied = new Set(map.hexes.map(key));
+  const adj = (a: Axial, b: Axial) => neighbors(a).some((n) => n.q === b.q && n.r === b.r);
+
+  const boundary = localCells()
+    .filter((c) => Math.max(Math.abs(c.q), Math.abs(c.r), Math.abs(c.q + c.r)) === TILE_RADIUS)
+    .map((c) => ({ q: endCenter.q + c.q, r: endCenter.r + c.r }));
+  const byStartDist = (cells: Axial[]) =>
+    cells.slice().sort((a, b) => distance(b, startCenter) - distance(a, startCenter) || key(a).localeCompare(key(b)));
+  const k = byStartDist(boundary)[0];
+
+  const ext = neighbors(k).filter((n) => !occupied.has(key(n)));
+  if (!ext.length) return map;
+  const flankCount = (c: Axial) => ext.filter((o) => o !== c && adj(o, c)).length;
+  const gate = ext
+    .slice()
+    .sort((a, b) => flankCount(b) - flankCount(a) || distance(b, startCenter) - distance(a, startCenter))[0];
+  const arms = ext.filter((o) => o !== gate && adj(o, gate)).slice(0, 2);
+
+  const hexes = map.hexes.slice();
+  const entrances = [arms[0], gate, arms[1]].filter((c): c is Axial => !!c);
+  entrances.forEach((c, i) => {
+    if (occupied.has(key(c))) return;
+    occupied.add(key(c));
+    hexes.push({ q: c.q, r: c.r, terrain: 'finish', cost: ELDORADO_COST, reqSymbol: ELDORADO_SYMBOL, slot: i + 1 });
+  });
+
+  for (const c of eldoradoCity(gate, arms, occupied)) {
+    occupied.add(key(c));
+    hexes.push({ q: c.q, r: c.r, terrain: 'eldorado', cost: 0 });
+  }
+  return { ...map, hexes, finishHexes: entrances.map((c) => ({ q: c.q, r: c.r })) };
+}
+
 export function assembleMap(def: MapDef, library: Record<string, PlateDef>): GameMap {
   const placed = placePlates(def, library);
   const { hexes, startHexes } = materialize(placed);
   const blockades = buildSeamBlockades(def, placed, hexes);
-  return {
+  const base: GameMap = {
     id: def.id,
     name: def.name,
     hexes,
@@ -217,4 +264,8 @@ export function assembleMap(def: MapDef, library: Record<string, PlateDef>): Gam
     startHexes,
     finishHexes: [],
   };
+  const end = placed.find((p) => p.role === 'end');
+  if (!end) return base;
+  const startCenter = placed[0]?.center ?? { q: 0, r: 0 };
+  return attachEldorado(base, end.center, startCenter);
 }
