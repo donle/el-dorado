@@ -84,6 +84,33 @@ function otherSymbol(symbol: keyof typeof BASIC_CARD_BY_SYMBOL): keyof typeof BA
   return symbol === 'machete' ? 'paddle' : 'machete';
 }
 
+function cubeDistTest(a: Axial, b: Axial): number {
+  return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2;
+}
+
+/** A covered seam edge crossed start→end; `wantCompatible` filters whether the
+ *  destination terrain accepts the seam's own symbol. */
+function seamCrossing(
+  s: GameState,
+  blockade: Blockade,
+  wantCompatible: boolean,
+): { from: Axial; to: Axial; dest: Hex } | null {
+  const start = s.hexes.find((h) => h.terrain === 'start')!;
+  const hexAt = (c: Axial) => s.hexes.find((h) => h.q === c.q && h.r === c.r)!;
+  const seamSym = terrainSymbolForTest(blockade.terrain) ?? blockade.symbol ?? null;
+  for (const e of blockade.edges) {
+    const toIsB = cubeDistTest(e.b, start) >= cubeDistTest(e.a, start);
+    const from = toIsB ? e.a : e.b;
+    const to = toIsB ? e.b : e.a;
+    const dest = hexAt(to);
+    if (dest.terrain === 'mountain' || dest.terrain === 'rubble' || dest.terrain === 'basecamp') continue;
+    const destSym = terrainSymbolForTest(dest.terrain);
+    const compatible = destSym === null || destSym === seamSym;
+    if (compatible === wantCompatible) return { from, to, dest };
+  }
+  return null;
+}
+
 describe('setup', () => {
   it('deals 4 cards and places pieces on start hexes', () => {
     const s = game(2);
@@ -223,14 +250,15 @@ describe('movement', () => {
     );
     const blockade = s.blockades[0];
     const symbol = blockadeSymbolForTest(blockade);
-    placeAt(s, 'p0', blockade.a);
-    giveHand(s, 'p0', [BASIC_CARD_BY_SYMBOL[symbol]]);
+    const crossing = seamCrossing(s, blockade, true)!;
+    placeAt(s, 'p0', crossing.from);
+    giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[symbol]]);
 
     const { state, result } = run(
       s,
       'p0',
-      { type: 'PlayMovementCard', cardId: `p0:${BASIC_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
-      { type: 'StepTo', to: blockade.b },
+      { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
+      { type: 'StepTo', to: crossing.to },
     );
 
     expect(result.ok).toBe(true);
@@ -252,24 +280,31 @@ describe('movement', () => {
     );
     const blockade = s.blockades[0];
     const symbol = blockadeSymbolForTest(blockade);
+    // A compatible crossing that is not the blockade's representative edge,
+    // proving any covered seam edge claims the same marker.
+    const start = s.hexes.find((h) => h.terrain === 'start')!;
     const hexAt = (c: Axial) => s.hexes.find((h) => h.q === c.q && h.r === c.r)!;
-    const edge =
-      blockade.edges.find(
-        (e) =>
-          key(e.a) !== key(blockade.a) &&
-          hexAt(e.a).terrain !== 'mountain' &&
-          hexAt(e.b).terrain !== 'mountain' &&
-          hexAt(e.b).terrain !== 'rubble' &&
-          hexAt(e.b).terrain !== 'basecamp',
-      ) ?? blockade.edges[blockade.edges.length - 1];
-    placeAt(s, 'p0', edge.a);
-    giveHand(s, 'p0', [BASIC_CARD_BY_SYMBOL[symbol]]);
+    const seamSym = blockadeSymbolForTest(blockade);
+    const crossing =
+      blockade.edges
+        .map((e) => {
+          const toIsB = cubeDistTest(e.b, start) >= cubeDistTest(e.a, start);
+          return { from: toIsB ? e.a : e.b, to: toIsB ? e.b : e.a };
+        })
+        .find(({ to }) => {
+          const dest = hexAt(to);
+          if (['mountain', 'rubble', 'basecamp'].includes(dest.terrain)) return false;
+          const destSym = terrainSymbolForTest(dest.terrain);
+          return (destSym === null || destSym === seamSym) && key(to) !== key(blockade.b);
+        }) ?? seamCrossing(s, blockade, true)!;
+    placeAt(s, 'p0', crossing.from);
+    giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[symbol]]);
 
     const { state, result } = run(
       s,
       'p0',
-      { type: 'PlayMovementCard', cardId: `p0:${BASIC_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
-      { type: 'StepTo', to: edge.b },
+      { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
+      { type: 'StepTo', to: crossing.to },
     );
 
     expect(result.ok).toBe(true);
@@ -353,49 +388,39 @@ describe('movement', () => {
       11,
     );
     const hexAt = (c: Axial) => s.hexes.find((h) => h.q === c.q && h.r === c.r)!;
-    const candidate = s.blockades
-      .flatMap((blockade) =>
-        blockade.edges.flatMap((edge) => [
-          { blockade, from: edge.a, to: edge.b },
-          { blockade, from: edge.b, to: edge.a },
-        ]),
-      )
-      .find(({ blockade, to }) => {
-        const target = hexAt(to);
-        const targetSymbol = terrainSymbolForTest(target.terrain);
-        return (
-          targetSymbol &&
-          targetSymbol !== blockadeSymbolForTest(blockade) &&
-          target.terrain !== 'rubble' &&
-          target.terrain !== 'basecamp' &&
-          target.terrain !== 'mountain'
-        );
-      })!;
-    const targetSymbol = terrainSymbolForTest(hexAt(candidate.to).terrain)!;
-    const blockadeSymbol = blockadeSymbolForTest(candidate.blockade);
+    const start = s.hexes.find((h) => h.terrain === 'start')!;
+    // Pick a blockade that has BOTH a compatible edge (so p0 can claim it) and an
+    // incompatible-symbol edge (so p1 must rely on the seam already being open).
+    const picked = s.blockades
+      .map((blockade) => ({ blockade, claim: seamCrossing(s, blockade, true), open: seamCrossing(s, blockade, false) }))
+      .find((x) => x.claim && x.open)!;
+    const blockade = picked.blockade;
+    const claim = picked.claim!;
+    const open = picked.open!;
+    const blockadeSymbol = blockadeSymbolForTest(blockade);
+    const targetSymbol = terrainSymbolForTest(open.dest.terrain)!;
 
-    placeAt(s, 'p0', candidate.from);
+    // p0 claims the marker by crossing a compatible edge.
+    placeAt(s, 'p0', claim.from);
     giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[blockadeSymbol]]);
     let r = run(
       s,
       'p0',
-      {
-        type: 'PlayMovementCard',
-        cardId: `p0:${STRONG_CARD_BY_SYMBOL[blockadeSymbol]}#t0`,
-        symbol: blockadeSymbol,
-      },
-      { type: 'StepTo', to: candidate.to },
+      { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[blockadeSymbol]}#t0`, symbol: blockadeSymbol },
+      { type: 'StepTo', to: claim.to },
     );
 
     expect(r.result.ok).toBe(true);
-    expect(r.state.blockades.find((b) => b.id === candidate.blockade.id)!.claimedBy).toBe('p0');
-    expect(r.state.players[0].claimedBlockades).toEqual([candidate.blockade.id]);
+    expect(r.state.blockades.find((b) => b.id === blockade.id)!.claimedBy).toBe('p0');
+    expect(r.state.players[0].claimedBlockades).toEqual([blockade.id]);
 
+    // Park p0 out of the way, then p1 crosses the now-open seam onto a
+    // different-symbol terrain using only that terrain's own requirement.
     const parking = r.state.hexes.find(
-      (h) => !h.occupant && h.terrain !== 'mountain' && key(h) !== key(candidate.from) && key(h) !== key(candidate.to),
+      (h) => !h.occupant && h.terrain !== 'mountain' && key(h) !== key(open.from) && key(h) !== key(open.to),
     )!;
     placeAt(r.state, 'p0', parking);
-    placeAt(r.state, 'p1', candidate.from);
+    placeAt(r.state, 'p1', open.from);
     r.state.turn = {
       playerId: 'p1',
       inPlay: [],
@@ -408,18 +433,85 @@ describe('movement', () => {
       r.state,
       'p1',
       { type: 'PlayMovementCard', cardId: `p1:${STRONG_CARD_BY_SYMBOL[targetSymbol]}#t0`, symbol: targetSymbol },
-      { type: 'StepTo', to: candidate.to },
+      { type: 'StepTo', to: open.to },
     );
 
     expect(r.result.ok).toBe(true);
-    expect(pos(r.state, 'p1')).toEqual(candidate.to);
-    expect(r.state.blockades.find((b) => b.id === candidate.blockade.id)!.claimedBy).toBe('p0');
+    expect(pos(r.state, 'p1')).toEqual(open.to);
+    expect(r.state.blockades.find((b) => b.id === blockade.id)!.claimedBy).toBe('p0');
     expect(r.state.players[1].claimedBlockades).toEqual([]);
     expect(r.result.events).not.toContainEqual({
       type: 'blockadeClaimed',
       playerId: 'p1',
-      blockadeId: candidate.blockade.id,
+      blockadeId: blockade.id,
     });
+  });
+});
+
+describe('seam crossing cost (blockade + destination terrain)', () => {
+  const startGame = () =>
+    createGame(
+      [
+        { id: 'p0', name: 'A', color: 'red' as const },
+        { id: 'p1', name: 'B', color: 'blue' as const },
+      ],
+      'classic',
+      11,
+    );
+
+  it('charges blockade cost PLUS destination terrain cost on the first crossing', () => {
+    const s = startGame();
+    const blockade = s.blockades[0]; // green / machete, cost 1
+    const symbol = blockadeSymbolForTest(blockade);
+    const crossing = seamCrossing(s, blockade, true);
+    expect(crossing).toBeTruthy();
+    placeAt(s, 'p0', crossing!.from);
+    giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[symbol]]); // pioneer, machete power 5
+    const { state, result } = run(
+      s,
+      'p0',
+      { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
+      { type: 'StepTo', to: crossing!.to },
+    );
+    expect(result.ok).toBe(true);
+    expect(pos(state, 'p0')).toEqual(crossing!.to);
+    expect(state.blockades[0].claimedBy).toBe('p0');
+    // 5 (pioneer) − (blockade.cost + destination terrain cost)
+    expect(state.turn!.activeMover!.remaining).toBe(5 - (blockade.cost + crossing!.dest.cost));
+  });
+
+  it('rejects crossing onto a terrain whose symbol differs from the seam symbol', () => {
+    const s = startGame();
+    const blockade = s.blockades[0]; // machete
+    const symbol = blockadeSymbolForTest(blockade);
+    const crossing = seamCrossing(s, blockade, false);
+    if (!crossing) return; // no incompatible edge on this seam → nothing to assert
+    placeAt(s, 'p0', crossing.from);
+    giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[symbol]]);
+    const { result } = run(
+      s,
+      'p0',
+      { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
+      { type: 'StepTo', to: crossing.to },
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects crossing when power covers the blockade but not the destination terrain', () => {
+    const s = startGame();
+    const blockade = s.blockades[0]; // machete, cost 1
+    const symbol = blockadeSymbolForTest(blockade);
+    const crossing = seamCrossing(s, blockade, true);
+    placeAt(s, 'p0', crossing!.from);
+    giveHand(s, 'p0', [BASIC_CARD_BY_SYMBOL[symbol]]); // explorer, machete power 1
+    const { result } = run(
+      s,
+      'p0',
+      { type: 'PlayMovementCard', cardId: `p0:${BASIC_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
+      { type: 'StepTo', to: crossing!.to },
+    );
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error).toMatch(/移动力量不足/);
   });
 });
 

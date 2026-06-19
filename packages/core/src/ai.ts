@@ -132,7 +132,17 @@ export function pathToFinish(
       if (!edgePassable(curHex, hex)) continue;
       if (hex.terrain === 'eldorado' && curHex.terrain !== 'finish') continue;
       const blockade = blockadeBetween(state, curHex, hex);
-      const cost = blockade && !blockade.claimedBy ? blockade.cost : Math.max(enterCost(hex), 1);
+      // First crossing of a symbol seam pays the seam AND the destination
+      // terrain; a discard seam pays only its discard; an open/absent seam pays
+      // the destination terrain alone.
+      let cost: number;
+      if (blockade && !blockade.claimedBy) {
+        cost = blockadeRequiresDiscard(blockade)
+          ? blockade.cost
+          : blockade.cost + Math.max(enterCost(hex), 1);
+      } else {
+        cost = Math.max(enterCost(hex), 1);
+      }
       const nd = best + cost;
       if (nd < (dist.get(k) ?? Infinity)) {
         dist.set(k, nd);
@@ -181,7 +191,13 @@ export function planTurn(state: GameState, playerId: string): Action[] {
     if (!blockade || blockade.claimedBy) return true;
     if (blockadeRequiresDiscard(blockade)) return owned >= blockade.cost;
     const symbol = blockadeMoveSymbol(blockade);
-    return !!symbol && cap[symbol] >= blockade.cost;
+    if (!symbol) return false;
+    // One mover, one symbol: it must clear the seam AND enter the destination,
+    // so the destination terrain must accept the seam symbol, with power enough
+    // for both costs combined.
+    const destReq = requiredFor(to);
+    if (destReq !== null && destReq !== symbol) return false;
+    return cap[symbol] >= blockade.cost + Math.max(enterCost(to), 1);
   };
   const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned), edgeCanTraverse);
   let plannedPosition: Axial = { ...p.position };
@@ -206,7 +222,14 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       continue;
     }
 
-    const deduct = blockade && !blockade.claimedBy ? blockade.cost : required === null ? 1 : enterCost(hex);
+    // Symbol-seam crossing deducts the seam cost plus the destination terrain;
+    // discard seams go through the ClearSpace branch above.
+    const deduct =
+      blockade && !blockade.claimedBy && !blockadeClear
+        ? blockade.cost + (required === null ? 1 : enterCost(hex))
+        : required === null
+          ? 1
+          : enterCost(hex);
 
     if (mover && mover.remaining >= deduct && (required === null || required === mover.symbol)) {
       actions.push({ type: 'StepTo', to: { q: hex.q, r: hex.r } });
@@ -252,8 +275,10 @@ export function planTurn(state: GameState, playerId: string): Action[] {
         }
       } else {
         const symbol = blockadeMoveSymbol(blockade);
-        if (symbol && cap[symbol] < blockade.cost) {
-          gap = { symbol, cost: blockade.cost };
+        // Need enough of one symbol to clear the seam AND enter the far hex.
+        const need = blockade.cost + Math.max(enterCost(h), 1);
+        if (symbol && cap[symbol] < need) {
+          gap = { symbol, cost: need };
           break;
         }
       }

@@ -250,12 +250,20 @@ class App {
     return !blockade.claimedBy && blockadeRequiresDiscard(blockade) && !!this.blockadeDestination(blockade);
   }
 
-  private movementRequirement(hex: Hex): { required: MoveSymbol | null; cost: number; blockade?: Blockade; discard?: boolean } {
+  private movementRequirement(
+    hex: Hex,
+  ): { required: MoveSymbol | null; cost: number; blockade?: Blockade; discard?: boolean; destReq?: MoveSymbol | null } {
     const me = this.me;
     const blockade = me ? this.blockadeBetween(me.position, hex) : undefined;
     if (blockade && !blockade.claimedBy) {
-      const required = blockadeMoveSymbol(blockade);
-      return { required, cost: blockade.cost, blockade, discard: required === null };
+      const seamSym = blockadeMoveSymbol(blockade);
+      if (seamSym === null) {
+        // Discard seam: paid via ClearSpace; destination terrain not charged.
+        return { required: null, cost: blockade.cost, blockade, discard: true };
+      }
+      // Symbol seam: pay the seam AND enter the destination terrain with one
+      // mover, so the cost is combined and the single symbol must satisfy both.
+      return { required: seamSym, cost: blockade.cost + stepCost(hex), blockade, destReq: requiredFor(hex) };
     }
     return { required: requiredFor(hex), cost: stepCost(hex) };
   }
@@ -272,6 +280,9 @@ class App {
     const requirement = this.movementRequirement(hex);
     if (requirement.discard) return false;
     if (requirement.required !== null && requirement.required !== symbol) return false;
+    // Crossing a symbol seam also has to enter the destination terrain, which a
+    // single-symbol mover can only do when that terrain accepts the same symbol.
+    if (requirement.destReq != null && requirement.destReq !== symbol) return false;
     return power >= requirement.cost;
   }
 
@@ -342,6 +353,8 @@ class App {
   }
 
   private onHexClick(c: Axial): void {
+    if (this.tryActOnHex(c)) return;
+
     if (this.pinnedTerrain && sameCoord(this.pinnedTerrain, c) && !this.pinnedBlockadeId) {
       this.pinnedTerrain = null;
       this.hoveredTerrain = null;
@@ -357,17 +370,19 @@ class App {
     this.board.setInspectedHex(c);
     this.board.setInspectedBlockade(null);
     this.renderTerrainPanel();
+  }
 
-    if (!this.isMyTurn()) return;
-    if (this.mode === 'buy' || this.mode === 'clear' || this.mode === 'discard') return;
+  private tryActOnHex(c: Axial): boolean {
+    if (!this.isMyTurn()) return false;
+    if (this.mode === 'buy' || this.mode === 'clear' || this.mode === 'discard') return false;
     const hex = this.hexAt(c);
     const me = this.me;
-    if (!hex || !me || !isAdjacent(me.position, hex)) return;
+    if (!hex || !me || !isAdjacent(me.position, hex)) return false;
 
     const blockade = this.blockadeBetween(me.position, hex);
     if (blockade && !blockade.claimedBy && blockadeRequiresDiscard(blockade)) {
       this.startBlockadeClear(blockade, hex);
-      return;
+      return true;
     }
 
     // 1) Clearable terrain → enter clear mode.
@@ -380,14 +395,14 @@ class App {
       this.hint = `选 ${hex.cost} 张牌${hex.terrain === 'basecamp' ? '（将被永久移除）' : ''}清除此格`;
       this.renderHud();
       this.recomputeHighlights();
-      return;
+      return true;
     }
 
     const mover = this.state!.turn?.activeMover;
     // 2) Continue with the active mover.
     if (mover && this.canEnter(hex, mover.symbol, mover.remaining)) {
       this.act({ type: 'StepTo', to: c });
-      return;
+      return true;
     }
     // 3) Play the selected card to move.
     if (this.selectedCardId) {
@@ -400,9 +415,10 @@ class App {
         this.selectedCardId = null;
         this.act({ type: 'PlayMovementCard', cardId, symbol: sym });
         this.act({ type: 'StepTo', to: c });
-        return;
+        return true;
       }
     }
+    return false;
   }
 
   private onBlockadeHover(id: string | null): void {
@@ -413,21 +429,25 @@ class App {
   }
 
   private onBlockadeClick(id: string): void {
+    if (this.tryActOnBlockade(id)) return;
+
     this.pinnedBlockadeId = id;
     this.pinnedTerrain = null;
     this.board.setInspectedBlockade(id);
     this.board.setInspectedHex(null);
     this.renderTerrainPanel();
+  }
 
-    if (!this.isMyTurn()) return;
-    if (this.mode === 'buy' || this.mode === 'clear' || this.mode === 'discard') return;
+  private tryActOnBlockade(id: string): boolean {
+    if (!this.isMyTurn()) return false;
+    if (this.mode === 'buy' || this.mode === 'clear' || this.mode === 'discard') return false;
     const blockade = this.blockadeById(id);
-    if (!blockade || blockade.claimedBy) return;
+    if (!blockade || blockade.claimedBy) return false;
 
     if (blockadeRequiresDiscard(blockade)) {
       const dest = this.blockadeDestination(blockade);
       if (dest) this.startBlockadeClear(blockade, dest);
-      return;
+      return !!dest;
     }
 
     const mover = this.state!.turn?.activeMover;
@@ -435,7 +455,7 @@ class App {
       const dest = this.blockadeDestination(blockade, mover.symbol, mover.remaining);
       if (dest) {
         this.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
-        return;
+        return true;
       }
     }
 
@@ -447,13 +467,15 @@ class App {
       const sym = preferred && this.canUseBlockade(blockade, preferred, def.power) ? preferred : syms.find((s) => this.canUseBlockade(blockade, s, def.power));
       if (sym) {
         const dest = this.blockadeDestination(blockade, sym, def.power);
-        if (!dest) return;
+        if (!dest) return false;
         const cardId = this.selectedCardId;
         this.selectedCardId = null;
         this.act({ type: 'PlayMovementCard', cardId, symbol: sym });
         this.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
+        return true;
       }
     }
+    return false;
   }
 
   private onCardClick(cardId: string): void {
@@ -1080,7 +1102,7 @@ class App {
     const requirementText = requirement.blockade && requirement.discard
       ? `边界碎石路障需要弃 ${requirement.cost} 张手牌；成功通过后会收入你的玩家信息。`
       : requirement.blockade && requirement.required
-      ? `边界阻挡物需要 ${SYMBOL_GLYPH[requirement.required]}${SYMBOL_LABEL[requirement.required]} ${requirement.cost} 点；成功通过后会收入你的玩家信息。`
+      ? `跨越边界阻挡物并进入对岸地形共需 ${SYMBOL_GLYPH[requirement.required]}${SYMBOL_LABEL[requirement.required]} ${requirement.cost} 点（阻挡物 + 目的地地形，须同一种符号）；成功通过后阻挡物会收入你的玩家信息。`
       : `此格需要 ${terrainCostText(hex)}。`;
     const mover = this.state!.turn?.activeMover;
     if (mover) {

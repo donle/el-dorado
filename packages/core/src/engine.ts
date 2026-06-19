@@ -221,28 +221,49 @@ function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent
     throw new RuleError('需要弃牌清除此格后才能进入');
   }
 
-  // Unclaimed seam blockades are crossed as their own zig-zag terrain. The
-  // first player to pay the marker claims it; later crossings use the normal
-  // destination terrain requirement.
+  // The destination hex's own terrain requirement (symbol + cost).
+  let destRequired: MoveSymbol | null;
+  let destDeduct: number;
+  if (hex.terrain === 'eldorado') {
+    destRequired = null;
+    destDeduct = 1;
+  } else if (hex.terrain === 'finish') {
+    destRequired = hex.reqSymbol ?? null;
+    destDeduct = Math.max(hex.cost, 1);
+  } else if (hex.terrain === 'start') {
+    destRequired = null;
+    destDeduct = 1;
+  } else {
+    destRequired = terrainSymbol(hex.terrain);
+    destDeduct = hex.cost;
+  }
+
+  // Crossing an unclaimed seam pays the blockade AND enters the destination
+  // terrain in one move: the cost is the seam cost plus the terrain cost, and
+  // because a single mover carries one symbol, that symbol must satisfy both —
+  // so the destination terrain must accept the seam's symbol (or be wildcard).
+  // The first player to pay claims the marker; once claimed the seam is open
+  // and later crossings pay only the normal destination terrain.
   const blockade = blockadeBetween(state, p.position, hex);
   let required: MoveSymbol | null;
   let deduct: number;
   if (blockade && !blockade.claimedBy) {
-    required = blockadeMoveSymbol(blockade);
-    if (required === null) throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
-    deduct = blockade.cost;
-  } else if (hex.terrain === 'eldorado') {
-    required = null;
-    deduct = 1;
-  } else if (hex.terrain === 'finish') {
-    required = hex.reqSymbol ?? null;
-    deduct = Math.max(hex.cost, 1);
-  } else if (hex.terrain === 'start') {
-    required = null;
-    deduct = 1;
+    const blockSym = blockadeMoveSymbol(blockade);
+    // Discard-type seams (rubble / no symbol) cannot be crossed with a movement
+    // card — they are paid via ClearSpace.
+    if (blockSym === null) {
+      throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
+    }
+    if (destRequired !== null && destRequired !== blockSym) {
+      throw new RuleError(
+        `跨越连接地形需要${symbolLabel(blockSym)}，无法用它进入对岸的${symbolLabel(destRequired)}地形`,
+      );
+    }
+    required = blockSym;
+    deduct = blockade.cost + destDeduct;
   } else {
-    required = terrainSymbol(hex.terrain);
-    deduct = hex.cost;
+    required = destRequired;
+    deduct = destDeduct;
   }
   if (required !== null && required !== mover.symbol) {
     throw new RuleError(`需要${symbolLabel(required)}才能进入`);
