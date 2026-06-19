@@ -1,0 +1,17 @@
+{
+  "id": "classic",
+  "name": "黄金城之路",
+  "plates": [
+    { "id": "start", "ref": "start-a" },
+    { "id": "jungle", "ref": "jungle-a" },
+    { "id": "river", "ref": "river-a" },
+    { "id": "village", "ref": "village-a" },
+    { "id": "end", "ref": "end-a", "role": "end" }
+  ],
+  "connections": [
+    { "from": "start", "edge": "up", "to": "jungle", "blockade": { "type": "machete", "cost": 1 } },
+    { "from": "jungle", "edge": "right-up", "to": "river", "blockade": { "type": "paddle", "cost": 1 } },
+    { "from": "river", "edge": "right-down", "to": "village", "blockade": { "type": "coin", "cost": 1 } },
+    { "from": "village", "edge": "down", "to": "end", "blockade": { "type": "discard", "cost": 1 } }
+  ]
+}

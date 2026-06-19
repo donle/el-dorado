@@ -1,0 +1,13 @@
+{
+  "id": "end-a",
+  "theme": "end",
+  "rows": [
+    "g2 y1 g1 g3",
+    "g1 g2 y2 g1 g2",
+    "y1 g2 g1 g2 y3 g1",
+    "g2 g1 MM g3 MM g1 g2",
+    "g1 y2 g2 g1 g2 y1",
+    "g2 g1 y3 g2 g1",
+    "y1 g2 g1 g3"
+  ]
+}
