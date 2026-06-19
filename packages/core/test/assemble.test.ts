@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { assembleMap, placePlates, type MapDef } from '../src/maps/assemble.js';
 import type { PlateDef } from '../src/maps/plate.js';
-import { key, neighbors, isAdjacent, distance } from '../src/hex.js';
+import { key, neighbors, isAdjacent } from '../src/hex.js';
 import type { Terrain, MoveSymbol } from '../src/types.js';
 
 function symbolForTerrain(t: Terrain): MoveSymbol | undefined {
