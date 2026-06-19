@@ -1,25 +1,28 @@
 import type { GameMap } from '../types.js';
 import { parseGrid } from './parse.js';
-import { buildTileMap } from './tile.js';
+import { assembleMap, type MapDef } from './assemble.js';
+import type { PlateDef } from './plate.js';
+
+import startA from './data/plates/start-a.json' with { type: 'json' };
+import jungleA from './data/plates/jungle-a.json' with { type: 'json' };
+import riverA from './data/plates/river-a.json' with { type: 'json' };
+import villageA from './data/plates/village-a.json' with { type: 'json' };
+import endA from './data/plates/end-a.json' with { type: 'json' };
+import classicDef from './data/classic.map.json' with { type: 'json' };
+
+const PLATE_LIBRARY: Record<string, PlateDef> = {
+  'start-a': startA as PlateDef,
+  'jungle-a': jungleA as PlateDef,
+  'river-a': riverA as PlateDef,
+  'village-a': villageA as PlateDef,
+  'end-a': endA as PlateDef,
+};
 
 /**
- * "Classic" map: assembled from continent tiles, exactly like the physical
- * game. Each tile is a side-4 hexagon (37 cells); tiles connect edge-to-edge
- * along a winding path: start → jungle → river → village → El Dorado.
- * Start hexes sit on the back edge of the start tile; the route ends at three
- * El Dorado entrance hexes, then a compact golden city terminal.
+ * "Classic" 地图：完全由 JSON 板块 + 连接表装配，等价于旧程序化版本。
+ * start → jungle → river → village → end(+黄金城)，四条接缝各一障碍。
  */
-// Each tile attaches to the next along a named, semantic edge — varying the
-// seam (up / right-up / right-down / down) gives an arcing, winding trail
-// rather than a regular zigzag. Verified overlap-free with no accidental
-// non-consecutive adjacency.
-export const CLASSIC_MAP: GameMap = buildTileMap('classic', '黄金城之路', [
-  { theme: 'start', connect: 'up' },
-  { theme: 'jungle', connect: 'right-up' },
-  { theme: 'river', connect: 'right-down' },
-  { theme: 'village', connect: 'down' },
-  { theme: 'end' },
-]);
+export const CLASSIC_MAP: GameMap = assembleMap(classicDef as MapDef, PLATE_LIBRARY);
 
 /** Simple 2-lane corridor — used by unit tests with fixed coordinates. */
 export const CORRIDOR_MAP: GameMap = parseGrid('corridor', '测试走廊', [
@@ -39,14 +42,16 @@ export function getMap(id: string): GameMap {
 }
 
 export { parseGrid };
+export { assembleMap } from './assemble.js';
+export type { MapDef, MapConnectionDef, MapPlateRef, BlockadeDef, BlockadeType } from './assemble.js';
+export { parsePlate } from './plate.js';
+export type { PlateDef, ParsedPlate, PlateCell } from './plate.js';
 export {
-  buildTileMap,
-  assembleTiles,
   neighborCenter,
   TILE_RADIUS,
   TILE_EDGES,
   EDGE_OFFSET,
   OPPOSITE_EDGE,
   TILE_NEIGHBOR_OFFSETS,
-} from './tile.js';
-export type { TileEdge, TileTheme, TileSpec, PlacedTile } from './tile.js';
+} from './geometry.js';
+export type { TileEdge } from './geometry.js';
