@@ -109,7 +109,7 @@ function materialize(placed: PlacedPlate[]): { hexes: Hex[]; startHexes: Axial[]
     for (const c of p.plate.cells) {
       const q = p.center.q + c.local.q;
       const r = p.center.r + c.local.r;
-      const k = `${q},${r}`;
+      const k = key({ q, r });
       if (hexByKey.has(k)) continue; // shared-seam dedupe (safety net)
       const hex: Hex = { q, r, terrain: c.terrain, cost: c.cost };
       if (c.slot !== undefined) hex.slot = c.slot;
