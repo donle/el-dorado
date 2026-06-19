@@ -6,3 +6,5 @@ dist/
 .playwright-mcp/
 .playwright-cli/
 eldorado-*.png
+docs/
+output/
