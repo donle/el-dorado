@@ -2,10 +2,24 @@ import * as THREE from 'three';
 import type { Terrain } from '@eldorado/core';
 
 /**
- * Procedurally generated terrain textures — drawn on a canvas at runtime, so
- * there are no external/copyrighted image assets. Cached per terrain type.
+ * Terrain textures for the hex top faces. Realistic PNGs are loaded from
+ * public assets; the procedural canvas textures remain as a fallback while
+ * images are loading or if an asset is missing.
  */
 const cache = new Map<Terrain, THREE.Texture>();
+const loader = new THREE.TextureLoader();
+
+const TERRAIN_TEXTURE_URL: Record<Terrain, string> = {
+  green: '/textures/terrain-realistic/green.png',
+  blue: '/textures/terrain-realistic/blue.png',
+  yellow: '/textures/terrain-realistic/yellow.png',
+  rubble: '/textures/terrain-realistic/rubble.png',
+  basecamp: '/textures/terrain-realistic/basecamp.png',
+  mountain: '/textures/terrain-realistic/mountain.png',
+  start: '/textures/terrain-realistic/start.png',
+  finish: '/textures/terrain-realistic/finish.png',
+  eldorado: '/textures/terrain-realistic/eldorado.png',
+};
 
 function mulberry(seed: number) {
   return () => {
@@ -148,6 +162,40 @@ function draw(terrain: Terrain): HTMLCanvasElement {
       }
       break;
     }
+    case 'eldorado': {
+      // The golden city: rich gold with an embossed honeycomb lattice + glints.
+      base(ctx, '#e7b94a', '#b9892b');
+      const R = 16;
+      ctx.lineWidth = 2;
+      for (let row = -1; row * R * 1.5 < SIZE + R; row++) {
+        for (let col = -1; col * R * Math.sqrt(3) < SIZE + R; col++) {
+          const cx = col * R * Math.sqrt(3) + (row % 2 ? (R * Math.sqrt(3)) / 2 : 0);
+          const cy = row * R * 1.5;
+          ctx.beginPath();
+          for (let k = 0; k < 6; k++) {
+            const ang = (k / 6) * Math.PI * 2 + Math.PI / 6;
+            const x = cx + Math.cos(ang) * R;
+            const y = cy + Math.sin(ang) * R;
+            if (k === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.strokeStyle = 'rgba(90,60,12,0.35)';
+          ctx.stroke();
+          ctx.strokeStyle = 'rgba(255,235,160,0.30)';
+          ctx.beginPath();
+          ctx.arc(cx, cy, R * 0.45, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+      ctx.fillStyle = 'rgba(255,248,210,0.9)';
+      for (let i = 0; i < 6; i++) {
+        ctx.beginPath();
+        ctx.arc(10 + rnd() * 108, 10 + rnd() * 108, 1.5 + rnd() * 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
   }
   return c;
 }
@@ -155,9 +203,29 @@ function draw(terrain: Terrain): HTMLCanvasElement {
 export function terrainTexture(terrain: Terrain): THREE.Texture {
   const hit = cache.get(terrain);
   if (hit) return hit;
-  const tex = new THREE.CanvasTexture(draw(terrain));
+  const fallback = new THREE.CanvasTexture(draw(terrain));
+  fallback.colorSpace = THREE.SRGBColorSpace;
+  fallback.anisotropy = 4;
+
+  const tex = loader.load(
+    TERRAIN_TEXTURE_URL[terrain],
+    (loaded) => {
+      loaded.colorSpace = THREE.SRGBColorSpace;
+      loaded.anisotropy = 4;
+      loaded.wrapS = THREE.ClampToEdgeWrapping;
+      loaded.wrapT = THREE.ClampToEdgeWrapping;
+      loaded.needsUpdate = true;
+      window.dispatchEvent(new Event('eldorado:texture-loaded'));
+    },
+    undefined,
+    () => {
+      cache.set(terrain, fallback);
+    },
+  );
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
   cache.set(terrain, tex);
   return tex;
 }

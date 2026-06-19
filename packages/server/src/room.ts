@@ -44,19 +44,19 @@ export class Room {
   }
 
   addHuman(name: string, send: Send): Member {
-    if (this.members.length >= 4) throw new Error('Room is full');
-    if (this.phase !== 'lobby') throw new Error('Game already started');
-    const m: Member = { id: newId('h'), name: name || 'Player', color: this.nextColor(), isAI: false, send };
+    if (this.members.length >= 4) throw new Error('房间人数已满');
+    if (this.phase !== 'lobby') throw new Error('游戏已经开始');
+    const m: Member = { id: newId('h'), name: name || '玩家', color: this.nextColor(), isAI: false, send };
     this.members.push(m);
     if (!this.hostId) this.hostId = m.id;
     return m;
   }
 
   addAI(): Member {
-    if (this.members.length >= 4) throw new Error('Room is full');
-    if (this.phase !== 'lobby') throw new Error('Game already started');
+    if (this.members.length >= 4) throw new Error('房间人数已满');
+    if (this.phase !== 'lobby') throw new Error('游戏已经开始');
     const n = this.members.filter((m) => m.isAI).length + 1;
-    const m: Member = { id: newId('ai'), name: `AI ${n}`, color: this.nextColor(), isAI: true, send: null };
+    const m: Member = { id: newId('ai'), name: `电脑 ${n}`, color: this.nextColor(), isAI: true, send: null };
     this.members.push(m);
     return m;
   }
@@ -98,7 +98,7 @@ export class Room {
   }
 
   start(mapId = 'classic', seed = Date.now() & 0xffff): void {
-    if (this.members.length < 2) throw new Error('Need at least 2 players');
+    if (this.members.length < 2) throw new Error('至少需要 2 名玩家');
     this.mapId = mapId;
     const seeds: PlayerSeed[] = this.members.map((m) => ({
       id: m.id,
@@ -129,8 +129,8 @@ export class Room {
 
   /** Apply a human action, then auto-run any AI turns that follow. */
   handleAction(playerId: string, action: Action): { ok: boolean; error?: string } {
-    if (!this.game) return { ok: false, error: 'No game in progress' };
-    if (this.currentPlayerId() !== playerId) return { ok: false, error: 'Not your turn' };
+    if (!this.game) return { ok: false, error: '当前没有进行中的游戏' };
+    if (this.currentPlayerId() !== playerId) return { ok: false, error: '还没轮到你' };
 
     const res = applyAction(this.game, playerId, action);
     if (!res.result.ok) return { ok: false, error: res.result.error };
@@ -193,7 +193,7 @@ export class RoomManager {
       }
       if (!this.rooms.has(code)) return code;
     }
-    throw new Error('Could not allocate room code');
+    throw new Error('无法分配房间码');
   }
 
   create(): Room {

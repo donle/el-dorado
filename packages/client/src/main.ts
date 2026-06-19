@@ -17,12 +17,19 @@ import {
   type MoveSymbol,
   type Terrain,
   type Action,
+  type Blockade,
 } from '@eldorado/core';
 
 const SYMBOL_GLYPH: Record<string, string> = {
   machete: '🗡️',
   paddle: '🛶',
   coin: '🪙',
+  discard: '⛏',
+};
+const SYMBOL_LABEL: Record<MoveSymbol, string> = {
+  machete: '砍刀',
+  paddle: '船桨',
+  coin: '金币',
 };
 const KIND_GLYPH: Record<string, string> = {
   green: '🗡️',
@@ -39,6 +46,14 @@ function terrainSymbol(t: Terrain): MoveSymbol | null {
   return null;
 }
 
+function blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null {
+  return terrainSymbol(blockade.terrain) ?? blockade.symbol ?? null;
+}
+
+function blockadeRequiresDiscard(blockade: Blockade): boolean {
+  return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
+}
+
 /** Symbol a hex demands to enter (the El Dorado gate may require coin). */
 function requiredFor(hex: Hex): MoveSymbol | null {
   if (hex.terrain === 'finish') return hex.reqSymbol ?? null;
@@ -48,8 +63,13 @@ function requiredFor(hex: Hex): MoveSymbol | null {
 /** Power a single step onto this hex costs. */
 function stepCost(hex: Hex): number {
   if (hex.terrain === 'start') return 1;
+  if (hex.terrain === 'eldorado') return 1;
   if (hex.terrain === 'finish') return Math.max(hex.cost, 1);
   return hex.cost;
+}
+
+function sameCoord(a: Axial, b: Axial): boolean {
+  return a.q === b.q && a.r === b.r;
 }
 
 type Mode = 'idle' | 'buy' | 'clear' | 'discard';
@@ -68,6 +88,8 @@ class App {
   payment = new Set<string>();
   discardSet = new Set<string>();
   clearTarget: Axial | null = null;
+  clearBlockadeId: string | null = null;
+  viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
   hint = '';
   error = '';
   /** Which panel is open as a bottom sheet on mobile (null = none). */
@@ -77,18 +99,28 @@ class App {
   private hud = document.getElementById('hud') as HTMLDivElement;
   private lobby = document.getElementById('lobby') as HTMLDivElement;
   private preview = el('div', 'card-preview');
+  private terrainPanel = el('div', 'terrain-panel panel hidden');
   private handEls = new Map<string, HTMLElement>();
   private shopEls = new Map<string, HTMLElement>();
   private playerCardEls = new Map<string, HTMLElement>();
   private drawPileEl: HTMLElement | null = null;
   private discardPileEl: HTMLElement | null = null;
+  private hoveredTerrain: Axial | null = null;
+  private pinnedTerrain: Axial | null = null;
+  private hoveredBlockadeId: string | null = null;
+  private pinnedBlockadeId: string | null = null;
 
   constructor() {
     document.body.appendChild(this.preview);
+    document.body.appendChild(this.terrainPanel);
     this.board = new Board(document.getElementById('board') as HTMLCanvasElement);
     (window as unknown as { __board: Board }).__board = this.board;
     (window as unknown as { __app: App }).__app = this;
+    this.board.setViewMode(this.viewMode);
+    this.board.onHexHover = (c) => this.onHexHover(c);
     this.board.onHexClick = (c) => this.onHexClick(c);
+    this.board.onBlockadeHover = (id) => this.onBlockadeHover(id);
+    this.board.onBlockadeClick = (id) => this.onBlockadeClick(id);
     this.net.onMessage = (m) => this.onMessage(m);
     this.net.connect();
     this.renderLobby();
@@ -106,6 +138,7 @@ class App {
     switch (m.type) {
       case 'joined':
         this.you = m.playerId;
+        this.board.setSelfPlayerId(this.you);
         sessionStorage.setItem('eldorado.session', JSON.stringify({ code: m.code, playerId: m.playerId }));
         break;
       case 'room':
@@ -129,9 +162,11 @@ class App {
         this.state = m.state;
         this.resetSelection();
         this.lobby.classList.add('hidden');
+        this.board.setSelfPlayerId(this.you);
         this.board.render(m.state);
         this.renderHud();
         this.recomputeHighlights();
+        this.renderTerrainPanel();
         for (const e of buys) this.animateBuy(e.playerId, e.defId, sources.get(`${e.defId}|${e.playerId}`));
         break;
       }
@@ -164,6 +199,10 @@ class App {
     return this.state?.hexes.find((h) => h.q === c.q && h.r === c.r);
   }
 
+  private blockadeById(id: string | null): Blockade | undefined {
+    return id ? this.state?.blockades.find((b) => b.id === id) : undefined;
+  }
+
   private resetSelection(): void {
     this.selectedCardId = null;
     this.mode = 'idle';
@@ -171,7 +210,54 @@ class App {
     this.payment.clear();
     this.discardSet.clear();
     this.clearTarget = null;
+    this.clearBlockadeId = null;
     this.hint = '';
+  }
+
+  private blockadeBetween(from: Axial, to: Axial): Blockade | undefined {
+    return this.state?.blockades.find((blockade) => {
+      const edges = blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
+      return edges.some(
+        (edge) =>
+          (sameCoord(edge.a, from) && sameCoord(edge.b, to)) || (sameCoord(edge.b, from) && sameCoord(edge.a, to)),
+      );
+    });
+  }
+
+  private blockadeEdges(blockade: Blockade): Array<{ a: Axial; b: Axial }> {
+    return blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
+  }
+
+  private blockadeDestination(blockade: Blockade, symbol?: MoveSymbol, power?: number): Hex | undefined {
+    const me = this.me;
+    if (!me) return undefined;
+    for (const edge of this.blockadeEdges(blockade)) {
+      const to = sameCoord(edge.a, me.position) ? edge.b : sameCoord(edge.b, me.position) ? edge.a : null;
+      if (!to) continue;
+      const hex = this.hexAt(to);
+      if (!hex) continue;
+      if (symbol && power !== undefined && !this.canEnter(hex, symbol, power)) continue;
+      return hex;
+    }
+    return undefined;
+  }
+
+  private canUseBlockade(blockade: Blockade, symbol: MoveSymbol, power: number): boolean {
+    return !blockade.claimedBy && !blockadeRequiresDiscard(blockade) && !!this.blockadeDestination(blockade, symbol, power);
+  }
+
+  private canClearBlockade(blockade: Blockade): boolean {
+    return !blockade.claimedBy && blockadeRequiresDiscard(blockade) && !!this.blockadeDestination(blockade);
+  }
+
+  private movementRequirement(hex: Hex): { required: MoveSymbol | null; cost: number; blockade?: Blockade; discard?: boolean } {
+    const me = this.me;
+    const blockade = me ? this.blockadeBetween(me.position, hex) : undefined;
+    if (blockade && !blockade.claimedBy) {
+      const required = blockadeMoveSymbol(blockade);
+      return { required, cost: blockade.cost, blockade, discard: required === null };
+    }
+    return { required: requiredFor(hex), cost: stepCost(hex) };
   }
 
   /** Can a mover (symbol/power) enter this hex right now? */
@@ -179,16 +265,20 @@ class App {
     const me = this.me;
     if (!me || !isAdjacent(me.position, hex)) return false;
     if (hex.terrain === 'mountain') return false;
+    const current = this.hexAt(me.position);
+    if (hex.terrain === 'eldorado' && current?.terrain !== 'finish') return false;
     if (hex.occupant && hex.occupant !== me.id) return false;
     if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') return false;
-    const req = requiredFor(hex);
-    if (req !== null && req !== symbol) return false;
-    return power >= stepCost(hex);
+    const requirement = this.movementRequirement(hex);
+    if (requirement.discard) return false;
+    if (requirement.required !== null && requirement.required !== symbol) return false;
+    return power >= requirement.cost;
   }
 
   private recomputeHighlights(): void {
     if (!this.isMyTurn() || !this.me) {
       this.board.setHighlights([]);
+      this.board.setBlockadeHighlights([]);
       return;
     }
     const me = this.me;
@@ -196,17 +286,31 @@ class App {
       .map((c) => this.hexAt(c))
       .filter((h): h is Hex => !!h);
     const out: Axial[] = [];
+    const blockadeOut = new Set<string>();
     const mover = this.state!.turn?.activeMover;
+    const unclaimedBlockades = this.state!.blockades.filter((b) => !b.claimedBy);
 
     if (this.mode === 'clear' || this.mode === 'buy' || this.mode === 'discard') {
       // selection happens in the hand panel; no hex highlight
     } else if (mover && mover.remaining > 0) {
       for (const h of adj) if (this.canEnter(h, mover.symbol, mover.remaining)) out.push(h);
+      for (const blockade of unclaimedBlockades) {
+        if (this.canUseBlockade(blockade, mover.symbol, mover.remaining)) blockadeOut.add(blockade.id);
+        if (this.canClearBlockade(blockade)) blockadeOut.add(blockade.id);
+      }
     } else if (this.selectedCardId) {
       const def = getDef(cardDefId(this.selectedCardId, this.state!));
       const syms = movableSymbols(def.defId);
       for (const h of adj) {
         if (syms.some((s) => this.canEnter(h, s, def.power))) out.push(h);
+      }
+      for (const blockade of unclaimedBlockades) {
+        if (syms.some((s) => this.canUseBlockade(blockade, s, def.power))) blockadeOut.add(blockade.id);
+        if (this.canClearBlockade(blockade)) blockadeOut.add(blockade.id);
+      }
+    } else {
+      for (const blockade of unclaimedBlockades) {
+        if (this.canClearBlockade(blockade)) blockadeOut.add(blockade.id);
       }
     }
     // clearable neighbors are always actionable on your turn
@@ -214,20 +318,63 @@ class App {
       if ((h.terrain === 'rubble' || h.terrain === 'basecamp') && !h.occupant) out.push(h);
     }
     this.board.setHighlights(out);
+    this.board.setBlockadeHighlights([...blockadeOut]);
+  }
+
+  private startBlockadeClear(blockade: Blockade, dest: Hex): void {
+    this.mode = 'clear';
+    this.clearTarget = { q: dest.q, r: dest.r };
+    this.clearBlockadeId = blockade.id;
+    this.selectedCardId = null;
+    this.payment.clear();
+    this.hint = `选 ${blockade.cost} 张牌弃掉，打开这块碎石连接地形`;
+    this.renderHud();
+    this.recomputeHighlights();
   }
 
   // --- input ---
 
+  private onHexHover(c: Axial | null): void {
+    this.hoveredTerrain = c;
+    if (c) this.hoveredBlockadeId = null;
+    this.renderTerrainPanel();
+    if (!c && !this.pinnedTerrain && !this.pinnedBlockadeId) this.refreshPinnedPreview();
+  }
+
   private onHexClick(c: Axial): void {
+    if (this.pinnedTerrain && sameCoord(this.pinnedTerrain, c) && !this.pinnedBlockadeId) {
+      this.pinnedTerrain = null;
+      this.hoveredTerrain = null;
+      this.board.setInspectedHex(null);
+      this.board.clearHover();
+      this.renderTerrainPanel();
+      this.refreshPinnedPreview();
+      return;
+    }
+
+    this.pinnedTerrain = c;
+    this.pinnedBlockadeId = null;
+    this.board.setInspectedHex(c);
+    this.board.setInspectedBlockade(null);
+    this.renderTerrainPanel();
+
     if (!this.isMyTurn()) return;
+    if (this.mode === 'buy' || this.mode === 'clear' || this.mode === 'discard') return;
     const hex = this.hexAt(c);
     const me = this.me;
     if (!hex || !me || !isAdjacent(me.position, hex)) return;
+
+    const blockade = this.blockadeBetween(me.position, hex);
+    if (blockade && !blockade.claimedBy && blockadeRequiresDiscard(blockade)) {
+      this.startBlockadeClear(blockade, hex);
+      return;
+    }
 
     // 1) Clearable terrain → enter clear mode.
     if ((hex.terrain === 'rubble' || hex.terrain === 'basecamp') && !hex.occupant) {
       this.mode = 'clear';
       this.clearTarget = c;
+      this.clearBlockadeId = null;
       this.selectedCardId = null;
       this.payment.clear();
       this.hint = `选 ${hex.cost} 张牌${hex.terrain === 'basecamp' ? '（将被永久移除）' : ''}清除此格`;
@@ -245,7 +392,7 @@ class App {
     // 3) Play the selected card to move.
     if (this.selectedCardId) {
       const def = getDef(cardDefId(this.selectedCardId, this.state!));
-      const req = requiredFor(hex);
+      const req = this.movementRequirement(hex).required;
       const syms = movableSymbols(def.defId);
       const sym: MoveSymbol | undefined = req && syms.includes(req) ? req : syms[0];
       if (sym && this.canEnter(hex, sym, def.power)) {
@@ -254,6 +401,57 @@ class App {
         this.act({ type: 'PlayMovementCard', cardId, symbol: sym });
         this.act({ type: 'StepTo', to: c });
         return;
+      }
+    }
+  }
+
+  private onBlockadeHover(id: string | null): void {
+    this.hoveredBlockadeId = id;
+    if (id) this.hoveredTerrain = null;
+    this.renderTerrainPanel();
+    if (!id && !this.pinnedTerrain && !this.pinnedBlockadeId) this.refreshPinnedPreview();
+  }
+
+  private onBlockadeClick(id: string): void {
+    this.pinnedBlockadeId = id;
+    this.pinnedTerrain = null;
+    this.board.setInspectedBlockade(id);
+    this.board.setInspectedHex(null);
+    this.renderTerrainPanel();
+
+    if (!this.isMyTurn()) return;
+    if (this.mode === 'buy' || this.mode === 'clear' || this.mode === 'discard') return;
+    const blockade = this.blockadeById(id);
+    if (!blockade || blockade.claimedBy) return;
+
+    if (blockadeRequiresDiscard(blockade)) {
+      const dest = this.blockadeDestination(blockade);
+      if (dest) this.startBlockadeClear(blockade, dest);
+      return;
+    }
+
+    const mover = this.state!.turn?.activeMover;
+    if (mover && mover.remaining > 0) {
+      const dest = this.blockadeDestination(blockade, mover.symbol, mover.remaining);
+      if (dest) {
+        this.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
+        return;
+      }
+    }
+
+    if (this.selectedCardId) {
+      const def = getDef(cardDefId(this.selectedCardId, this.state!));
+      const syms = movableSymbols(def.defId);
+      const required = blockadeMoveSymbol(blockade);
+      const preferred = required && syms.includes(required) ? required : syms[0];
+      const sym = preferred && this.canUseBlockade(blockade, preferred, def.power) ? preferred : syms.find((s) => this.canUseBlockade(blockade, s, def.power));
+      if (sym) {
+        const dest = this.blockadeDestination(blockade, sym, def.power);
+        if (!dest) return;
+        const cardId = this.selectedCardId;
+        this.selectedCardId = null;
+        this.act({ type: 'PlayMovementCard', cardId, symbol: sym });
+        this.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
       }
     }
   }
@@ -269,7 +467,9 @@ class App {
     if (this.mode === 'clear' && this.clearTarget) {
       if (this.payment.has(cardId)) this.payment.delete(cardId);
       else this.payment.add(cardId);
-      const cost = this.hexAt(this.clearTarget)?.cost ?? 0;
+      const cost = this.clearBlockadeId
+        ? this.blockadeById(this.clearBlockadeId)?.cost ?? 0
+        : this.hexAt(this.clearTarget)?.cost ?? 0;
       if (this.payment.size === cost) {
         this.act({ type: 'ClearSpace', to: this.clearTarget, cardIds: [...this.payment] });
         return;
@@ -321,6 +521,13 @@ class App {
 
   private closeMobilePanel(): void {
     this.mobilePanel = null;
+    this.renderHud();
+  }
+
+  private toggleViewMode(): void {
+    this.viewMode = this.viewMode === '3d' ? '2d' : '3d';
+    localStorage.setItem('eldorado.viewMode', this.viewMode);
+    this.board.setViewMode(this.viewMode);
     this.renderHud();
   }
 
@@ -469,6 +676,7 @@ class App {
   private renderLobby(): void {
     const inLobby = !this.state || this.state.phase !== 'playing';
     this.lobby.classList.toggle('hidden', !inLobby && !!this.state);
+    this.renderTerrainPanel();
     if (this.room && this.room.phase !== 'lobby') {
       this.lobby.classList.add('hidden');
       return;
@@ -481,11 +689,11 @@ class App {
     if (!this.room) {
       modal.innerHTML = `
         <h1>冲向黄金城</h1>
-        <p class="sub">The Quest for El Dorado · 联机版</p>
+        <p class="sub">桌游改编 · 联机版</p>
         <label>你的名字</label>
         <input id="name" value="${escapeHtml(this.nameValue)}" placeholder="玩家名" />
         <label>房间码（加入已有房间）</label>
-        <input id="code" placeholder="如 ABCD" maxlength="4" style="text-transform:uppercase" />
+        <input id="code" placeholder="请输入 4 位房间码" maxlength="4" style="text-transform:uppercase" />
         <div class="row">
           <button id="create">创建房间</button>
           <button id="join" class="secondary">加入房间</button>
@@ -506,16 +714,16 @@ class App {
         .map(
           (p) =>
             `<div class="player-chip"><span class="dot" style="background:${colorHex(p.color)}"></span>${escapeHtml(
-              p.name,
+              playerDisplayName(p),
             )}${p.isAI ? ' 🤖' : ''}${p.id === this.room!.hostId ? ' 👑' : ''}</div>`,
         )
         .join('');
       modal.innerHTML = `
         <h1>房间 <span style="color:#ffd166;letter-spacing:3px">${this.room.code}</span></h1>
-        <p class="sub">把房间码发给朋友，或加入 AI 凑人数（2–4 人）</p>
+        <p class="sub">把房间码发给朋友，或加入电脑玩家凑人数（2–4 人）</p>
         <div class="lobby-players">${players}</div>
         <div class="row">
-          ${isHost ? '<button id="ai" class="secondary">+ 添加 AI</button>' : ''}
+          ${isHost ? '<button id="ai" class="secondary">+ 添加电脑</button>' : ''}
           ${isHost ? `<button id="start" ${this.room.players.length < 2 ? 'disabled' : ''}>开始游戏</button>` : '<div class="sub">等待房主开始…</div>'}
         </div>
         <div class="error">${escapeHtml(this.error)}</div>`;
@@ -535,7 +743,9 @@ class App {
     const s = this.state;
     if (!s) return 0;
     if (p.finished) return 1;
-    const finishes = s.hexes.filter((h) => h.terrain === 'finish');
+    const finishes = s.hexes.some((h) => h.terrain === 'eldorado')
+      ? s.hexes.filter((h) => h.terrain === 'eldorado')
+      : s.hexes.filter((h) => h.terrain === 'finish');
     const starts = s.hexes.filter((h) => h.terrain === 'start');
     if (!finishes.length) return 0;
     const toFinish = (pos: Axial) => Math.min(...finishes.map((f) => distance(pos, f)));
@@ -551,8 +761,10 @@ class App {
     }
     const s = this.state;
     const myTurn = this.isMyTurn();
-    const turnName = s.players.find((p) => p.id === s.turn?.playerId)?.name ?? '';
-    const winnerName = s.winnerId ? s.players.find((p) => p.id === s.winnerId)?.name : null;
+    const turnPlayer = s.players.find((p) => p.id === s.turn?.playerId);
+    const winnerPlayer = s.winnerId ? s.players.find((p) => p.id === s.winnerId) : null;
+    const turnName = turnPlayer ? playerDisplayName(turnPlayer) : '';
+    const winnerName = winnerPlayer ? playerDisplayName(winnerPlayer) : null;
     this.hud.innerHTML = '';
     this.handEls.clear();
     this.shopEls.clear();
@@ -565,7 +777,11 @@ class App {
     top.innerHTML = `
       <div class="brand"><span class="logo">🏆</span><span>冲向黄金城</span><span class="code">${escapeHtml(this.room?.code ?? '')}</span></div>
       ${banner}
-      <div class="hint-inline">滚轮缩放 · 拖拽平移 · 右键转视角</div>`;
+      <div class="hint-inline">${this.viewMode === '2d' ? '2D 俯视 · 拖拽平移 · 滚轮缩放' : '滚轮缩放 · 拖拽平移 · 右键转视角'}</div>`;
+    const viewBtn = button(this.viewMode === '3d' ? '2D 视图' : '3D 视图', () => this.toggleViewMode(), true);
+    viewBtn.className = `view-toggle ${this.viewMode === '2d' ? 'active' : ''}`;
+    viewBtn.title = this.viewMode === '3d' ? '切换到锁定俯视 2D 视图' : '切换回可旋转 3D 视图';
+    top.appendChild(viewBtn);
     this.hud.appendChild(top);
 
     // --- mobile toolbar (market sheet toggle) ---
@@ -585,15 +801,15 @@ class App {
       const active = p.id === s.turn?.playerId;
       const card = el('div', `pcard ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}`);
       card.style.setProperty('--pc', colorHex(p.color));
-      const tags = `${p.isAI ? '<span class="ptag">AI</span>' : ''}${p.id === this.you ? '<span class="ptag you">你</span>' : ''}`;
+      const tags = `${p.isAI ? '<span class="ptag">电脑</span>' : ''}${p.id === this.you ? '<span class="ptag you">你</span>' : ''}`;
       card.innerHTML = `
         <div class="pc-top">
           <span class="pc-dot"></span>
-          <span class="pc-name">${escapeHtml(p.name)}</span>
+          <span class="pc-name">${escapeHtml(playerDisplayName(p))}</span>
           ${tags}
           <span class="pc-flag">${p.finished ? '🏆' : active ? '▶' : ''}</span>
         </div>
-        <div class="pc-counts"><span>🂠 ${p.deck.length + p.hand.length}</span><span>♻ ${p.discard.length}</span></div>
+        <div class="pc-counts"><span>牌库 ${p.deck.length + p.hand.length}</span><span>弃牌 ${p.discard.length}</span><span>阻挡物 ${p.blockades}</span></div>
         <div class="pc-progress"><span style="width:${Math.round(this.progressOf(p) * 100)}%"></span></div>`;
       pcards.appendChild(card);
       this.playerCardEls.set(p.id, card);
@@ -719,6 +935,170 @@ class App {
       t.textContent = this.error;
       this.hud.appendChild(t);
     }
+    this.renderTerrainPanel();
+  }
+
+  private closeTerrainPanel(): void {
+    this.pinnedTerrain = null;
+    this.hoveredTerrain = null;
+    this.pinnedBlockadeId = null;
+    this.hoveredBlockadeId = null;
+    this.board.setInspectedHex(null);
+    this.board.setInspectedBlockade(null);
+    this.renderTerrainPanel();
+    this.refreshPinnedPreview();
+  }
+
+  private renderTerrainPanel(): void {
+    if (this.pinnedTerrain && !this.hexAt(this.pinnedTerrain)) this.pinnedTerrain = null;
+    if (this.hoveredTerrain && !this.hexAt(this.hoveredTerrain)) this.hoveredTerrain = null;
+    if (this.pinnedBlockadeId && !this.blockadeById(this.pinnedBlockadeId)) {
+      this.pinnedBlockadeId = null;
+      this.board.setInspectedBlockade(null);
+    }
+    if (this.hoveredBlockadeId && !this.blockadeById(this.hoveredBlockadeId)) this.hoveredBlockadeId = null;
+
+    const activeBlockade = this.blockadeById(this.hoveredBlockadeId ?? this.pinnedBlockadeId);
+    const activeCoord = activeBlockade ? null : this.hoveredTerrain ?? this.pinnedTerrain;
+    const hex = activeCoord ? this.hexAt(activeCoord) : undefined;
+    if (!this.state || this.state.phase === 'lobby' || (!hex && !activeBlockade)) {
+      this.terrainPanel.classList.add('hidden');
+      this.terrainPanel.innerHTML = '';
+      if (!hex) this.board.setInspectedHex(null);
+      if (!activeBlockade) this.board.setInspectedBlockade(null);
+      return;
+    }
+
+    this.hidePreview();
+    if (activeBlockade) {
+      const terrain = blockadeTerrain(activeBlockade);
+      const info = blockadeInfo(activeBlockade);
+      const pinned = !!this.pinnedBlockadeId && !this.hoveredBlockadeId;
+      const owner = activeBlockade.claimedBy ? this.state.players.find((p) => p.id === activeBlockade.claimedBy) : null;
+      const ownerText = owner ? `归属：${playerDisplayName(owner)}` : '尚未被领取';
+      const edgeCount = this.blockadeEdges(activeBlockade).length;
+      this.terrainPanel.classList.remove('hidden');
+      this.terrainPanel.classList.toggle('pinned', pinned);
+      this.terrainPanel.innerHTML = `
+        <div class="terrain-head">
+          <div class="terrain-icon terrain-${terrain}">${info.icon}</div>
+          <div class="terrain-title-wrap">
+            <div class="terrain-kicker">${pinned ? '点击固定' : '悬浮查看'}</div>
+            <div class="terrain-title">${escapeHtml(info.name)}</div>
+          </div>
+          <button class="terrain-close" aria-label="关闭地形说明">×</button>
+        </div>
+        <div class="terrain-desc">${escapeHtml(info.description)}</div>
+        <div class="terrain-rule"><b>规则</b><span>${escapeHtml(info.rule)}</span></div>
+        <div class="terrain-meta">
+          <span>${escapeHtml(blockadeCostText(activeBlockade))}</span>
+          <span>${escapeHtml(ownerText)}</span>
+          <span>连接 ${edgeCount} 条边</span>
+        </div>
+        <div class="terrain-status">${escapeHtml(this.blockadeActionStatus(activeBlockade))}</div>`;
+      this.terrainPanel.querySelector<HTMLButtonElement>('.terrain-close')!.onclick = () => this.closeTerrainPanel();
+      return;
+    }
+    if (!hex) return;
+
+    const info = terrainInfo(hex);
+    const pinned = !!this.pinnedTerrain && !this.hoveredTerrain;
+    const occupant = hex.occupant ? this.state.players.find((p) => p.id === hex.occupant) : null;
+    const occupantText = occupant ? `占据：${playerDisplayName(occupant)}` : '未被占据';
+    const status = this.terrainActionStatus(hex);
+    this.terrainPanel.classList.remove('hidden');
+    this.terrainPanel.classList.toggle('pinned', pinned);
+    this.terrainPanel.innerHTML = `
+      <div class="terrain-head">
+        <div class="terrain-icon terrain-${hex.terrain}">${info.icon}</div>
+        <div class="terrain-title-wrap">
+          <div class="terrain-kicker">${pinned ? '点击固定' : '悬浮查看'}</div>
+          <div class="terrain-title">${escapeHtml(info.name)}</div>
+        </div>
+        <button class="terrain-close" aria-label="关闭地形说明">×</button>
+      </div>
+      <div class="terrain-desc">${escapeHtml(info.description)}</div>
+      <div class="terrain-rule"><b>规则</b><span>${escapeHtml(info.rule)}</span></div>
+      <div class="terrain-meta">
+        <span>${escapeHtml(terrainCostText(hex))}</span>
+        <span>${escapeHtml(occupantText)}</span>
+        <span>坐标 ${hex.q}, ${hex.r}</span>
+      </div>
+      <div class="terrain-status">${escapeHtml(status)}</div>`;
+    this.terrainPanel.querySelector<HTMLButtonElement>('.terrain-close')!.onclick = () => this.closeTerrainPanel();
+  }
+
+  private blockadeActionStatus(blockade: Blockade): string {
+    if (!this.isMyTurn()) return '当前不是你的回合，可以查看说明，但不能执行地形行动。';
+    if (this.mode === 'buy') return '你正在购买卡牌，点击连接地形只会固定说明。取消购买后才能移动。';
+    if (this.mode === 'clear') return '你正在清除地形，点击手牌支付费用。点击连接地形只会固定说明。';
+    if (this.mode === 'discard') return '你正在弃牌，点击连接地形只会固定说明。';
+    if (blockade.claimedBy) return '这块连接地形已经被领取，不再作为可领取阻挡物。';
+    if (!this.blockadeDestination(blockade)) return '当前棋子不在这块连接地形覆盖的边旁边，暂时不能行动。';
+
+    const requirementText = `连接地形需要 ${blockadeCostText(blockade)}；第一个通过的玩家会领取它，玩家信息中的阻挡物数量会增加。`;
+    if (blockadeRequiresDiscard(blockade)) {
+      return `${requirementText} 点击这块地形会进入清除模式，选择 ${blockade.cost} 张手牌弃掉后通过。`;
+    }
+    const mover = this.state!.turn?.activeMover;
+    if (mover) {
+      const dest = this.blockadeDestination(blockade, mover.symbol, mover.remaining);
+      return dest
+        ? `${requirementText} 当前移动力可以通过，点击这块地形会跨到另一侧。`
+        : `${requirementText} 当前正在使用的移动力不能通过这里。`;
+    }
+
+    if (this.selectedCardId) {
+      const def = getDef(cardDefId(this.selectedCardId, this.state!));
+      const syms = movableSymbols(def.defId);
+      const usable = syms.some((s) => this.canUseBlockade(blockade, s, def.power));
+      return usable
+        ? `${requirementText} 已选「${def.name}」，点击这块地形会打出这张牌并通过。`
+        : `${requirementText} 已选「${def.name}」，但它不能通过这里。`;
+    }
+
+    return `${requirementText} 选择匹配的移动牌后，可以点击这块连接地形通过。`;
+  }
+
+  private terrainActionStatus(hex: Hex): string {
+    if (!this.isMyTurn()) return '当前不是你的回合，可以查看说明，但不能执行地形行动。';
+    const me = this.me;
+    if (!me) return '没有找到你的棋子。';
+    if (this.mode === 'buy') return '你正在购买卡牌，点击地形只会固定说明。取消购买后才能移动。';
+    if (this.mode === 'clear') return '你正在清除地形，点击手牌支付费用。点击地形只会固定说明。';
+    if (this.mode === 'discard') return '你正在弃牌，点击地形只会固定说明。';
+    if (hex.terrain === 'mountain') return '山地不可进入，只能绕行。';
+    if (!isAdjacent(me.position, hex)) return '此格不与当前棋子相邻，暂时不能行动。';
+    const current = this.hexAt(me.position);
+    if (hex.terrain === 'eldorado' && current?.terrain !== 'finish') return '必须先进入相邻的黄金城入口，才能进入黄金城。';
+    if (hex.occupant && hex.occupant !== me.id) return '此格已有其他玩家，当前不能进入。';
+    if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') {
+      return `点击可进入清除模式，需要选择 ${hex.cost} 张手牌${hex.terrain === 'basecamp' ? '并永久移出游戏' : '弃掉'}。`;
+    }
+
+    const requirement = this.movementRequirement(hex);
+    const requirementText = requirement.blockade && requirement.discard
+      ? `边界碎石路障需要弃 ${requirement.cost} 张手牌；成功通过后会收入你的玩家信息。`
+      : requirement.blockade && requirement.required
+      ? `边界阻挡物需要 ${SYMBOL_GLYPH[requirement.required]}${SYMBOL_LABEL[requirement.required]} ${requirement.cost} 点；成功通过后会收入你的玩家信息。`
+      : `此格需要 ${terrainCostText(hex)}。`;
+    const mover = this.state!.turn?.activeMover;
+    if (mover) {
+      return this.canEnter(hex, mover.symbol, mover.remaining)
+        ? `${requirementText} 当前移动力可以进入，进入后剩余 ${Math.max(0, mover.remaining - requirement.cost)} 点。`
+        : `${requirementText} 当前正在使用的移动力不能进入此处。`;
+    }
+
+    if (this.selectedCardId) {
+      const def = getDef(cardDefId(this.selectedCardId, this.state!));
+      const syms = movableSymbols(def.defId);
+      const usable = syms.some((s) => this.canEnter(hex, s, def.power));
+      return usable
+        ? `${requirementText} 已选「${def.name}」，点击此格会打出这张牌并移动。`
+        : `${requirementText} 已选「${def.name}」，但它不能进入此处。`;
+    }
+
+    return `${requirementText} 选择匹配的移动牌后，点击相邻格即可移动。`;
   }
 }
 
@@ -741,6 +1121,113 @@ const KIND_LABEL: Record<string, string> = {
   joker: '万能牌',
   action: '行动牌',
 };
+
+type TerrainInfo = { name: string; icon: string; description: string; rule: string };
+
+const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
+  green: {
+    name: '丛林',
+    icon: '🗡️',
+    description: '潮湿密集的雨林区域，队伍需要砍开藤蔓和灌木才能前进。',
+    rule: '进入此格需要砍刀移动力，消耗等于格子上的数字。',
+  },
+  blue: {
+    name: '河流',
+    icon: '🛶',
+    description: '河道与浅滩交错的水域，必须依靠船桨和水路经验通过。',
+    rule: '进入此格需要船桨移动力，消耗等于格子上的数字。',
+  },
+  yellow: {
+    name: '村庄',
+    icon: '🪙',
+    description: '村落、道路和交易点组成的陆路区域，金币可以换来向导和补给。',
+    rule: '进入此格需要金币移动力，消耗等于格子上的数字。',
+  },
+  rubble: {
+    name: '碎石障碍',
+    icon: '⛏',
+    description: '坍塌的石堆挡住去路，需要丢弃补给和工具来清出通道。',
+    rule: '点击相邻碎石格后，选择指定数量的手牌弃掉，然后棋子进入该格。',
+  },
+  basecamp: {
+    name: '营地障碍',
+    icon: '⛺',
+    description: '临时营地占住路线，穿过这里会消耗并淘汰一部分随身装备。',
+    rule: '点击相邻营地格后，选择指定数量的手牌永久移出游戏，然后棋子进入该格。',
+  },
+  mountain: {
+    name: '山地',
+    icon: '⛰',
+    description: '陡峭岩脊和高地阻隔路线，是地图上的天然屏障。',
+    rule: '山地不可进入，也不能被清除，只能绕行。',
+  },
+  start: {
+    name: '起点营地',
+    icon: '🚩',
+    description: '探险队出发的位置，也是路线回环时可以经过的普通格。',
+    rule: '进入起点格消耗 1 点任意移动力。',
+  },
+  finish: {
+    name: '黄金城入口',
+    icon: '🏆',
+    description: '通向黄金城的最后入口。先进入入口，再从入口踏上黄金城主体，才算抵达终点。',
+    rule: '进入入口需要满足格子的移动符号和消耗。',
+  },
+  eldorado: {
+    name: '黄金城',
+    icon: '🏛',
+    description: '传说中的黄金城主体区域。探险队必须从任一黄金城入口踏上这里才算完成旅程。',
+    rule: '只能从相邻的黄金城入口进入，消耗 1 点任意移动力。进入后触发最终结算阶段。',
+  },
+};
+
+function terrainInfo(hex: Hex): TerrainInfo {
+  if (hex.terrain !== 'finish') return TERRAIN_INFO[hex.terrain];
+  const symbol = hex.reqSymbol ? `${SYMBOL_GLYPH[hex.reqSymbol]}${SYMBOL_LABEL[hex.reqSymbol]}` : '任意移动力';
+  return {
+    ...TERRAIN_INFO.finish,
+    rule: `进入入口需要 ${symbol}，消耗 ${Math.max(hex.cost, 1)} 点。入口本身不是终点，还需要再进入黄金城。`,
+  };
+}
+
+function blockadeTerrain(blockade: Blockade): Terrain {
+  if (blockade.terrain) return blockade.terrain;
+  if (blockade.symbol === 'machete') return 'green';
+  if (blockade.symbol === 'paddle') return 'blue';
+  if (blockade.symbol === 'coin') return 'yellow';
+  return 'yellow';
+}
+
+function blockadeInfo(blockade: Blockade): TerrainInfo {
+  const terrain = blockadeTerrain(blockade);
+  const base = TERRAIN_INFO[terrain];
+  return {
+    name: `${base.name}连接地形`,
+    icon: base.icon,
+    description: `连接两个大陆板块边缘的 Z 字形地形，地貌为${base.name}。它不是装饰物，而是可以被选择并穿越的路线。`,
+    rule: `从这块地形覆盖的任一边跨到另一侧时，需要 ${blockadeCostText(blockade)}。第一位通过的玩家会领取这块连接地形，后续结算会记录在玩家信息中。`,
+  };
+}
+
+function terrainCostText(hex: Hex): string {
+  if (hex.terrain === 'mountain') return '不可进入';
+  if (hex.terrain === 'eldorado') return '任意移动力 1 点';
+  if (hex.terrain === 'rubble') return `清除费用 ${hex.cost} 张手牌`;
+  if (hex.terrain === 'basecamp') return `移除费用 ${hex.cost} 张手牌`;
+  if (hex.terrain === 'start') return '进入消耗 1 点任意移动力';
+  if (hex.terrain === 'finish') {
+    const symbol = hex.reqSymbol ? `${SYMBOL_GLYPH[hex.reqSymbol]} ${SYMBOL_LABEL[hex.reqSymbol]}` : '任意移动力';
+    return `${symbol} ${Math.max(hex.cost, 1)} 点`;
+  }
+  const symbol = terrainSymbol(hex.terrain);
+  return symbol ? `${SYMBOL_GLYPH[symbol]} ${SYMBOL_LABEL[symbol]} ${hex.cost} 点` : `消耗 ${hex.cost}`;
+}
+
+function blockadeCostText(blockade: Blockade): string {
+  const symbol = blockadeMoveSymbol(blockade);
+  if (!symbol) return `${SYMBOL_GLYPH.discard} 弃 ${blockade.cost} 张手牌`;
+  return `${SYMBOL_GLYPH[symbol]} ${SYMBOL_LABEL[symbol]} ${blockade.cost} 点`;
+}
 
 function cardDescription(defId: string): string {
   const def = getDef(defId);
@@ -785,24 +1272,9 @@ function previewHtml(defId: string): string {
     <div class="cp-foot">${cost}${power}</div>`;
 }
 
-/** Original procedural card-back art for the deck/discard piles. */
+/** Generated card-back artwork for the deck/discard piles. */
 function cardBack(): string {
-  return `<svg viewBox="0 0 60 84" width="100%" height="100%" preserveAspectRatio="none">
-    <defs><linearGradient id="cb" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#21386180"/><stop offset="0" stop-color="#213861"/>
-      <stop offset="1" stop-color="#0d1a33"/></linearGradient></defs>
-    <rect x="1.5" y="1.5" width="57" height="81" rx="7" fill="url(#cb)" stroke="#c8a24c" stroke-width="1.5"/>
-    <rect x="5" y="5" width="50" height="74" rx="4.5" fill="none" stroke="#c8a24c" stroke-opacity="0.45"/>
-    <g transform="translate(30 42)">
-      <circle r="13" fill="none" stroke="#e7c264" stroke-opacity="0.45" stroke-width="1.2"/>
-      <path d="M0 -15 L3.4 -3.4 15 0 3.4 3.4 0 15 -3.4 3.4 -15 0 -3.4 -3.4 Z" fill="#e7c264" fill-opacity="0.9"/>
-      <circle r="3" fill="#0d1a33" stroke="#e7c264" stroke-width="1.1"/>
-    </g>
-    <g fill="#c8a24c" fill-opacity="0.7">
-      <circle cx="10" cy="10" r="1.4"/><circle cx="50" cy="10" r="1.4"/>
-      <circle cx="10" cy="74" r="1.4"/><circle cx="50" cy="74" r="1.4"/>
-    </g>
-  </svg>`;
+  return '<img src="/cards/card-back.jpg" alt="卡背" draggable="false" />';
 }
 
 function el(tag: string, className = ''): HTMLDivElement {
@@ -821,6 +1293,12 @@ function button(label: string, onClick: () => void, secondary = false): HTMLButt
 
 function colorHex(c: string): string {
   return { red: '#e05656', blue: '#4c9bef', green: '#5ed17a', yellow: '#f0d24c' }[c] ?? '#aaa';
+}
+
+function playerDisplayName(p: { name: string; isAI?: boolean }): string {
+  if (!p.isAI) return p.name;
+  const aiName = p.name.match(/^AI\s*(\d+)$/i);
+  return aiName ? `电脑 ${aiName[1]}` : p.name;
 }
 
 function escapeHtml(s: string): string {

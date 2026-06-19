@@ -23,6 +23,7 @@ export type GameEvent =
   | { type: 'bought'; playerId: string; defId: string }
   | { type: 'ability'; playerId: string; cardId: string }
   | { type: 'drew'; playerId: string; count: number }
+  | { type: 'blockadeClaimed'; playerId: string; blockadeId: string }
   | { type: 'reachedEldorado'; playerId: string }
   | { type: 'turnStarted'; playerId: string }
   | { type: 'gameOver'; winnerId: string | null };

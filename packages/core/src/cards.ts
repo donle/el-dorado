@@ -9,37 +9,37 @@ import type { CardDef, Card, MoveSymbol } from './types.js';
 
 export const CARD_DEFS: Record<string, CardDef> = {
   // --- Starting deck (not sold) ---
-  explorer: { defId: 'explorer', name: 'Explorer', kind: 'green', symbol: 'machete', power: 1, cost: 0, starting: true },
-  traveller: { defId: 'traveller', name: 'Traveller', kind: 'yellow', symbol: 'coin', power: 1, cost: 0, starting: true },
-  sailor: { defId: 'sailor', name: 'Sailor', kind: 'blue', symbol: 'paddle', power: 1, cost: 0, starting: true },
+  explorer: { defId: 'explorer', name: '探险家', kind: 'green', symbol: 'machete', power: 1, cost: 0, starting: true },
+  traveller: { defId: 'traveller', name: '旅行者', kind: 'yellow', symbol: 'coin', power: 1, cost: 0, starting: true },
+  sailor: { defId: 'sailor', name: '水手', kind: 'blue', symbol: 'paddle', power: 1, cost: 0, starting: true },
 
   // --- Green / machete ---
-  scout: { defId: 'scout', name: 'Scout', kind: 'green', symbol: 'machete', power: 2, cost: 1 },
-  trailblazer: { defId: 'trailblazer', name: 'Trailblazer', kind: 'green', symbol: 'machete', power: 3, cost: 3 },
-  pioneer: { defId: 'pioneer', name: 'Pioneer', kind: 'green', symbol: 'machete', power: 5, cost: 5 },
-  giant_machete: { defId: 'giant_machete', name: 'Giant Machete', kind: 'green', symbol: 'machete', power: 5, cost: 4, singleUse: true }, // TODO: verify cost
+  scout: { defId: 'scout', name: '侦察员', kind: 'green', symbol: 'machete', power: 2, cost: 1 },
+  trailblazer: { defId: 'trailblazer', name: '开路先锋', kind: 'green', symbol: 'machete', power: 3, cost: 3 },
+  pioneer: { defId: 'pioneer', name: '先驱者', kind: 'green', symbol: 'machete', power: 5, cost: 5 },
+  giant_machete: { defId: 'giant_machete', name: '巨型砍刀', kind: 'green', symbol: 'machete', power: 5, cost: 4, singleUse: true }, // TODO: verify cost
 
   // --- Blue / paddle ---
-  captain: { defId: 'captain', name: 'Captain', kind: 'blue', symbol: 'paddle', power: 3, cost: 2 },
+  captain: { defId: 'captain', name: '船长', kind: 'blue', symbol: 'paddle', power: 3, cost: 2 },
 
   // --- Yellow / coin ---
-  photographer: { defId: 'photographer', name: 'Photographer', kind: 'yellow', symbol: 'coin', power: 2, cost: 2 },
-  journalist: { defId: 'journalist', name: 'Journalist', kind: 'yellow', symbol: 'coin', power: 3, cost: 3 },
-  treasure_chest: { defId: 'treasure_chest', name: 'Treasure Chest', kind: 'yellow', symbol: 'coin', power: 4, cost: 3, singleUse: true }, // TODO: verify cost
-  millionaire: { defId: 'millionaire', name: 'Millionaire', kind: 'yellow', symbol: 'coin', power: 4, cost: 5 },
+  photographer: { defId: 'photographer', name: '摄影师', kind: 'yellow', symbol: 'coin', power: 2, cost: 2 },
+  journalist: { defId: 'journalist', name: '记者', kind: 'yellow', symbol: 'coin', power: 3, cost: 3 },
+  treasure_chest: { defId: 'treasure_chest', name: '宝箱', kind: 'yellow', symbol: 'coin', power: 4, cost: 3, singleUse: true }, // TODO: verify cost
+  millionaire: { defId: 'millionaire', name: '百万富翁', kind: 'yellow', symbol: 'coin', power: 4, cost: 5 },
 
   // --- White / joker (pick one symbol when played) ---
-  jack: { defId: 'jack', name: 'Jack of all Trades', kind: 'joker', power: 1, cost: 1 },
-  adventurer: { defId: 'adventurer', name: 'Adventurer', kind: 'joker', power: 2, cost: 3 }, // TODO: verify cost
-  prop_plane: { defId: 'prop_plane', name: 'Prop Plane', kind: 'joker', power: 4, cost: 4, singleUse: true }, // TODO: verify cost
+  jack: { defId: 'jack', name: '万事通', kind: 'joker', power: 1, cost: 1 },
+  adventurer: { defId: 'adventurer', name: '冒险家', kind: 'joker', power: 2, cost: 3 }, // TODO: verify cost
+  prop_plane: { defId: 'prop_plane', name: '螺旋桨飞机', kind: 'joker', power: 4, cost: 4, singleUse: true }, // TODO: verify cost
 
   // --- Purple / action ---
-  cartographer: { defId: 'cartographer', name: 'Cartographer', kind: 'action', power: 0, cost: 3, ability: 'draw2' }, // TODO: verify cost
-  scientist: { defId: 'scientist', name: 'Scientist', kind: 'action', power: 0, cost: 3, ability: 'draw1_remove1' }, // TODO: verify cost
-  compass: { defId: 'compass', name: 'Compass', kind: 'action', power: 0, cost: 2, ability: 'draw3', singleUse: true },
-  travel_log: { defId: 'travel_log', name: 'Travel Log', kind: 'action', power: 0, cost: 2, ability: 'draw2_remove2', singleUse: true }, // TODO: verify cost
-  transmitter: { defId: 'transmitter', name: 'Transmitter', kind: 'action', power: 0, cost: 4, ability: 'take_free', singleUse: true },
-  native: { defId: 'native', name: 'Native', kind: 'action', power: 0, cost: 5, ability: 'native' },
+  cartographer: { defId: 'cartographer', name: '制图师', kind: 'action', power: 0, cost: 3, ability: 'draw2' }, // TODO: verify cost
+  scientist: { defId: 'scientist', name: '科学家', kind: 'action', power: 0, cost: 3, ability: 'draw1_remove1' }, // TODO: verify cost
+  compass: { defId: 'compass', name: '指南针', kind: 'action', power: 0, cost: 2, ability: 'draw3', singleUse: true },
+  travel_log: { defId: 'travel_log', name: '旅行日志', kind: 'action', power: 0, cost: 2, ability: 'draw2_remove2', singleUse: true }, // TODO: verify cost
+  transmitter: { defId: 'transmitter', name: '发报机', kind: 'action', power: 0, cost: 4, ability: 'take_free', singleUse: true },
+  native: { defId: 'native', name: '原住民向导', kind: 'action', power: 0, cost: 5, ability: 'native' },
 };
 
 /** The 18 buyable market types. */
@@ -71,7 +71,7 @@ export const HAND_SIZE = 4;
 
 export function getDef(defId: string): CardDef {
   const def = CARD_DEFS[defId];
-  if (!def) throw new Error(`Unknown card def: ${defId}`);
+  if (!def) throw new Error(`未知卡牌定义：${defId}`);
   return def;
 }
 

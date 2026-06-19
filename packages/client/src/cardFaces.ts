@@ -120,7 +120,7 @@ export function cardFace(defOrId: CardDef | string): string {
 
   return `<svg class="card-face-svg" viewBox="0 0 180 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${escapeSvg(
     def.name,
-  )} card">
+  )}卡牌">
     <defs>
       <clipPath id="${id}-clip">
         <rect x="4" y="4" width="172" height="242" rx="14"/>

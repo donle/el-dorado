@@ -48,10 +48,10 @@ export function parseGrid(id: string, name: string, lanes: string[]): GameMap {
         hexes.push({ ...coord, terrain: 'mountain', cost: 0 });
       } else {
         const terrain = TERRAIN_BY_LETTER[first];
-        if (!terrain) throw new Error(`Unknown map token: ${tok}`);
+        if (!terrain) throw new Error(`未知地图标记：${tok}`);
         const cost = Number(tok.slice(1));
         if (!Number.isInteger(cost) || cost < 1 || cost > 4) {
-          throw new Error(`Bad cost in token: ${tok}`);
+          throw new Error(`地图标记消耗值错误：${tok}`);
         }
         hexes.push({ ...coord, terrain, cost });
       }
@@ -63,6 +63,7 @@ export function parseGrid(id: string, name: string, lanes: string[]): GameMap {
     id,
     name,
     hexes,
+    blockades: [],
     startHexes: startHexes.map((s) => s.coord),
     finishHexes,
   };

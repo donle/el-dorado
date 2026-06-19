@@ -25,14 +25,23 @@ export function createGame(
   seed = 1,
 ): GameState {
   if (seeds.length < 2 || seeds.length > 4) {
-    throw new Error('El Dorado supports 2–4 players');
+    throw new Error('冲向黄金城支持 2–4 名玩家');
   }
   const map = getMap(mapId);
   if (seeds.length > map.startHexes.length) {
-    throw new Error('Not enough start hexes for player count');
+    throw new Error('起点地格不足，无法容纳所有玩家');
   }
 
   const hexes: Hex[] = map.hexes.map((h) => ({ ...h }));
+  const blockades = map.blockades.map((b) => ({
+    ...b,
+    a: { ...b.a },
+    b: { ...b.b },
+    edges: (b.edges ?? [{ a: b.a, b: b.b }]).map((edge) => ({
+      a: { ...edge.a },
+      b: { ...edge.b },
+    })),
+  }));
   const hexByKey = new Map(hexes.map((h) => [key(h), h]));
   let rngState = seed;
 
@@ -63,6 +72,7 @@ export function createGame(
       position: { q: start.q, r: start.r },
       finished: false,
       finishedAt: null,
+      claimedBlockades: [],
       blockades: 0,
     };
   });
@@ -77,6 +87,7 @@ export function createGame(
   return {
     mapId,
     hexes,
+    blockades,
     players,
     market,
     turnOrder: players.map((p) => p.id),

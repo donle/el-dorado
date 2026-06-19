@@ -11,7 +11,7 @@
  * `planTurn` returns a full action sequence (ending in EndTurn) that the
  * server applies through the same validated reducer humans use.
  */
-import type { GameState, Player, Hex, MoveSymbol, Terrain } from './types.js';
+import type { GameState, Player, Hex, MoveSymbol, Terrain, Axial, Blockade } from './types.js';
 import type { Action } from './actions.js';
 import { getDef, coinValue, movableSymbols } from './cards.js';
 import { neighbors, key } from './hex.js';
@@ -23,7 +23,15 @@ function terrainSymbol(t: Terrain): MoveSymbol | null {
   return null;
 }
 
-/** Symbol a hex demands to enter (finish gate may require coin). */
+function blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null {
+  return terrainSymbol(blockade.terrain) ?? blockade.symbol ?? null;
+}
+
+function blockadeRequiresDiscard(blockade: Blockade): boolean {
+  return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
+}
+
+/** Symbol a hex demands to enter (El Dorado entrances may require coin). */
 function requiredFor(h: Hex): MoveSymbol | null {
   if (h.terrain === 'finish') return h.reqSymbol ?? null;
   return terrainSymbol(h.terrain);
@@ -31,8 +39,25 @@ function requiredFor(h: Hex): MoveSymbol | null {
 
 function enterCost(h: Hex): number {
   if (h.terrain === 'start') return 1;
+  if (h.terrain === 'eldorado') return 1;
   if (h.terrain === 'finish') return Math.max(h.cost, 1);
   return h.cost;
+}
+
+function sameCoord(a: Axial, b: Axial): boolean {
+  return a.q === b.q && a.r === b.r;
+}
+
+function crossesBlockadeEdge(blockade: Blockade, from: Axial, to: Axial): boolean {
+  const edges = blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
+  return edges.some(
+    (edge) =>
+      (sameCoord(edge.a, from) && sameCoord(edge.b, to)) || (sameCoord(edge.b, from) && sameCoord(edge.a, to)),
+  );
+}
+
+function blockadeBetween(state: GameState, from: Axial, to: Axial): Blockade | undefined {
+  return state.blockades.find((b) => crossesBlockadeEdge(b, from, to));
 }
 
 type Capability = Record<MoveSymbol, number>;
@@ -53,6 +78,7 @@ function capability(p: Player): Capability {
 function canTraverse(h: Hex, p: Player, cap: Capability, owned: number): boolean {
   if (h.terrain === 'mountain') return false;
   if (h.occupant && h.occupant !== p.id) return false;
+  if (h.terrain === 'eldorado') return cap.machete + cap.paddle + cap.coin > 0;
   if (h.terrain === 'rubble' || h.terrain === 'basecamp') return owned >= h.cost;
   if (h.terrain === 'green') return cap.machete >= h.cost;
   if (h.terrain === 'blue') return cap.paddle >= h.cost;
@@ -63,13 +89,16 @@ function canTraverse(h: Hex, p: Player, cap: Capability, owned: number): boolean
   return cap.machete + cap.paddle + cap.coin > 0; // start
 }
 
-/** Lowest-cost hex path from start to any finish using a custom passability test. */
+/** Lowest-cost hex path from start to El Dorado using a custom passability test. */
 export function pathToFinish(
   state: GameState,
   p: Player,
   passable: (h: Hex) => boolean = (h) =>
-    h.terrain !== 'mountain' && (!h.occupant || h.occupant === p.id),
+    h.terrain !== 'mountain' &&
+    (!h.occupant || h.occupant === p.id),
+  edgePassable: (from: Hex, to: Hex) => boolean = () => true,
 ): Hex[] {
+  const targetTerrain: Terrain = state.hexes.some((h) => h.terrain === 'eldorado') ? 'eldorado' : 'finish';
   const byKey = new Map(state.hexes.map((h) => [key(h), h]));
   const blocked = (h: Hex) => !passable(h);
 
@@ -92,7 +121,7 @@ export function pathToFinish(
     if (cur === null) break;
     visited.add(cur);
     const curHex = byKey.get(cur)!;
-    if (curHex.terrain === 'finish') {
+    if (curHex.terrain === targetTerrain) {
       goal = cur;
       break;
     }
@@ -100,7 +129,11 @@ export function pathToFinish(
       const k = key(n);
       const hex = byKey.get(k);
       if (!hex || blocked(hex) || visited.has(k)) continue;
-      const nd = best + Math.max(enterCost(hex), 1);
+      if (!edgePassable(curHex, hex)) continue;
+      if (hex.terrain === 'eldorado' && curHex.terrain !== 'finish') continue;
+      const blockade = blockadeBetween(state, curHex, hex);
+      const cost = blockade && !blockade.claimedBy ? blockade.cost : Math.max(enterCost(hex), 1);
+      const nd = best + cost;
       if (nd < (dist.get(k) ?? Infinity)) {
         dist.set(k, nd);
         prev.set(k, cur);
@@ -143,30 +176,43 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   const cap = capability(p);
   const owned = p.deck.length + p.hand.length + p.discard.length;
   // Only commit to a route the current deck can actually traverse.
-  const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned));
+  const edgeCanTraverse = (from: Hex, to: Hex) => {
+    const blockade = blockadeBetween(state, from, to);
+    if (!blockade || blockade.claimedBy) return true;
+    if (blockadeRequiresDiscard(blockade)) return owned >= blockade.cost;
+    const symbol = blockadeMoveSymbol(blockade);
+    return !!symbol && cap[symbol] >= blockade.cost;
+  };
+  const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned), edgeCanTraverse);
+  let plannedPosition: Axial = { ...p.position };
   for (const hex of path) {
-    const required = requiredFor(hex);
+    const blockade = blockadeBetween(state, plannedPosition, hex);
+    const blockadeClear = !!blockade && !blockade.claimedBy && blockadeRequiresDiscard(blockade);
+    const required = blockade && !blockade.claimedBy && !blockadeClear ? blockadeMoveSymbol(blockade) : requiredFor(hex);
     const isClear = hex.terrain === 'rubble' || hex.terrain === 'basecamp';
 
-    if (isClear) {
+    if (blockadeClear || isClear) {
+      const cost = blockadeClear ? blockade.cost : hex.cost;
       const pick = available()
         .slice()
         .sort((a, b) => getDef(a.defId).power - getDef(b.defId).power)
-        .slice(0, hex.cost);
-      if (pick.length < hex.cost) break; // not enough cards in hand this turn
+        .slice(0, cost);
+      if (pick.length < cost) break; // not enough cards in hand this turn
       pick.forEach((c) => used.add(c.id));
       actions.push({ type: 'ClearSpace', to: { q: hex.q, r: hex.r }, cardIds: pick.map((c) => c.id) });
       mover = null;
       moved = true;
+      plannedPosition = { q: hex.q, r: hex.r };
       continue;
     }
 
-    const deduct = required === null ? 1 : hex.cost;
+    const deduct = blockade && !blockade.claimedBy ? blockade.cost : required === null ? 1 : enterCost(hex);
 
     if (mover && mover.remaining >= deduct && (required === null || required === mover.symbol)) {
       actions.push({ type: 'StepTo', to: { q: hex.q, r: hex.r } });
       mover.remaining -= deduct;
       moved = true;
+      plannedPosition = { q: hex.q, r: hex.r };
       continue;
     }
 
@@ -182,6 +228,7 @@ export function planTurn(state: GameState, playerId: string): Action[] {
     actions.push({ type: 'StepTo', to: { q: hex.q, r: hex.r } });
     mover = { symbol: chosen.sym!, remaining: chosen.pow - deduct };
     moved = true;
+    plannedPosition = { q: hex.q, r: hex.r };
   }
 
   // --- buying ---
@@ -194,10 +241,28 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   // the first hex our current deck can't traverse — buy toward closing that gap.
   const ideal = pathToFinish(state, p);
   let gap: Need | null = null;
+  let gapPosition: Axial = { ...p.position };
   for (const h of ideal) {
-    if (canTraverse(h, p, cap, owned)) continue;
-    gap = { symbol: requiredFor(h), cost: enterCost(h) };
-    break;
+    const blockade = blockadeBetween(state, gapPosition, h);
+    if (blockade && !blockade.claimedBy) {
+      if (blockadeRequiresDiscard(blockade)) {
+        if (owned < blockade.cost) {
+          gap = { symbol: null, cost: blockade.cost };
+          break;
+        }
+      } else {
+        const symbol = blockadeMoveSymbol(blockade);
+        if (symbol && cap[symbol] < blockade.cost) {
+          gap = { symbol, cost: blockade.cost };
+          break;
+        }
+      }
+    }
+    if (!canTraverse(h, p, cap, owned)) {
+      gap = { symbol: requiredFor(h), cost: enterCost(h) };
+      break;
+    }
+    gapPosition = { q: h.q, r: h.r };
   }
 
   const buyableForGap = (n: Need) =>

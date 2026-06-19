@@ -14,8 +14,8 @@
  * Two side-4 hexagons placed at an edge offset share a 7-cell border with
  * zero overlap (verified).
  */
-import type { GameMap, Hex, Terrain, Axial } from '../types.js';
-import { key, neighbors, distance } from '../hex.js';
+import type { GameMap, Hex, Terrain, Axial, Blockade, MoveSymbol } from '../types.js';
+import { key, neighbors, distance, axialToPixel } from '../hex.js';
 
 export const TILE_RADIUS = 3; // side length 4 → 37 cells
 
@@ -166,6 +166,22 @@ export interface TileSpec {
   connect?: TileEdge;
 }
 
+interface TileConnection {
+  from: PlacedTile;
+  to: PlacedTile;
+  edge: TileEdge;
+  index: number;
+}
+
+const BLOCKADE_TERRAINS: readonly Terrain[] = ['green', 'blue', 'yellow', 'rubble'];
+
+function blockadeSymbolForTerrain(terrain: Terrain): MoveSymbol | undefined {
+  if (terrain === 'green') return 'machete';
+  if (terrain === 'blue') return 'paddle';
+  if (terrain === 'yellow') return 'coin';
+  return undefined;
+}
+
 /**
  * Build a map from tiles placed at explicit centres. Fully general — supports
  * branching / non-linear layouts. Overlapping cells are de-duplicated.
@@ -197,9 +213,82 @@ export function assembleTiles(id: string, name: string, placed: PlacedTile[]): G
     id,
     name,
     hexes: [...hexByKey.values()],
+    blockades: [],
     startHexes: starts.map((s) => s.coord),
     finishHexes: finishes.map((f) => f.coord),
   };
+}
+
+function tileWorldCells(tile: PlacedTile): Axial[] {
+  return localCells().map((c) => ({
+    q: tile.center.q + c.q,
+    r: tile.center.r + c.r,
+  }));
+}
+
+function isBlockadeCandidate(hex: Hex): boolean {
+  return hex.terrain !== 'mountain' && hex.terrain !== 'rubble' && hex.terrain !== 'basecamp';
+}
+
+function buildBlockades(connections: TileConnection[], hexes: Hex[]): Blockade[] {
+  const byKey = new Map(hexes.map((h) => [key(h), h]));
+  const blockades: Blockade[] = [];
+
+  for (const connection of connections) {
+    const fromCells = tileWorldCells(connection.from);
+    const toKeys = new Set(tileWorldCells(connection.to).map(key));
+    const fromCenter = axialToPixel(connection.from.center, 1);
+    const toCenter = axialToPixel(connection.to.center, 1);
+    const seamMid = {
+      x: (fromCenter.x + toCenter.x) / 2,
+      y: (fromCenter.y + toCenter.y) / 2,
+    };
+
+    const centerDx = toCenter.x - fromCenter.x;
+    const centerDy = toCenter.y - fromCenter.y;
+    const centerLen = Math.hypot(centerDx, centerDy) || 1;
+    const seamDir = { x: -centerDy / centerLen, y: centerDx / centerLen };
+
+    const pairs: Array<{ a: Hex; b: Hex; score: number; order: number }> = [];
+    for (const aCell of fromCells) {
+      const a = byKey.get(key(aCell));
+      if (!a) continue;
+      for (const n of neighbors(a)) {
+        if (!toKeys.has(key(n))) continue;
+        const b = byKey.get(key(n));
+        if (!b) continue;
+        const pa = axialToPixel(a, 1);
+        const pb = axialToPixel(b, 1);
+        const mid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
+        const score = Math.hypot(mid.x - seamMid.x, mid.y - seamMid.y);
+        const order = (mid.x - seamMid.x) * seamDir.x + (mid.y - seamMid.y) * seamDir.y;
+        pairs.push({ a, b, score, order });
+      }
+    }
+
+    pairs.sort((left, right) => left.order - right.order || key(left.a).localeCompare(key(right.a)));
+    const chosen =
+      pairs
+        .filter((p) => isBlockadeCandidate(p.a) && isBlockadeCandidate(p.b))
+        .sort((left, right) => left.score - right.score || key(left.a).localeCompare(key(right.a)))[0] ?? pairs[0];
+    if (!chosen) continue;
+
+    const terrain = BLOCKADE_TERRAINS[connection.index % BLOCKADE_TERRAINS.length];
+    blockades.push({
+      id: `seam-${connection.index + 1}-${connection.edge}`,
+      a: { q: chosen.a.q, r: chosen.a.r },
+      b: { q: chosen.b.q, r: chosen.b.r },
+      edges: pairs.map((p) => ({
+        a: { q: p.a.q, r: p.a.r },
+        b: { q: p.b.q, r: p.b.r },
+      })),
+      terrain,
+      symbol: blockadeSymbolForTerrain(terrain),
+      cost: 1,
+    });
+  }
+
+  return blockades;
 }
 
 /** Power/symbol required to step onto the El Dorado gate. */
@@ -207,10 +296,10 @@ export const ELDORADO_COST = 2;
 export const ELDORADO_SYMBOL = 'coin' as const;
 
 /**
- * Attach El Dorado as a separate, irregular gate hex nestled into a forward
- * corner of the end tile: a single golden gate cell embraced on three sides
- * (the tile corner plus two flanking "arm" cells). Stepping onto it requires
- * gold (coin) power — it is not a free finish. Returns a new map with it added.
+ * Attach El Dorado as a separate terminal plate nestled into a forward corner
+ * of the end tile: three golden entrance hexes sit in front of the city, and
+ * the irregular golden city lies beyond them. Entering an entrance requires
+ * gold (coin) power; stepping from an entrance onto the city finishes the game.
  */
 function attachEldorado(map: GameMap, placed: PlacedTile[]): GameMap {
   const end = placed.find((t) => t.theme === 'end');
@@ -238,14 +327,37 @@ function attachEldorado(map: GameMap, placed: PlacedTile[]): GameMap {
   const arms = ext.filter((o) => o !== gate && adj(o, gate)).slice(0, 2);
 
   const hexes = map.hexes.slice();
-  // Two grassy "arm" cells embrace the gate (kept off the finish list).
-  for (const a of arms) {
-    if (occupied.has(key(a))) continue;
-    occupied.add(key(a));
-    hexes.push({ q: a.q, r: a.r, terrain: 'yellow', cost: 1 });
+  const entrances = [arms[0], gate, arms[1]].filter((c): c is Axial => !!c);
+  entrances.forEach((c, i) => {
+    if (occupied.has(key(c))) return;
+    occupied.add(key(c));
+    hexes.push({
+      q: c.q,
+      r: c.r,
+      terrain: 'finish',
+      cost: ELDORADO_COST,
+      reqSymbol: ELDORADO_SYMBOL,
+      slot: i + 1,
+    });
+  });
+
+  // The golden city: a compact irregular terminal around three hexes, attached
+  // to the three entrance cells. Entering it from any entrance reaches El Dorado.
+  for (const c of eldoradoCity(gate, arms, occupied)) {
+    occupied.add(key(c));
+    hexes.push({ q: c.q, r: c.r, terrain: 'eldorado', cost: 0 });
   }
-  hexes.push({ q: gate.q, r: gate.r, terrain: 'finish', cost: ELDORADO_COST, reqSymbol: ELDORADO_SYMBOL, slot: 1 });
-  return { ...map, hexes, finishHexes: [{ q: gate.q, r: gate.r }] };
+  return { ...map, hexes, finishHexes: entrances.map((c) => ({ q: c.q, r: c.r })) };
+}
+
+function eldoradoCity(gate: Axial, arms: Axial[], occupied: Set<string>): Axial[] {
+  const entrances = [gate, ...arms];
+  return neighbors(gate)
+    .filter((c) => !occupied.has(key(c)))
+    .filter((c) => entrances.some((entrance) => neighbors(c).some((n) => n.q === entrance.q && n.r === entrance.r)))
+    .sort((a, b) => key(a).localeCompare(key(b)))
+    .slice(0, 3)
+    .map((c) => ({ q: c.q, r: c.r }));
 }
 
 /**
@@ -262,7 +374,20 @@ export function buildTileMap(id: string, name: string, chain: TileSpec[]): GameM
     if (spec.connect) center = neighborCenter(center, spec.connect);
   }
   const map = assembleTiles(id, name, placed);
-  return attachEldorado(map, placed);
+  const connections: TileConnection[] = chain
+    .slice(0, -1)
+    .map((spec, index) =>
+      spec.connect
+        ? {
+            from: placed[index],
+            to: placed[index + 1],
+            edge: spec.connect,
+            index,
+          }
+        : null,
+    )
+    .filter((c): c is TileConnection => !!c);
+  return attachEldorado({ ...map, blockades: buildBlockades(connections, map.hexes) }, placed);
 }
 
 export { key };

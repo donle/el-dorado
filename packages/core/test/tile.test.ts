@@ -50,18 +50,31 @@ describe('tile composition', () => {
     expect(m.hexes).toHaveLength(74);
   });
 
-  it('classic map: 5 tiles + El Dorado gate, 4 start, 1 fully-connected finish', () => {
-    expect(CLASSIC_MAP.hexes.length).toBeGreaterThanOrEqual(186); // 185 tile cells + gate (+arms)
-    expect(CLASSIC_MAP.startHexes).toHaveLength(4);
-    expect(CLASSIC_MAP.finishHexes).toHaveLength(1);
+  it('buildTileMap generates a claimable seam blockade for a tile connection', () => {
+    const m = buildTileMap('t', 'two', [{ theme: 'jungle', connect: 'right-up' }, { theme: 'river' }]);
+    expect(m.blockades).toHaveLength(1);
+    expect(m.blockades[0].terrain).toBe('green');
+    expect(m.blockades[0].edges.length).toBeGreaterThan(1);
+    expect(neighbors(m.blockades[0].a).some((n) => key(n) === key(m.blockades[0].b))).toBe(true);
+    expect(m.hexes.some((h) => key(h) === key(m.blockades[0].a))).toBe(true);
+    expect(m.hexes.some((h) => key(h) === key(m.blockades[0].b))).toBe(true);
+  });
 
-    // The El Dorado gate demands gold (coin) power and is wrapped on 3 sides.
-    const gate = CLASSIC_MAP.hexes.find((h) => h.terrain === 'finish')!;
-    expect(gate.reqSymbol).toBe('coin');
-    expect(gate.cost).toBeGreaterThan(0);
-    const tileKeys = new Set(CLASSIC_MAP.hexes.filter((h) => h.terrain !== 'finish').map(key));
-    const wrap = neighbors(gate).filter((n) => tileKeys.has(key(n))).length;
-    expect(wrap).toBeGreaterThanOrEqual(3);
+  it('classic map: 5 tiles + El Dorado, 4 start, 3 entrance hexes', () => {
+    expect(CLASSIC_MAP.hexes.length).toBeGreaterThanOrEqual(186); // 185 tile cells + gate (+arms)
+    expect(CLASSIC_MAP.blockades).toHaveLength(4);
+    expect(CLASSIC_MAP.startHexes).toHaveLength(4);
+    expect(CLASSIC_MAP.finishHexes).toHaveLength(3);
+
+    // The three El Dorado entrances demand gold (coin) power and touch the city.
+    const entrances = CLASSIC_MAP.hexes.filter((h) => h.terrain === 'finish');
+    expect(entrances).toHaveLength(3);
+    const cityKeys = new Set(CLASSIC_MAP.hexes.filter((h) => h.terrain === 'eldorado').map(key));
+    for (const entrance of entrances) {
+      expect(entrance.reqSymbol).toBe('coin');
+      expect(entrance.cost).toBeGreaterThan(0);
+      expect(neighbors(entrance).some((n) => cityKeys.has(key(n)))).toBe(true);
+    }
 
     const passable = CLASSIC_MAP.hexes.filter((h) => h.terrain !== 'mountain');
     const byKey = new Map(passable.map((h) => [key(h), h]));

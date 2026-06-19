@@ -25,12 +25,12 @@ wss.on('connection', (ws: WebSocket) => {
     try {
       msg = JSON.parse(data.toString());
     } catch {
-      return err('Malformed message');
+      return err('消息格式错误');
     }
     try {
       handle(session, send, msg);
     } catch (e) {
-      err(e instanceof Error ? e.message : 'Unexpected error');
+      err(e instanceof Error ? e.message : '未知错误');
     }
   });
 
@@ -55,7 +55,7 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
     }
     case 'joinRoom': {
       const room = manager.get(msg.code);
-      if (!room) return void send({ type: 'error', message: 'Room not found' });
+      if (!room) return void send({ type: 'error', message: '没有找到这个房间' });
       const me = room.addHuman(msg.name, send);
       session.room = room;
       session.playerId = me.id;
@@ -65,9 +65,9 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
     }
     case 'rejoin': {
       const room = manager.get(msg.code);
-      if (!room) return void send({ type: 'error', message: 'Room not found' });
+      if (!room) return void send({ type: 'error', message: '没有找到这个房间' });
       const me = room.reconnect(msg.playerId, send);
-      if (!me) return void send({ type: 'error', message: 'Player not in room' });
+      if (!me) return void send({ type: 'error', message: '玩家不在这个房间里' });
       session.room = room;
       session.playerId = me.id;
       send({ type: 'joined', code: room.code, playerId: me.id });
@@ -97,15 +97,15 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
       return;
     }
     case 'action': {
-      if (!session.room || !session.playerId) return void send({ type: 'error', message: 'Not in a game' });
+      if (!session.room || !session.playerId) return void send({ type: 'error', message: '你还没有进入游戏' });
       const res = session.room.handleAction(session.playerId, msg.action);
-      if (!res.ok) send({ type: 'error', message: res.error ?? 'Illegal action' });
+      if (!res.ok) send({ type: 'error', message: res.error ?? '这个操作不符合规则' });
       return;
     }
   }
 }
 
 function requireHost(session: Session): void {
-  if (!session.room || !session.playerId) throw new Error('Not in a room');
-  if (session.room.hostId !== session.playerId) throw new Error('Only the host can do that');
+  if (!session.room || !session.playerId) throw new Error('你还没有进入房间');
+  if (session.room.hostId !== session.playerId) throw new Error('只有房主可以这样做');
 }

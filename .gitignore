@@ -4,4 +4,5 @@ dist/
 *.log
 # tooling artifacts
 .playwright-mcp/
+.playwright-cli/
 eldorado-*.png

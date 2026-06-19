@@ -53,8 +53,9 @@ export type Terrain =
   | 'rubble' // pay N any-cards (to discard)
   | 'basecamp' // pay N any-cards (removed from game)
   | 'mountain' // impassable
+  | 'eldorado' // the golden city beyond the entrance — entering it finishes
   | 'start'
-  | 'finish';
+  | 'finish'; // El Dorado entrance hex
 
 /** Axial hex coordinate (pointy-top). */
 export interface Axial {
@@ -69,7 +70,7 @@ export interface Hex {
   /** Power/count required to enter (1–4). 0 for start/mountain. */
   cost: number;
   /**
-   * Required movement symbol to enter (used by the El Dorado finish gate,
+   * Required movement symbol to enter (used by the El Dorado entrance,
    * which demands `coin`/gold power). Undefined = wildcard (any symbol).
    */
   reqSymbol?: MoveSymbol;
@@ -79,13 +80,39 @@ export interface Hex {
   slot?: number;
 }
 
+export interface BlockadeEdge {
+  a: Axial;
+  b: Axial;
+}
+
+export interface Blockade {
+  /** Stable marker id, used by players' claimedBlockades for tie-breakers. */
+  id: string;
+  /** Representative crossing on one side of the continent seam. */
+  a: Axial;
+  /** Representative crossing on the opposite side of the continent seam. */
+  b: Axial;
+  /** Every adjacent hex-edge crossing covered by this Z-shaped seam terrain. */
+  edges: BlockadeEdge[];
+  /** Visual terrain texture for this seam plate. */
+  terrain: Terrain;
+  /** Movement resource required by green/blue/yellow blockades; rubble uses card discard instead. */
+  symbol?: MoveSymbol;
+  /** Movement power or discarded-card count required to claim and cross it. */
+  cost: number;
+  /** Player id of the first player who crossed it. Undefined while unclaimed. */
+  claimedBy?: string;
+}
+
 export interface GameMap {
   id: string;
   name: string;
   hexes: Hex[];
+  /** Zig-zag seam markers between continent tiles. */
+  blockades: Blockade[];
   /** Coordinates of the start hexes, ordered by slot. */
   startHexes: Axial[];
-  /** Coordinates of the finish hexes. */
+  /** Coordinates of the El Dorado entrance hexes. */
   finishHexes: Axial[];
 }
 
@@ -108,6 +135,8 @@ export interface Player {
   finished: boolean;
   /** Turn number on which the player finished (tie-breaker: earlier wins). */
   finishedAt: number | null;
+  /** Stable ids of seam blockades claimed by this player. */
+  claimedBlockades: string[];
   /** Number of blockades collected (tie-breaker). */
   blockades: number;
 }
@@ -138,6 +167,7 @@ export interface TurnState {
 export interface GameState {
   mapId: string;
   hexes: Hex[];
+  blockades: Blockade[];
   players: Player[];
   market: MarketPile[];
   /** Player ids in turn order. */

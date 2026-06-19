@@ -6,6 +6,7 @@ import type {
   MoveSymbol,
   Terrain,
   Card,
+  Blockade,
 } from './types.js';
 import type { Action, GameEvent, ActionResult } from './actions.js';
 import { getDef, coinValue, movableSymbols, HAND_SIZE } from './cards.js';
@@ -31,6 +32,25 @@ function terrainSymbol(t: Terrain): MoveSymbol | null {
   }
 }
 
+function blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null {
+  return terrainSymbol(blockade.terrain) ?? blockade.symbol ?? null;
+}
+
+function blockadeRequiresDiscard(blockade: Blockade): boolean {
+  return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
+}
+
+function symbolLabel(symbol: MoveSymbol): string {
+  switch (symbol) {
+    case 'machete':
+      return '砍刀';
+    case 'paddle':
+      return '船桨';
+    case 'coin':
+      return '金币';
+  }
+}
+
 class RuleError extends Error {}
 
 function fail(state: GameState, error: string): { state: GameState; result: ActionResult } {
@@ -46,9 +66,9 @@ export function applyAction(
   playerId: string,
   action: Action,
 ): { state: GameState; result: ActionResult } {
-  if (state.phase !== 'playing') return fail(state, 'Game is not in progress');
+  if (state.phase !== 'playing') return fail(state, '游戏尚未开始');
   if (!state.turn || state.turn.playerId !== playerId) {
-    return fail(state, 'Not your turn');
+    return fail(state, '还没轮到你');
   }
 
   const next: GameState = clone(state);
@@ -83,7 +103,7 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
 
 function player(state: GameState, id: string): Player {
   const p = state.players.find((x) => x.id === id);
-  if (!p) throw new RuleError(`Unknown player ${id}`);
+  if (!p) throw new RuleError(`未知玩家：${id}`);
   return p;
 }
 
@@ -91,9 +111,39 @@ function hexAt(state: GameState, c: Axial): Hex | undefined {
   return state.hexes.find((h) => h.q === c.q && h.r === c.r);
 }
 
+function sameCoord(a: Axial, b: Axial): boolean {
+  return a.q === b.q && a.r === b.r;
+}
+
+function crossesBlockadeEdge(blockade: Blockade, from: Axial, to: Axial): boolean {
+  const edges = blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
+  return edges.some(
+    (edge) =>
+      (sameCoord(edge.a, from) && sameCoord(edge.b, to)) || (sameCoord(edge.b, from) && sameCoord(edge.a, to)),
+  );
+}
+
+function blockadeBetween(state: GameState, from: Axial, to: Axial): Blockade | undefined {
+  return state.blockades.find((b) => crossesBlockadeEdge(b, from, to));
+}
+
+function claimBlockade(p: Player, blockade: Blockade | undefined, events: GameEvent[]): void {
+  if (!blockade || blockade.claimedBy) return;
+  blockade.claimedBy = p.id;
+  p.claimedBlockades ??= [];
+  if (!p.claimedBlockades.includes(blockade.id)) p.claimedBlockades.push(blockade.id);
+  p.blockades = p.claimedBlockades.length;
+  events.push({ type: 'blockadeClaimed', playerId: p.id, blockadeId: blockade.id });
+}
+
+function blockadeRequirementLabel(blockade: Blockade): string {
+  const symbol = blockadeMoveSymbol(blockade);
+  return symbol ? `${symbolLabel(symbol)} ${blockade.cost} 点` : `弃 ${blockade.cost} 张手牌`;
+}
+
 function takeFromHand(p: Player, cardId: string): Card {
   const idx = p.hand.findIndex((c) => c.id === cardId);
-  if (idx === -1) throw new RuleError(`Card ${cardId} not in hand`);
+  if (idx === -1) throw new RuleError(`这张牌不在手牌中：${cardId}`);
   return p.hand.splice(idx, 1)[0];
 }
 
@@ -109,10 +159,10 @@ function playMovementCard(
   const p = player(state, playerId);
   const turn = state.turn!;
   const card = p.hand.find((c) => c.id === cardId);
-  if (!card) throw new RuleError('Card not in hand');
+  if (!card) throw new RuleError('这张牌不在手牌中');
   const symbols = movableSymbols(card.defId);
   if (!symbols.includes(symbol)) {
-    throw new RuleError(`Card cannot move as ${symbol}`);
+    throw new RuleError(`这张牌不能当作${symbolLabel(symbol)}使用`);
   }
   const def = getDef(card.defId);
   takeFromHand(p, cardId);
@@ -128,42 +178,63 @@ function moveTo(state: GameState, p: Player, to: Hex, events: GameEvent[]): void
   p.position = { q: to.q, r: to.r };
   events.push({ type: 'movedTo', playerId: p.id, to: { q: to.q, r: to.r } });
 
-  if (to.terrain === 'finish') {
+  const classicTerminal = to.terrain === 'eldorado';
+  const legacyTerminal = to.terrain === 'finish' && !state.hexes.some((h) => h.terrain === 'eldorado');
+  if (classicTerminal || legacyTerminal) {
     p.finished = true;
     p.finishedAt = state.turnNumber;
-    to.occupant = undefined; // the El Dorado gate is not blocked
+    to.occupant = undefined; // El Dorado itself is not blocked
     events.push({ type: 'reachedEldorado', playerId: p.id });
     if (state.finalTurnsRemaining === null) {
       state.finalRoundTriggeredBy = p.id;
-      state.finalTurnsRemaining = state.players.filter((x) => !x.finished).length;
+      state.finalTurnsRemaining = finalTurnsAfter(state, p.id);
     }
   }
 }
 
-function assertEnterable(p: Player, to: Hex): void {
-  if (to.terrain === 'mountain') throw new RuleError('Cannot enter a mountain');
-  if (to.occupant && to.occupant !== p.id) throw new RuleError('Hex is occupied');
-  if (!isAdjacent(p.position, to)) throw new RuleError('Hex is not adjacent');
+function finalTurnsAfter(state: GameState, playerId: string): number {
+  const idx = state.turnOrder.indexOf(playerId);
+  if (idx === -1) return 0;
+  return state.turnOrder.slice(idx + 1).filter((id) => !player(state, id).finished).length;
+}
+
+function assertEnterable(state: GameState, p: Player, to: Hex): void {
+  if (to.terrain === 'mountain') throw new RuleError('不能进入山地');
+  const from = hexAt(state, p.position);
+  if (to.terrain === 'eldorado' && from?.terrain !== 'finish') {
+    throw new RuleError('必须先进入黄金城入口，才能进入黄金城');
+  }
+  if (to.occupant && to.occupant !== p.id) throw new RuleError('该地格已被占用');
+  if (!isAdjacent(p.position, to)) throw new RuleError('只能移动到相邻地格');
 }
 
 function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent[]): void {
   const p = player(state, playerId);
   const turn = state.turn!;
   const mover = turn.activeMover;
-  if (!mover || mover.remaining <= 0) throw new RuleError('No active movement card');
+  if (!mover || mover.remaining <= 0) throw new RuleError('没有可用的移动牌');
   const hex = hexAt(state, to);
-  if (!hex) throw new RuleError('No such hex');
-  assertEnterable(p, hex);
+  if (!hex) throw new RuleError('没有这个地格');
+  assertEnterable(state, p, hex);
 
   if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') {
-    throw new RuleError('Use ClearSpace to enter this terrain');
+    throw new RuleError('需要弃牌清除此格后才能进入');
   }
 
-  // The El Dorado gate (finish) may demand a specific symbol + cost; the start
-  // tile is a free wildcard; other terrains use their symbol + cost.
+  // Unclaimed seam blockades are crossed as their own zig-zag terrain. The
+  // first player to pay the marker claims it; later crossings use the normal
+  // destination terrain requirement.
+  const blockade = blockadeBetween(state, p.position, hex);
   let required: MoveSymbol | null;
   let deduct: number;
-  if (hex.terrain === 'finish') {
+  if (blockade && !blockade.claimedBy) {
+    required = blockadeMoveSymbol(blockade);
+    if (required === null) throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
+    deduct = blockade.cost;
+  } else if (hex.terrain === 'eldorado') {
+    required = null;
+    deduct = 1;
+  } else if (hex.terrain === 'finish') {
     required = hex.reqSymbol ?? null;
     deduct = Math.max(hex.cost, 1);
   } else if (hex.terrain === 'start') {
@@ -174,11 +245,12 @@ function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent
     deduct = hex.cost;
   }
   if (required !== null && required !== mover.symbol) {
-    throw new RuleError(`Need ${required} to enter`);
+    throw new RuleError(`需要${symbolLabel(required)}才能进入`);
   }
-  if (mover.remaining < deduct) throw new RuleError('Not enough movement power');
+  if (mover.remaining < deduct) throw new RuleError('移动力量不足');
 
   mover.remaining -= deduct;
+  claimBlockade(p, blockade, events);
   moveTo(state, p, hex, events);
 }
 
@@ -191,13 +263,31 @@ function clearSpace(
 ): void {
   const p = player(state, playerId);
   const hex = hexAt(state, to);
-  if (!hex) throw new RuleError('No such hex');
-  if (hex.terrain !== 'rubble' && hex.terrain !== 'basecamp') {
-    throw new RuleError('Not a clearable space');
+  if (!hex) throw new RuleError('没有这个地格');
+  const blockade = blockadeBetween(state, p.position, hex);
+  if (blockade && !blockade.claimedBy) {
+    if (!blockadeRequiresDiscard(blockade)) {
+      throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
+    }
+    assertEnterable(state, p, hex);
+    if (cardIds.length !== blockade.cost) {
+      throw new RuleError(`需要正好选择 ${blockade.cost} 张牌`);
+    }
+    for (const id of cardIds) {
+      p.discard.push(takeFromHand(p, id));
+    }
+    state.turn!.activeMover = undefined;
+    claimBlockade(p, blockade, events);
+    moveTo(state, p, hex, events);
+    events.push({ type: 'spaceCleared', playerId, to: { q: to.q, r: to.r }, removed: false });
+    return;
   }
-  assertEnterable(p, hex);
+  if (hex.terrain !== 'rubble' && hex.terrain !== 'basecamp') {
+    throw new RuleError('这个地格不能被清除');
+  }
+  assertEnterable(state, p, hex);
   if (cardIds.length !== hex.cost) {
-    throw new RuleError(`Need exactly ${hex.cost} cards`);
+    throw new RuleError(`需要正好选择 ${hex.cost} 张牌`);
   }
   const removed = hex.terrain === 'basecamp';
   for (const id of cardIds) {
@@ -232,12 +322,12 @@ function buyCard(
 ): void {
   const p = player(state, playerId);
   const turn = state.turn!;
-  if (turn.hasBought) throw new RuleError('Already bought this turn');
+  if (turn.hasBought) throw new RuleError('本回合已经购买过卡牌');
 
   const pile = state.market.find((m) => m.defId === defId);
-  if (!pile || pile.count <= 0) throw new RuleError('Card not available');
+  if (!pile || pile.count <= 0) throw new RuleError('这张牌当前无法购买');
   if (!pile.onBoard && !freeOnBoardSlot(state)) {
-    throw new RuleError('Card is not on the board');
+    throw new RuleError('这张牌还没有进入市场');
   }
 
   const cost = getDef(defId).cost;
@@ -245,11 +335,11 @@ function buyCard(
   const cards: Card[] = [];
   for (const id of paymentCardIds) {
     const card = p.hand.find((c) => c.id === id);
-    if (!card) throw new RuleError(`Payment card ${id} not in hand`);
+    if (!card) throw new RuleError(`支付用的牌不在手牌中：${id}`);
     power += coinValue(card.defId);
     cards.push(card);
   }
-  if (power < cost) throw new RuleError(`Need ${cost} coins, have ${power}`);
+  if (power < cost) throw new RuleError(`金币不足：需要 ${cost}，当前 ${power}`);
 
   // Spend the payment cards (to discard) and the new card (to discard).
   for (const card of cards) {
@@ -311,7 +401,7 @@ function useAbility(
   const turn = state.turn!;
   const card = takeFromHand(p, action.cardId);
   const def = getDef(card.defId);
-  if (def.kind !== 'action') throw new RuleError('Not an action card');
+  if (def.kind !== 'action') throw new RuleError('这不是行动牌');
 
   // The card itself leaves the hand: single-use → removed, else → discard later.
   if (def.singleUse) turn.removedThisTurn.push(card);
@@ -338,9 +428,9 @@ function useAbility(
     }
     case 'take_free': {
       const defId = action.takeDefId;
-      if (!defId) throw new RuleError('No card chosen');
+      if (!defId) throw new RuleError('没有选择卡牌');
       const pile = state.market.find((m) => m.defId === defId);
-      if (!pile || pile.count <= 0) throw new RuleError('Card not available');
+      if (!pile || pile.count <= 0) throw new RuleError('这张牌当前无法购买');
       p.discard.push(mintCard(p, defId));
       pile.count -= 1;
       if (pile.count === 0 && pile.onBoard) {
@@ -350,21 +440,25 @@ function useAbility(
       break;
     }
     case 'native': {
-      if (!action.nativeTo) throw new RuleError('No destination chosen');
+      if (!action.nativeTo) throw new RuleError('没有选择目标地格');
       const hex = hexAt(state, action.nativeTo);
-      if (!hex) throw new RuleError('No such hex');
-      assertEnterable(p, hex); // ignores terrain cost/symbol, but not mountain/occupied
+      if (!hex) throw new RuleError('没有这个地格');
+      assertEnterable(state, p, hex); // ignores terrain cost/symbol, but not mountain/occupied
+      const blockade = blockadeBetween(state, p.position, hex);
+      if (blockade && !blockade.claimedBy) {
+        throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
+      }
       moveTo(state, p, hex, events);
       break;
     }
     default:
-      throw new RuleError('Ability not implemented');
+      throw new RuleError('这个行动能力尚未实现');
   }
   events.push({ type: 'ability', playerId, cardId: action.cardId });
 }
 
 function removeFromHand(p: Player, turn: GameState['turn'], cardIds: string[], max: number): void {
-  if (cardIds.length > max) throw new RuleError(`Can remove at most ${max} cards`);
+  if (cardIds.length > max) throw new RuleError(`最多只能移除 ${max} 张牌`);
   for (const id of cardIds) {
     const card = takeFromHand(p, id);
     turn!.removedThisTurn.push(card);
