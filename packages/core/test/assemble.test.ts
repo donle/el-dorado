@@ -2,6 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { assembleMap, placePlates, type MapDef } from '../src/maps/assemble.js';
 import type { PlateDef } from '../src/maps/plate.js';
 import { key, neighbors } from '../src/hex.js';
+import type { Terrain, MoveSymbol } from '../src/types.js';
+import { isAdjacent } from '../src/hex.js';
+
+function symbolForTerrain(t: Terrain): MoveSymbol | undefined {
+  if (t === 'green') return 'machete';
+  if (t === 'blue') return 'paddle';
+  if (t === 'yellow') return 'coin';
+  return undefined;
+}
 
 // Two solid plates with no specials, easy to reason about.
 function solid(id: string): PlateDef {
@@ -109,5 +118,77 @@ describe('assemble: placement + materialize', () => {
       }
     }
     expect(seen.size).toBe(m.hexes.length);
+  });
+});
+
+describe('assemble: declared seam blockades', () => {
+  const LIB2: Record<string, PlateDef> = {
+    a: {
+      id: 'a',
+      theme: 'jungle',
+      rows: [
+        'g1 g1 g1 g1',
+        'g1 g1 g1 g1 g1',
+        'g1 g1 g1 g1 g1 g1',
+        'g1 g1 g1 g1 g1 g1 g1',
+        'g1 g1 g1 g1 g1 g1',
+        'g1 g1 g1 g1 g1',
+        'g1 g1 g1 g1',
+      ],
+    },
+  };
+  LIB2.b = { ...LIB2.a, id: 'b' };
+
+  it('emits one blockade per connection with a declared type/cost', () => {
+    const def: MapDef = {
+      id: 'two',
+      name: '两块',
+      plates: [
+        { id: 'p0', ref: 'a' },
+        { id: 'p1', ref: 'b' },
+      ],
+      connections: [{ from: 'p0', edge: 'right-up', to: 'p1', blockade: { type: 'machete', cost: 2 } }],
+    };
+    const m = assembleMap(def, LIB2);
+    expect(m.blockades).toHaveLength(1);
+    const bl = m.blockades[0];
+    expect(bl.terrain).toBe('green');
+    expect(bl.symbol).toBe('machete');
+    expect(bl.cost).toBe(2);
+    expect(bl.edges.length).toBeGreaterThan(1);
+    expect(isAdjacent(bl.a, bl.b)).toBe(true);
+    const keys = new Set(m.hexes.map((h) => `${h.q},${h.r}`));
+    expect(keys.has(`${bl.a.q},${bl.a.r}`)).toBe(true);
+    expect(keys.has(`${bl.b.q},${bl.b.r}`)).toBe(true);
+  });
+
+  it('maps discard type to rubble terrain with no symbol', () => {
+    const def: MapDef = {
+      id: 'two',
+      name: '两块',
+      plates: [
+        { id: 'p0', ref: 'a' },
+        { id: 'p1', ref: 'b' },
+      ],
+      connections: [{ from: 'p0', edge: 'right-up', to: 'p1', blockade: { type: 'discard', cost: 3 } }],
+    };
+    const m = assembleMap(def, LIB2);
+    expect(m.blockades[0].terrain).toBe('rubble');
+    expect(m.blockades[0].symbol).toBeUndefined();
+    expect(m.blockades[0].cost).toBe(3);
+    expect(symbolForTerrain('rubble')).toBeUndefined();
+  });
+
+  it('omits a blockade when the connection has none', () => {
+    const def: MapDef = {
+      id: 'two',
+      name: '两块',
+      plates: [
+        { id: 'p0', ref: 'a' },
+        { id: 'p1', ref: 'b' },
+      ],
+      connections: [{ from: 'p0', edge: 'right-up', to: 'p1' }],
+    };
+    expect(assembleMap(def, LIB2).blockades).toHaveLength(0);
   });
 });

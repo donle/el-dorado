@@ -2,8 +2,8 @@
  * 拼装器：连接表 → 放置板块 → 物化世界蜂巢。
  * 障碍与黄金城在同文件后续函数中追加（见 buildSeamBlockades / attachEldorado）。
  */
-import type { GameMap, Hex, Axial, MoveSymbol } from '../types.js';
-import { key } from '../hex.js';
+import type { GameMap, Hex, Axial, MoveSymbol, Blockade, BlockadeEdge, Terrain } from '../types.js';
+import { key, neighbors, axialToPixel } from '../hex.js';
 import { OPPOSITE_EDGE, neighborCenter, type TileEdge } from './geometry.js';
 import { parsePlate, type PlateDef, type ParsedPlate } from './plate.js';
 
@@ -122,14 +122,98 @@ function materialize(placed: PlacedPlate[]): { hexes: Hex[]; startHexes: Axial[]
   return { hexes: [...hexByKey.values()], startHexes: starts.map((s) => s.coord) };
 }
 
+function blockadeTerrain(type: BlockadeType): { terrain: Terrain; symbol?: MoveSymbol } {
+  switch (type) {
+    case 'machete':
+      return { terrain: 'green', symbol: 'machete' };
+    case 'paddle':
+      return { terrain: 'blue', symbol: 'paddle' };
+    case 'coin':
+      return { terrain: 'yellow', symbol: 'coin' };
+    case 'discard':
+      return { terrain: 'rubble' };
+  }
+}
+
+function isBlockadeCandidate(hex: Hex): boolean {
+  return hex.terrain !== 'mountain' && hex.terrain !== 'rubble' && hex.terrain !== 'basecamp';
+}
+
+function worldCells(p: PlacedPlate): Axial[] {
+  return p.plate.cells.map((c) => ({ q: p.center.q + c.local.q, r: p.center.r + c.local.r }));
+}
+
+function buildSeamBlockades(def: MapDef, placed: PlacedPlate[], hexes: Hex[]): Blockade[] {
+  const byId = new Map(placed.map((p) => [p.instanceId, p]));
+  const byKey = new Map(hexes.map((h) => [key(h), h]));
+  const blockades: Blockade[] = [];
+
+  def.connections.forEach((conn, index) => {
+    if (!conn.blockade) return;
+    const from = byId.get(conn.from)!;
+    const to = byId.get(conn.to)!;
+    const toKeys = new Set(worldCells(to).map(key));
+    const fromCenter = axialToPixel(from.center, 1);
+    const toCenter = axialToPixel(to.center, 1);
+    const seamMid = { x: (fromCenter.x + toCenter.x) / 2, y: (fromCenter.y + toCenter.y) / 2 };
+    const cdx = toCenter.x - fromCenter.x;
+    const cdy = toCenter.y - fromCenter.y;
+    const clen = Math.hypot(cdx, cdy) || 1;
+    const seamDir = { x: -cdy / clen, y: cdx / clen };
+
+    const pairs: Array<{ a: Hex; b: Hex; score: number; order: number }> = [];
+    for (const aCell of worldCells(from)) {
+      const a = byKey.get(key(aCell));
+      if (!a) continue;
+      for (const n of neighbors(a)) {
+        if (!toKeys.has(key(n))) continue;
+        const b = byKey.get(key(n));
+        if (!b) continue;
+        const pa = axialToPixel(a, 1);
+        const pb = axialToPixel(b, 1);
+        const mid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
+        const score = Math.hypot(mid.x - seamMid.x, mid.y - seamMid.y);
+        const order = (mid.x - seamMid.x) * seamDir.x + (mid.y - seamMid.y) * seamDir.y;
+        pairs.push({ a, b, score, order });
+      }
+    }
+    if (pairs.length === 0) return;
+    pairs.sort((l, r) => l.order - r.order || key(l.a).localeCompare(key(r.a)));
+
+    const chosen =
+      pairs
+        .filter((p) => isBlockadeCandidate(p.a) && isBlockadeCandidate(p.b))
+        .sort((l, r) => l.score - r.score || key(l.a).localeCompare(key(r.a)))[0] ?? pairs[0];
+
+    const { terrain, symbol } = blockadeTerrain(conn.blockade.type);
+    const edges: BlockadeEdge[] = pairs.map((p) => ({
+      a: { q: p.a.q, r: p.a.r },
+      b: { q: p.b.q, r: p.b.r },
+    }));
+    const blockade: Blockade = {
+      id: `seam-${index + 1}-${conn.edge}`,
+      a: { q: chosen.a.q, r: chosen.a.r },
+      b: { q: chosen.b.q, r: chosen.b.r },
+      edges,
+      terrain,
+      cost: conn.blockade.cost,
+    };
+    if (symbol) blockade.symbol = symbol;
+    blockades.push(blockade);
+  });
+
+  return blockades;
+}
+
 export function assembleMap(def: MapDef, library: Record<string, PlateDef>): GameMap {
   const placed = placePlates(def, library);
   const { hexes, startHexes } = materialize(placed);
+  const blockades = buildSeamBlockades(def, placed, hexes);
   return {
     id: def.id,
     name: def.name,
     hexes,
-    blockades: [],
+    blockades,
     startHexes,
     finishHexes: [],
   };
