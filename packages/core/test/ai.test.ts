@@ -54,8 +54,14 @@ describe('AI', () => {
   });
 
   it('emits a standalone DiscardCards before EndTurn when resting', () => {
-    // Reuse the same "cannot make progress" setup as "rests (discards hand)" above.
-    // But give a non-empty hand so AI has cards to discard.
+    // Same seed-3 board as "rests (discards hand)" above: player 'a' starts at
+    // (-3,0) whose only traversable neighbours are green hexes (cost 1 and 2).
+    // Hand is set to a single sailor card (paddle symbol, power=1).
+    //   - Sailor cannot enter green terrain (needs machete) → no movement possible.
+    //   - Coin value of sailor = 0.5, so total coins (0.5) < cheapest market card
+    //     cost (1) → no buy possible.
+    // Therefore moved=false with a non-empty hand: the AI must take the rest path
+    // and emit DiscardCards([sailorId]) before EndTurn.
     let s = createGame(
       [
         { id: 'a', name: 'A', color: 'red' },
@@ -65,21 +71,14 @@ describe('AI', () => {
       3,
     );
     const a = s.players.find((p) => p.id === 'a')!;
-    // Keep the default hand (non-empty) but make them unplayable by clearing the
-    // hand of movement cards and replacing with coins (which require yellow terrain
-    // the starting position may not offer).
-    // Actually: just rely on the natural state — planTurn will determine if
-    // any progress is possible. We examine the plan empirically.
+    a.hand = [{ id: 'a:sailor#rest0', defId: 'sailor' }];
     const plan = planTurn(s, 'a');
     const di = plan.findIndex((x) => x.type === 'DiscardCards');
     const ei = plan.findIndex((x) => x.type === 'EndTurn');
-    if (di >= 0) {
-      // Hand was non-empty: AI should emit DiscardCards before EndTurn
-      expect(di).toBeLessThan(ei);
-      expect(plan[plan.length - 1].type).toBe('EndTurn');
-    } else {
-      // Hand was empty (or AI made progress): just verify EndTurn is last
-      expect(plan[plan.length - 1].type).toBe('EndTurn');
-    }
+    expect(di).toBeGreaterThanOrEqual(0);
+    expect(di).toBeLessThan(ei);
+    expect(plan[plan.length - 1].type).toBe('EndTurn');
+    const dc = plan[di] as { type: 'DiscardCards'; cardIds: string[] };
+    expect(dc.cardIds.length).toBeGreaterThan(0);
   });
 });

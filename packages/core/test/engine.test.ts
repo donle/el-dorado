@@ -779,7 +779,8 @@ describe('DiscardCards skill', () => {
     setTurn(s, 'p0');
     giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer']);
     const r = run(s, 'p0', { type: 'EndTurn' });
-    // 回合已切换；p0 的手牌不会因 EndTurn 被弃（仍是原 4 张，不再补抽）。
+    // EndTurn still draws up to HAND_SIZE, but need = HAND_SIZE - 4 = 0 here,
+    // so nothing is drawn and the hand stays at 4 cards; the leftover hand is NOT discarded.
     const p = r.state.players.find((x) => x.id === 'p0')!;
     expect(r.result.ok).toBe(true);
     expect(p.discard.length).toBe(0);
