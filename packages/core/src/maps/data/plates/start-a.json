@@ -1,0 +1,13 @@
+{
+  "id": "start-a",
+  "theme": "start",
+  "rows": [
+    "g1 y2 g2 g1",
+    "g2 g1 y1 g2 g3",
+    "g1 g2 g1 y2 g2 g1",
+    "S1 g2 g1 g3 y1 g2 g1",
+    "S2 g1 y2 g2 g1 g2",
+    "S3 g2 g1 y1 g2",
+    "S4 g1 g2 y2"
+  ]
+}

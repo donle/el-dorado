@@ -11,7 +11,7 @@
  * `planTurn` returns a full action sequence (ending in EndTurn) that the
  * server applies through the same validated reducer humans use.
  */
-import type { GameState, Player, Hex, MoveSymbol, Terrain, Axial, Blockade } from './types.js';
+import type { GameState, Player, Hex, MoveSymbol, Terrain, Axial, Blockade, MarketPile } from './types.js';
 import type { Action } from './actions.js';
 import { getDef, coinValue, movableSymbols } from './cards.js';
 import { neighbors, key } from './hex.js';
@@ -39,9 +39,13 @@ function requiredFor(h: Hex): MoveSymbol | null {
 
 function enterCost(h: Hex): number {
   if (h.terrain === 'start') return 1;
-  if (h.terrain === 'eldorado') return 1;
+  if (h.terrain === 'eldorado') return 0;
   if (h.terrain === 'finish') return Math.max(h.cost, 1);
   return h.cost;
+}
+
+function stepPathCost(h: Hex): number {
+  return h.terrain === 'eldorado' ? 0 : Math.max(enterCost(h), 1);
 }
 
 function sameCoord(a: Axial, b: Axial): boolean {
@@ -78,7 +82,7 @@ function capability(p: Player): Capability {
 function canTraverse(h: Hex, p: Player, cap: Capability, owned: number): boolean {
   if (h.terrain === 'mountain') return false;
   if (h.occupant && h.occupant !== p.id) return false;
-  if (h.terrain === 'eldorado') return cap.machete + cap.paddle + cap.coin > 0;
+  if (h.terrain === 'eldorado') return true;
   if (h.terrain === 'rubble' || h.terrain === 'basecamp') return owned >= h.cost;
   if (h.terrain === 'green') return cap.machete >= h.cost;
   if (h.terrain === 'blue') return cap.paddle >= h.cost;
@@ -132,7 +136,17 @@ export function pathToFinish(
       if (!edgePassable(curHex, hex)) continue;
       if (hex.terrain === 'eldorado' && curHex.terrain !== 'finish') continue;
       const blockade = blockadeBetween(state, curHex, hex);
-      const cost = blockade && !blockade.claimedBy ? blockade.cost : Math.max(enterCost(hex), 1);
+      // First crossing of a symbol seam pays the seam AND the destination
+      // terrain; a discard seam pays only its discard; an open/absent seam pays
+      // the destination terrain alone.
+      let cost: number;
+      if (blockade && !blockade.claimedBy) {
+        cost = blockadeRequiresDiscard(blockade)
+          ? blockade.cost
+          : blockade.cost + stepPathCost(hex);
+      } else {
+        cost = stepPathCost(hex);
+      }
       const nd = best + cost;
       if (nd < (dist.get(k) ?? Infinity)) {
         dist.set(k, nd);
@@ -163,6 +177,49 @@ interface Need {
   cost: number;
 }
 
+const MARKET_SLOTS = 6;
+
+function marketNeedsPromotion(state: GameState): boolean {
+  const active = state.market.filter((m) => m.onBoard && m.count > 0).length;
+  return active < MARKET_SLOTS && state.market.some((m) => !m.onBoard && m.count > 0);
+}
+
+function matchesNeed(defId: string, need: Need): boolean {
+  const d = getDef(defId);
+  const syms = movableSymbols(d.defId);
+  const ok = need.symbol === null ? syms.length > 0 : syms.includes(need.symbol);
+  return ok && d.power >= need.cost;
+}
+
+function cheapestFirst(a: MarketPile, b: MarketPile): number {
+  return getDef(a.defId).cost - getDef(b.defId).cost;
+}
+
+function chooseMarketPromotion(state: GameState, coins: number, gap: Need | null): string | null {
+  if (!marketNeedsPromotion(state)) return null;
+  const reserve = state.market.filter((m) => !m.onBoard && m.count > 0);
+
+  if (gap) {
+    const useful = reserve.filter((m) => matchesNeed(m.defId, gap)).sort(cheapestFirst);
+    const affordableUseful = useful.filter((m) => getDef(m.defId).cost <= coins);
+    if (affordableUseful.length > 0) return affordableUseful[0].defId;
+    if (useful.length > 0) return useful[0].defId;
+  }
+
+  const affordable = reserve.filter((m) => getDef(m.defId).cost <= coins);
+  const econ = affordable
+    .filter((m) => coinValue(m.defId) >= 1)
+    .sort((a, b) => coinValue(b.defId) - coinValue(a.defId) || cheapestFirst(a, b));
+  if (econ.length > 0) return econ[0].defId;
+
+  const movement = affordable
+    .filter((m) => movableSymbols(m.defId).length > 0)
+    .sort(cheapestFirst);
+  if (movement.length > 0) return movement[0].defId;
+
+  return reserve.slice().sort(cheapestFirst)[0]?.defId ?? null;
+}
+
 export function planTurn(state: GameState, playerId: string): Action[] {
   const p = state.players.find((x) => x.id === playerId);
   if (!p) return [{ type: 'EndTurn' }];
@@ -181,23 +238,56 @@ export function planTurn(state: GameState, playerId: string): Action[] {
     if (!blockade || blockade.claimedBy) return true;
     if (blockadeRequiresDiscard(blockade)) return owned >= blockade.cost;
     const symbol = blockadeMoveSymbol(blockade);
-    return !!symbol && cap[symbol] >= blockade.cost;
+    if (!symbol) return false;
+    // One mover, one symbol: it must clear the seam AND enter the destination,
+    // so the destination terrain must accept the seam symbol, with power enough
+    // for both costs combined.
+    const destReq = requiredFor(to);
+    if (destReq !== null && destReq !== symbol) return false;
+    return cap[symbol] >= blockade.cost + stepPathCost(to);
   };
   const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned), edgeCanTraverse);
   let plannedPosition: Axial = { ...p.position };
   for (const hex of path) {
     const blockade = blockadeBetween(state, plannedPosition, hex);
-    const blockadeClear = !!blockade && !blockade.claimedBy && blockadeRequiresDiscard(blockade);
-    const required = blockade && !blockade.claimedBy && !blockadeClear ? blockadeMoveSymbol(blockade) : requiredFor(hex);
     const isClear = hex.terrain === 'rubble' || hex.terrain === 'basecamp';
 
-    if (blockadeClear || isClear) {
-      const cost = blockadeClear ? blockade.cost : hex.cost;
-      const pick = available()
-        .slice()
-        .sort((a, b) => getDef(a.defId).power - getDef(b.defId).power)
-        .slice(0, cost);
-      if (pick.length < cost) break; // not enough cards in hand this turn
+    // 1) Remove an unclaimed edge blockade first (stay put), then fall through to step.
+    if (blockade && !blockade.claimedBy) {
+      if (blockadeRequiresDiscard(blockade)) {
+        const pick = available().slice().sort((a, b) => getDef(a.defId).power - getDef(b.defId).power).slice(0, blockade.cost);
+        if (pick.length < blockade.cost) break;
+        pick.forEach((c) => used.add(c.id));
+        actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id, cardIds: pick.map((c) => c.id) });
+      } else {
+        const seamSym = blockadeMoveSymbol(blockade)!;
+        // Need one mover of seamSym with enough power for seam.cost + far terrain.
+        const destDeduct = hex.terrain === 'eldorado' ? 0 : requiredFor(hex) === null ? 1 : enterCost(hex);
+        const need = blockade.cost + destDeduct;
+        if (mover && mover.symbol === seamSym && mover.remaining >= need) {
+          actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id });
+          mover.remaining -= blockade.cost;
+        } else {
+          const cand = available()
+            .map((c) => ({ c, sym: declareSymbol(c.defId, seamSym), pow: getDef(c.defId).power }))
+            .filter((x) => x.sym !== null && x.pow >= need)
+            .sort((a, b) => a.pow - b.pow)[0];
+          if (!cand) break;
+          used.add(cand.c.id);
+          actions.push({ type: 'PlayMovementCard', cardId: cand.c.id, symbol: cand.sym! });
+          actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id });
+          mover = { symbol: cand.sym!, remaining: cand.pow - blockade.cost };
+        }
+      }
+      moved = true;
+      // blockade now open in-plan: fall through to step onto `hex` by terrain.
+    }
+
+    // 2) Clear a rubble/basecamp DESTINATION HEX (unchanged: enter+clear).
+    if (isClear) {
+      const cost = hex.cost;
+      const pick = available().slice().sort((a, b) => getDef(a.defId).power - getDef(b.defId).power).slice(0, cost);
+      if (pick.length < cost) break;
       pick.forEach((c) => used.add(c.id));
       actions.push({ type: 'ClearSpace', to: { q: hex.q, r: hex.r }, cardIds: pick.map((c) => c.id) });
       mover = null;
@@ -206,8 +296,15 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       continue;
     }
 
-    const deduct = blockade && !blockade.claimedBy ? blockade.cost : required === null ? 1 : enterCost(hex);
-
+    // 3) Normal step onto `hex` by its terrain (blockade, if any, now open).
+    const required = requiredFor(hex);
+    const deduct = hex.terrain === 'eldorado' ? 0 : required === null ? 1 : enterCost(hex);
+    if (hex.terrain === 'eldorado') {
+      actions.push({ type: 'StepTo', to: { q: hex.q, r: hex.r } });
+      moved = true;
+      plannedPosition = { q: hex.q, r: hex.r };
+      continue;
+    }
     if (mover && mover.remaining >= deduct && (required === null || required === mover.symbol)) {
       actions.push({ type: 'StepTo', to: { q: hex.q, r: hex.r } });
       mover.remaining -= deduct;
@@ -215,13 +312,11 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       plannedPosition = { q: hex.q, r: hex.r };
       continue;
     }
-
     const candidates = available()
       .map((c) => ({ c, sym: declareSymbol(c.defId, required), pow: getDef(c.defId).power }))
       .filter((x) => x.sym !== null && x.pow >= deduct)
       .sort((a, b) => a.pow - b.pow);
-    if (candidates.length === 0) break; // traversable, but not with this turn's hand
-
+    if (candidates.length === 0) break;
     const chosen = candidates[0];
     used.add(chosen.c.id);
     actions.push({ type: 'PlayMovementCard', cardId: chosen.c.id, symbol: chosen.sym! });
@@ -234,8 +329,6 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   // --- buying ---
   const rest = available();
   const coins = rest.reduce((sum, c) => sum + coinValue(c.defId), 0);
-  const onBoard = state.market.filter((m) => m.onBoard && m.count > 0);
-  const affordable = onBoard.filter((m) => getDef(m.defId).cost <= coins);
 
   // What capability do we lack? Look at the ideal (unrestricted) route and find
   // the first hex our current deck can't traverse — buy toward closing that gap.
@@ -252,8 +345,10 @@ export function planTurn(state: GameState, playerId: string): Action[] {
         }
       } else {
         const symbol = blockadeMoveSymbol(blockade);
-        if (symbol && cap[symbol] < blockade.cost) {
-          gap = { symbol, cost: blockade.cost };
+        // Need enough of one symbol to clear the seam AND enter the far hex.
+        const need = blockade.cost + Math.max(enterCost(h), 1);
+        if (symbol && cap[symbol] < need) {
+          gap = { symbol, cost: need };
           break;
         }
       }
@@ -265,14 +360,15 @@ export function planTurn(state: GameState, playerId: string): Action[] {
     gapPosition = { q: h.q, r: h.r };
   }
 
+  const promotedDefId = chooseMarketPromotion(state, coins, gap);
+  if (promotedDefId) actions.push({ type: 'PromoteMarket', defId: promotedDefId });
+
+  const onBoard = state.market.filter((m) => (m.onBoard || m.defId === promotedDefId) && m.count > 0);
+  const affordable = onBoard.filter((m) => getDef(m.defId).cost <= coins);
+
   const buyableForGap = (n: Need) =>
     affordable
-      .filter((m) => {
-        const d = getDef(m.defId);
-        const syms = movableSymbols(d.defId);
-        const ok = n.symbol === null ? syms.length > 0 : syms.includes(n.symbol);
-        return ok && d.power >= n.cost;
-      })
+      .filter((m) => matchesNeed(m.defId, n))
       .sort((a, b) => getDef(a.defId).cost - getDef(b.defId).cost);
 
   let target: string | null = null;
@@ -314,7 +410,10 @@ export function planTurn(state: GameState, playerId: string): Action[] {
 
   // If we made no progress, rest: discard the (useless this turn) hand so we
   // draw a fresh one next turn. Without this a stuck hand never cycles.
-  const discardCardIds = moved ? undefined : available().map((c) => c.id);
-  actions.push({ type: 'EndTurn', discardCardIds });
+  if (!moved) {
+    const cardIds = available().map((c) => c.id);
+    if (cardIds.length) actions.push({ type: 'DiscardCards', cardIds });
+  }
+  actions.push({ type: 'EndTurn' });
   return actions;
 }

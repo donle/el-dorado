@@ -1,0 +1,13 @@
+{
+  "id": "river-a",
+  "theme": "river",
+  "rows": [
+    "b2 g1 b1 b3",
+    "b1 b2 g2 b1 b2",
+    "g1 b2 b1 g2 b3 b1",
+    "b2 b1 MM b3 g2 b1 b2",
+    "b1 g2 R2 b2 b1 g1",
+    "b2 b1 g3 b2 b1",
+    "g1 b2 b1 b3"
+  ]
+}

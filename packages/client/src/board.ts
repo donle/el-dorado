@@ -16,7 +16,9 @@ import { BoardBackground } from './background.js';
 
 const HEX_SIZE = 1;
 const GAP = 0.94;
-const MAX_PIXEL_RATIO = 1.5;
+const MAX_PIXEL_RATIO = 1.25;
+const SELF_MARKER_FRAME_MS = 1000 / 12;
+const HIDDEN_TAB_FRAME_MS = 1000;
 const TOP_DOWN_POLAR = 0.001;
 const TERMINAL_HEIGHT = 0.68;
 const COST_LABEL_GEO = new THREE.PlaneGeometry(0.92, 0.92).rotateX(-Math.PI / 2);
@@ -34,6 +36,10 @@ const SELF_ARROW_SHAFT_GEO = new THREE.CylinderGeometry(0.055, 0.055, SELF_ARROW
 const SELF_ARROW_SHAFT_RING_GEO = new THREE.TorusGeometry(0.064, 0.009, 8, 28).rotateX(Math.PI / 2);
 const SELF_ARROW_HEAD_BASE_RING_GEO = new THREE.TorusGeometry(0.224, 0.012, 8, 32).rotateX(Math.PI / 2);
 const SELF_ARROW_GUARD_GEO = new THREE.CylinderGeometry(0.13, 0.13, 0.026, 28);
+const ACTIVE_PAWN_GLOW_GEO = new THREE.PlaneGeometry(1.45, 1.45).rotateX(-Math.PI / 2);
+const ACTIVE_PAWN_RING_GEO = new THREE.RingGeometry(0.42, 0.56, 48).rotateX(-Math.PI / 2);
+const ACTIVE_PAWN_RAY_GEO = new THREE.PlaneGeometry(0.44, 1.08);
+const ACTIVE_PAWN_FLAME_GEO = new THREE.ConeGeometry(0.16, 0.74, 5, 1, true);
 const SELF_ARROW_BASE_Y = 2.02;
 const SELF_ARROW_BOB = 0.14;
 const PICK_MATERIAL = new THREE.MeshBasicMaterial({
@@ -115,6 +121,12 @@ interface BlockadeSurface {
   geometry: THREE.BufferGeometry;
 }
 
+interface PawnState {
+  group: THREE.Group;
+  target: THREE.Vector3;
+  selfMarker: THREE.Group;
+}
+
 function terrainHeight(t: Terrain, cost: number): number {
   if (t === 'eldorado') return TERMINAL_HEIGHT;
   if (t === 'mountain') return 0.52;
@@ -165,12 +177,15 @@ export class Board {
   private decor = new Decorations();
   private background = new BoardBackground();
   private frameRequested = false;
+  private frameDelayTimer: number | null = null;
   private lastFrameTime = 0;
   private viewMode: '3d' | '2d' = '3d';
   private selfPlayerId: string | null = null;
   private lastFit: { cx: number; cz: number; dist: number } | null = null;
   // Persistent pawns so movement can tween instead of snapping.
-  private pawns = new Map<string, { group: THREE.Group; target: THREE.Vector3; selfMarker: THREE.Group }>();
+  private pawns = new Map<string, PawnState>();
+  private pawnGlowTextureCache: THREE.CanvasTexture | null = null;
+  private pawnRayTextureCache: THREE.CanvasTexture | null = null;
   private highlightMeshes: THREE.Mesh[] = [];
   private ringGeo: THREE.BufferGeometry | null = null;
   private inspectionFillGeo = new THREE.CylinderGeometry(HEX_SIZE * 0.84, HEX_SIZE * 0.84, 0.012, 6);
@@ -234,9 +249,13 @@ export class Board {
   onBlockadeClick: (id: string) => void = () => {};
 
   constructor(private canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'low-power' });
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: (window.devicePixelRatio || 1) <= 1.25,
+      powerPreference: 'low-power',
+    });
     this.renderer.autoClear = false;
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, MAX_PIXEL_RATIO));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
     this.renderer.shadowMap.enabled = this.realShadows;
     if (this.realShadows) this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setClearColor(0x8fb8c2);
@@ -299,6 +318,9 @@ export class Board {
 
     window.addEventListener('resize', () => this.resize());
     window.addEventListener('eldorado:texture-loaded', () => this.requestFrame());
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) this.requestFrame();
+    });
     // Distinguish a click (select hex) from a drag (camera move).
     canvas.addEventListener('pointerdown', (e) => (this.downPos = { x: e.clientX, y: e.clientY }));
     canvas.addEventListener('pointerup', (e) => this.handlePointerUp(e));
@@ -336,7 +358,23 @@ export class Board {
     }
   }
 
-  private requestFrame(): void {
+  private requestFrame(delayMs = 0): void {
+    if (delayMs > 0) {
+      if (this.frameRequested || this.frameDelayTimer !== null) return;
+      this.frameDelayTimer = window.setTimeout(() => {
+        this.frameDelayTimer = null;
+        this.queueFrame();
+      }, delayMs);
+      return;
+    }
+    if (this.frameDelayTimer !== null) {
+      window.clearTimeout(this.frameDelayTimer);
+      this.frameDelayTimer = null;
+    }
+    this.queueFrame();
+  }
+
+  private queueFrame(): void {
     if (this.frameRequested) return;
     this.frameRequested = true;
     requestAnimationFrame((time) => this.drawFrame(time));
@@ -348,11 +386,13 @@ export class Board {
     this.lastFrameTime = time;
     const moving = this.stepPawns(dt);
     const animatingSelfMarker = this.animateSelfMarkers(time);
+    const animatingPawnGlow = this.animatePawnTurnGlows(time);
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
     this.renderer.clearDepth();
     this.renderer.render(this.overlayScene, this.camera);
-    if (moving || animatingSelfMarker) this.requestFrame();
+    if (moving) this.requestFrame();
+    else if (animatingSelfMarker || animatingPawnGlow) this.requestFrame(document.hidden ? HIDDEN_TAB_FRAME_MS : SELF_MARKER_FRAME_MS);
   }
 
   private stepPawns(dt: number): boolean {
@@ -394,9 +434,52 @@ export class Board {
     return visible;
   }
 
+  private animatePawnTurnGlows(time: number): boolean {
+    let visible = false;
+    const t = time * 0.001;
+    for (const pawn of this.pawns.values()) {
+      const group = pawn.group.userData.turnGlow as THREE.Group | undefined;
+      if (!group?.visible) continue;
+      visible = true;
+
+      const pulse = (Math.sin(t * 3.4) + 1) / 2;
+      group.scale.setScalar(1 + (pulse - 0.5) * 0.08);
+      group.rotation.y = Math.sin(t * 1.2) * 0.05;
+
+      const glowMat = group.userData.glowMat as THREE.MeshBasicMaterial | undefined;
+      const ringMat = group.userData.ringMat as THREE.MeshBasicMaterial | undefined;
+      glowMat && (glowMat.opacity = 0.32 + pulse * 0.08);
+      ringMat && (ringMat.opacity = 0.42 + pulse * 0.11);
+
+      const rays = group.userData.rays as THREE.Mesh[] | undefined;
+      rays?.forEach((ray, i) => {
+        const phase = i * 1.7;
+        const wave = (Math.sin(t * 4.2 + phase) + 1) / 2;
+        ray.rotation.y = (ray.userData.baseRotation as number) + Math.sin(t * 2 + phase) * 0.08;
+        ray.scale.set(0.92 + wave * 0.14, 0.9 + wave * 0.18, 1);
+        const mat = ray.material as THREE.MeshBasicMaterial;
+        mat.opacity = 0.3 + wave * 0.13;
+      });
+
+      const flames = group.userData.flames as THREE.Mesh[] | undefined;
+      flames?.forEach((flame, i) => {
+        const phase = i * 1.35 + 0.6;
+        const wave = (Math.sin(t * 5.1 + phase) + 1) / 2;
+        const baseY = flame.userData.baseY as number;
+        flame.position.y = baseY + wave * 0.035;
+        flame.rotation.y = (flame.userData.baseRotation as number) + Math.sin(t * 2.8 + phase) * 0.12;
+        flame.scale.set(0.86 + wave * 0.16, 0.86 + wave * 0.22, 0.86 + wave * 0.16);
+        const mat = flame.material as THREE.MeshBasicMaterial;
+        mat.opacity = 0.34 + wave * 0.15;
+      });
+    }
+    return visible;
+  }
+
   private resize(): void {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -567,6 +650,7 @@ export class Board {
 
     // Reconcile persistent pawns (so movement tweens instead of snapping).
     const present = new Set<string>();
+    const activePlayerId = state.phase === 'playing' ? state.turn?.playerId ?? null : null;
     for (const pl of state.players) {
       present.add(pl.id);
       const { x, z } = this.worldXZ(pl.position);
@@ -584,6 +668,7 @@ export class Board {
         pawn.target.set(x, y, z);
         pawn.selfMarker.visible = pl.id === this.selfPlayerId;
       }
+      this.setPawnTurnActive(pawn, pl.id === activePlayerId);
     }
     for (const [id, pawn] of this.pawns) {
       if (!present.has(id)) {
@@ -866,6 +951,7 @@ export class Board {
 
   private makePawn(color: number, x: number, y: number, z: number): THREE.Group {
     const g = new THREE.Group();
+    const turnGlow = this.makePawnTurnGlow(color);
     const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.1 });
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.4, 0.18, 20), mat);
     base.position.y = 0.09;
@@ -879,10 +965,169 @@ export class Board {
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.y = 0.02;
-    g.add(ring, base, body, head);
+    g.add(turnGlow, ring, base, body, head);
+    g.userData.turnGlow = turnGlow;
     this.enableSoftShadows(g);
     g.position.set(x, y, z);
     return g;
+  }
+
+  private setPawnTurnActive(pawn: PawnState, active: boolean): void {
+    const glow = pawn.group.userData.turnGlow as THREE.Group | undefined;
+    if (glow) glow.visible = active;
+  }
+
+  private makePawnTurnGlow(color: number): THREE.Group {
+    const group = new THREE.Group();
+    group.position.y = 0.026;
+    group.visible = false;
+    group.frustumCulled = false;
+
+    const tint = new THREE.Color(color).lerp(new THREE.Color(0xffd166), 0.48);
+    const glowMat = new THREE.MeshBasicMaterial({
+      map: this.pawnGlowTexture(),
+      color: tint,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const glow = new THREE.Mesh(
+      ACTIVE_PAWN_GLOW_GEO,
+      glowMat,
+    );
+    glow.renderOrder = 36;
+
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xffd166,
+      transparent: true,
+      opacity: 0.48,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const ring = new THREE.Mesh(
+      ACTIVE_PAWN_RING_GEO,
+      ringMat,
+    );
+    ring.position.y = 0.006;
+    ring.renderOrder = 37;
+
+    const rays: THREE.Mesh[] = [];
+    for (let i = 0; i < 3; i++) {
+      const baseRotation = (Math.PI * 2 * i) / 3 + 0.24;
+      const rayMat = new THREE.MeshBasicMaterial({
+        map: this.pawnRayTexture(),
+        color: tint,
+        transparent: true,
+        opacity: 0.36,
+        depthWrite: false,
+        depthTest: true,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      });
+      const ray = new THREE.Mesh(ACTIVE_PAWN_RAY_GEO, rayMat);
+      ray.position.y = 0.66;
+      ray.rotation.y = baseRotation;
+      ray.renderOrder = 38 + i;
+      ray.userData.baseRotation = baseRotation;
+      rays.push(ray);
+      group.add(ray);
+    }
+
+    const flames: THREE.Mesh[] = [];
+    for (let i = 0; i < 3; i++) {
+      const angle = (Math.PI * 2 * i) / 3 + 0.62;
+      const flameMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(0xffb74d).lerp(tint, 0.35),
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false,
+        depthTest: true,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      });
+      const flame = new THREE.Mesh(ACTIVE_PAWN_FLAME_GEO, flameMat);
+      flame.position.set(Math.cos(angle) * 0.32, 0.46, Math.sin(angle) * 0.32);
+      flame.rotation.y = angle;
+      flame.renderOrder = 42 + i;
+      flame.userData.baseRotation = angle;
+      flame.userData.baseY = 0.46;
+      flames.push(flame);
+      group.add(flame);
+    }
+
+    group.userData.glowMat = glowMat;
+    group.userData.ringMat = ringMat;
+    group.userData.rays = rays;
+    group.userData.flames = flames;
+    group.add(glow, ring);
+    return group;
+  }
+
+  private pawnGlowTexture(): THREE.CanvasTexture {
+    if (this.pawnGlowTextureCache) return this.pawnGlowTextureCache;
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d')!;
+    const gradient = ctx.createRadialGradient(64, 64, 5, 64, 64, 62);
+    gradient.addColorStop(0, 'rgba(255, 226, 138, 0.36)');
+    gradient.addColorStop(0.36, 'rgba(255, 209, 102, 0.18)');
+    gradient.addColorStop(0.72, 'rgba(255, 209, 102, 0.055)');
+    gradient.addColorStop(1, 'rgba(255, 209, 102, 0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    this.pawnGlowTextureCache = texture;
+    return texture;
+  }
+
+  private pawnRayTexture(): THREE.CanvasTexture {
+    if (this.pawnRayTextureCache) return this.pawnRayTextureCache;
+    const canvas = document.createElement('canvas');
+    canvas.width = 96;
+    canvas.height = 192;
+    const ctx = canvas.getContext('2d')!;
+
+    const bodyGradient = ctx.createLinearGradient(0, canvas.height, 0, 0);
+    bodyGradient.addColorStop(0, 'rgba(255, 185, 70, 0)');
+    bodyGradient.addColorStop(0.18, 'rgba(255, 196, 82, 0.32)');
+    bodyGradient.addColorStop(0.52, 'rgba(255, 216, 115, 0.48)');
+    bodyGradient.addColorStop(0.82, 'rgba(255, 235, 170, 0.16)');
+    bodyGradient.addColorStop(1, 'rgba(255, 235, 170, 0)');
+
+    ctx.fillStyle = bodyGradient;
+    ctx.beginPath();
+    ctx.moveTo(48, 188);
+    ctx.bezierCurveTo(21, 142, 30, 72, 44, 12);
+    ctx.bezierCurveTo(62, 72, 78, 142, 48, 188);
+    ctx.closePath();
+    ctx.fill();
+
+    const coreGradient = ctx.createLinearGradient(0, 180, 0, 20);
+    coreGradient.addColorStop(0, 'rgba(255, 245, 190, 0)');
+    coreGradient.addColorStop(0.42, 'rgba(255, 246, 196, 0.42)');
+    coreGradient.addColorStop(1, 'rgba(255, 246, 196, 0)');
+    ctx.fillStyle = coreGradient;
+    ctx.beginPath();
+    ctx.moveTo(48, 174);
+    ctx.bezierCurveTo(39, 130, 40, 72, 48, 30);
+    ctx.bezierCurveTo(57, 75, 60, 130, 48, 174);
+    ctx.closePath();
+    ctx.fill();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    this.pawnRayTextureCache = texture;
+    return texture;
   }
 
   private makeSelfMarker(): THREE.Group {

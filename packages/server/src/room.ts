@@ -20,6 +20,7 @@ interface Member {
   name: string;
   color: PlayerColor;
   isAI: boolean;
+  offline: boolean;
   send: Send | null;
 }
 
@@ -46,7 +47,7 @@ export class Room {
   addHuman(name: string, send: Send): Member {
     if (this.members.length >= 4) throw new Error('房间人数已满');
     if (this.phase !== 'lobby') throw new Error('游戏已经开始');
-    const m: Member = { id: newId('h'), name: name || '玩家', color: this.nextColor(), isAI: false, send };
+    const m: Member = { id: newId('h'), name: name || '玩家', color: this.nextColor(), isAI: false, offline: false, send };
     this.members.push(m);
     if (!this.hostId) this.hostId = m.id;
     return m;
@@ -56,25 +57,41 @@ export class Room {
     if (this.members.length >= 4) throw new Error('房间人数已满');
     if (this.phase !== 'lobby') throw new Error('游戏已经开始');
     const n = this.members.filter((m) => m.isAI).length + 1;
-    const m: Member = { id: newId('ai'), name: `电脑 ${n}`, color: this.nextColor(), isAI: true, send: null };
+    const m: Member = { id: newId('ai'), name: `电脑 ${n}`, color: this.nextColor(), isAI: true, offline: false, send: null };
     this.members.push(m);
     return m;
   }
 
   remove(playerId: string): void {
     this.members = this.members.filter((m) => m.id !== playerId);
-    if (this.hostId === playerId) this.hostId = this.members.find((m) => !m.isAI)?.id ?? '';
+    this.assignHost();
   }
 
   reconnect(playerId: string, send: Send): Member | null {
     const m = this.members.find((x) => x.id === playerId);
-    if (m) m.send = send;
+    if (m) {
+      m.send = send;
+      if (m.offline) {
+        m.isAI = false;
+        m.offline = false;
+        this.syncGamePlayer(m);
+      }
+      this.assignHost();
+    }
     return m ?? null;
   }
 
-  disconnect(playerId: string): void {
+  disconnect(playerId: string): boolean {
     const m = this.members.find((x) => x.id === playerId);
-    if (m) m.send = null;
+    if (!m) return false;
+    m.send = null;
+    if (this.phase === 'playing' && !m.isAI && !m.offline) {
+      m.isAI = true;
+      m.offline = true;
+      this.syncGamePlayer(m);
+    }
+    this.assignHost();
+    return true;
   }
 
   member(id: string): Member | undefined {
@@ -92,7 +109,8 @@ export class Room {
         name: m.name,
         color: m.color,
         isAI: m.isAI,
-        connected: m.isAI ? true : m.send !== null,
+        connected: m.offline ? false : m.isAI || m.send !== null,
+        offline: m.offline,
       })),
     };
   }
@@ -105,9 +123,17 @@ export class Room {
       name: m.name,
       color: m.color,
       isAI: m.isAI,
+      offline: m.offline,
     }));
     this.game = createGame(seeds, mapId, seed);
     this.phase = 'playing';
+  }
+
+  returnToLobby(): void {
+    if (this.phase !== 'finished') throw new Error('游戏还没有结束');
+    this.game = null;
+    this.phase = 'lobby';
+    this.assignHost();
   }
 
   broadcast(msg: ServerMessage): void {
@@ -136,7 +162,10 @@ export class Room {
     if (!res.result.ok) return { ok: false, error: res.result.error };
     this.game = res.state;
     this.broadcastState(res.result.events);
-    if (this.game.phase === 'finished') this.phase = 'finished';
+    if (this.game.phase === 'finished') {
+      this.phase = 'finished';
+      this.broadcastRoom();
+    }
 
     this.runAITurns();
     return { ok: true };
@@ -177,7 +206,27 @@ export class Room {
       }
       this.broadcastState(events);
     }
-    if (this.game && this.game.phase === 'finished') this.phase = 'finished';
+    if (this.game && this.game.phase === 'finished' && this.phase !== 'finished') {
+      this.phase = 'finished';
+      this.broadcastRoom();
+    }
+  }
+
+  private syncGamePlayer(member: Member): void {
+    const p = this.game?.players.find((x) => x.id === member.id);
+    if (!p) return;
+    p.isAI = member.isAI;
+    p.offline = member.offline;
+  }
+
+  private assignHost(): void {
+    const current = this.members.find((m) => m.id === this.hostId);
+    if (current && !current.isAI && !current.offline && current.send) return;
+    this.hostId =
+      this.members.find((m) => !m.isAI && !m.offline && m.send)?.id ??
+      this.members.find((m) => !m.offline)?.id ??
+      this.members[0]?.id ??
+      '';
   }
 }
 

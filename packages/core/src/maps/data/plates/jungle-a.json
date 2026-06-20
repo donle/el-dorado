@@ -1,0 +1,13 @@
+{
+  "id": "jungle-a",
+  "theme": "jungle",
+  "rows": [
+    "g2 b1 g1 g3",
+    "g1 g2 b2 g1 g2",
+    "b1 g2 g1 g2 b3 g1",
+    "g2 g1 MM g3 b2 g1 g2",
+    "g1 b2 C2 g2 g1 b1",
+    "g2 g1 b3 g2 g1",
+    "b1 g2 g1 g3"
+  ]
+}

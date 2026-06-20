@@ -1,0 +1,13 @@
+{
+  "id": "village-a",
+  "theme": "village",
+  "rows": [
+    "y2 g1 y1 y3",
+    "y1 y2 g2 y1 y2",
+    "g1 y2 C2 y2 y3 y1",
+    "y2 y1 g3 R2 y2 y1 g2",
+    "y1 g2 y2 y1 y3 g1",
+    "y2 y1 g1 y2 y1",
+    "g1 y2 y1 y3"
+  ]
+}

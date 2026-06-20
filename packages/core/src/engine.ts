@@ -90,12 +90,18 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
       return stepTo(state, playerId, action.to, events);
     case 'ClearSpace':
       return clearSpace(state, playerId, action.to, action.cardIds, events);
+    case 'PromoteMarket':
+      return promoteMarket(state, playerId, action.defId, events);
     case 'BuyCard':
       return buyCard(state, playerId, action.defId, action.paymentCardIds, events);
+    case 'RemoveBlockade':
+      return removeBlockade(state, playerId, action.blockadeId, action.cardIds ?? [], events);
+    case 'DiscardCards':
+      return discardCards(state, playerId, action.cardIds, events);
     case 'UseAbility':
       return useAbility(state, playerId, action, events);
     case 'EndTurn':
-      return endTurn(state, playerId, action.discardCardIds ?? [], events);
+      return endTurn(state, playerId, events);
   }
 }
 
@@ -210,9 +216,6 @@ function assertEnterable(state: GameState, p: Player, to: Hex): void {
 
 function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent[]): void {
   const p = player(state, playerId);
-  const turn = state.turn!;
-  const mover = turn.activeMover;
-  if (!mover || mover.remaining <= 0) throw new RuleError('没有可用的移动牌');
   const hex = hexAt(state, to);
   if (!hex) throw new RuleError('没有这个地格');
   assertEnterable(state, p, hex);
@@ -221,29 +224,41 @@ function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent
     throw new RuleError('需要弃牌清除此格后才能进入');
   }
 
-  // Unclaimed seam blockades are crossed as their own zig-zag terrain. The
-  // first player to pay the marker claims it; later crossings use the normal
-  // destination terrain requirement.
-  const blockade = blockadeBetween(state, p.position, hex);
-  let required: MoveSymbol | null;
-  let deduct: number;
-  if (blockade && !blockade.claimedBy) {
-    required = blockadeMoveSymbol(blockade);
-    if (required === null) throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
-    deduct = blockade.cost;
-  } else if (hex.terrain === 'eldorado') {
-    required = null;
-    deduct = 1;
+  // The destination hex's own terrain requirement (symbol + cost).
+  let destRequired: MoveSymbol | null;
+  let destDeduct: number;
+  if (hex.terrain === 'eldorado') {
+    destRequired = null;
+    destDeduct = 0;
   } else if (hex.terrain === 'finish') {
-    required = hex.reqSymbol ?? null;
-    deduct = Math.max(hex.cost, 1);
+    destRequired = hex.reqSymbol ?? null;
+    destDeduct = Math.max(hex.cost, 1);
   } else if (hex.terrain === 'start') {
-    required = null;
-    deduct = 1;
+    destRequired = null;
+    destDeduct = 1;
   } else {
-    required = terrainSymbol(hex.terrain);
-    deduct = hex.cost;
+    destRequired = terrainSymbol(hex.terrain);
+    destDeduct = hex.cost;
   }
+
+  // An unclaimed seam must be removed first via RemoveBlockade (a separate
+  // action that claims the marker in place). Stepping is then a normal move
+  // that pays only the destination terrain. Once claimed the seam is open, so
+  // claimBlockade below is a no-op for an already-claimed (or absent) seam.
+  const blockade = blockadeBetween(state, p.position, hex);
+  if (blockade && !blockade.claimedBy) {
+    throw new RuleError('需要先移除连接地形障碍');
+  }
+  if (hex.terrain === 'eldorado') {
+    claimBlockade(p, blockade, events);
+    moveTo(state, p, hex, events);
+    return;
+  }
+  const turn = state.turn!;
+  const mover = turn.activeMover;
+  if (!mover || mover.remaining <= 0) throw new RuleError('没有可用的移动牌');
+  const required = destRequired;
+  const deduct = destDeduct;
   if (required !== null && required !== mover.symbol) {
     throw new RuleError(`需要${symbolLabel(required)}才能进入`);
   }
@@ -264,24 +279,6 @@ function clearSpace(
   const p = player(state, playerId);
   const hex = hexAt(state, to);
   if (!hex) throw new RuleError('没有这个地格');
-  const blockade = blockadeBetween(state, p.position, hex);
-  if (blockade && !blockade.claimedBy) {
-    if (!blockadeRequiresDiscard(blockade)) {
-      throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
-    }
-    assertEnterable(state, p, hex);
-    if (cardIds.length !== blockade.cost) {
-      throw new RuleError(`需要正好选择 ${blockade.cost} 张牌`);
-    }
-    for (const id of cardIds) {
-      p.discard.push(takeFromHand(p, id));
-    }
-    state.turn!.activeMover = undefined;
-    claimBlockade(p, blockade, events);
-    moveTo(state, p, hex, events);
-    events.push({ type: 'spaceCleared', playerId, to: { q: to.q, r: to.r }, removed: false });
-    return;
-  }
   if (hex.terrain !== 'rubble' && hex.terrain !== 'basecamp') {
     throw new RuleError('这个地格不能被清除');
   }
@@ -301,16 +298,71 @@ function clearSpace(
   events.push({ type: 'spaceCleared', playerId, to: { q: to.q, r: to.r }, removed });
 }
 
-// --- buying ---
+function removeBlockade(
+  state: GameState,
+  playerId: string,
+  blockadeId: string,
+  cardIds: string[],
+  events: GameEvent[],
+): void {
+  const p = player(state, playerId);
+  const blockade = state.blockades.find((b) => b.id === blockadeId);
+  if (!blockade) throw new RuleError('没有这个连接地形');
+  if (blockade.claimedBy) throw new RuleError('这块连接地形已经打开');
+  // The player must be standing beside one of this seam's covered edges.
+  const beside = blockade.edges.some(
+    (e) => sameCoord(e.a, p.position) || sameCoord(e.b, p.position),
+  );
+  if (!beside) throw new RuleError('当前棋子不在这块连接地形旁边');
 
-function freeOnBoardSlot(state: GameState): boolean {
-  const onBoard = state.market.filter((m) => m.onBoard);
-  return onBoard.some((m) => m.count === 0) || onBoard.length < 6;
+  if (blockadeRequiresDiscard(blockade)) {
+    if (cardIds.length !== blockade.cost) {
+      throw new RuleError(`需要正好选择 ${blockade.cost} 张牌`);
+    }
+    for (const id of cardIds) p.discard.push(takeFromHand(p, id));
+    claimBlockade(p, blockade, events);
+    return; // 留在原地，不动 activeMover
+  }
+
+  const sym = blockadeMoveSymbol(blockade);
+  const mover = state.turn!.activeMover;
+  if (!mover || sym === null || mover.symbol !== sym || mover.remaining < blockade.cost) {
+    throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能移除连接地形`);
+  }
+  mover.remaining -= blockade.cost; // 只扣障碍 cost，剩余力量保留
+  claimBlockade(p, blockade, events);
+  // 留在原地。
 }
 
-function promoteOffBoard(state: GameState): void {
-  const pile = state.market.find((m) => !m.onBoard && m.count > 0);
-  if (pile) pile.onBoard = true;
+// --- buying ---
+
+const MARKET_SLOTS = 6;
+
+function onBoardMarketCount(state: GameState): number {
+  return state.market.filter((m) => m.onBoard && m.count > 0).length;
+}
+
+function hasMarketVacancy(state: GameState): boolean {
+  return onBoardMarketCount(state) < MARKET_SLOTS && state.market.some((m) => !m.onBoard && m.count > 0);
+}
+
+function promoteMarket(
+  state: GameState,
+  playerId: string,
+  defId: string,
+  events: GameEvent[],
+): void {
+  const turn = state.turn!;
+  if (turn.hasBought) throw new RuleError('购买后不能补位，由下一位玩家选择候补市场');
+  if (!hasMarketVacancy(state)) throw new RuleError('当前市场没有需要补位的空栏');
+
+  const pile = state.market.find((m) => m.defId === defId);
+  if (!pile || pile.count <= 0 || pile.onBoard) {
+    throw new RuleError('只能从候补市场选择仍有库存的卡牌');
+  }
+
+  pile.onBoard = true;
+  events.push({ type: 'marketPromoted', playerId, defId });
 }
 
 function buyCard(
@@ -326,7 +378,10 @@ function buyCard(
 
   const pile = state.market.find((m) => m.defId === defId);
   if (!pile || pile.count <= 0) throw new RuleError('这张牌当前无法购买');
-  if (!pile.onBoard && !freeOnBoardSlot(state)) {
+  if (hasMarketVacancy(state)) {
+    throw new RuleError('请先从候补市场选择一类卡牌补位');
+  }
+  if (!pile.onBoard) {
     throw new RuleError('这张牌还没有进入市场');
   }
 
@@ -350,7 +405,6 @@ function buyCard(
   pile.count -= 1;
   if (pile.count === 0 && pile.onBoard) {
     pile.onBoard = false;
-    promoteOffBoard(state);
   }
   turn.hasBought = true;
   events.push({ type: 'bought', playerId, defId });
@@ -368,6 +422,24 @@ function mintCard(p: Player, defId: string): Card {
     }
   }
   return { id: `${prefix}${max + 1}`, defId };
+}
+
+// --- discard skill ---
+
+function discardCards(
+  state: GameState,
+  playerId: string,
+  cardIds: string[],
+  events: GameEvent[],
+): void {
+  if (cardIds.length === 0) throw new RuleError('至少选择一张牌弃置');
+  const p = player(state, playerId);
+  const turn = state.turn!;
+  for (const id of cardIds) {
+    p.discard.push(takeFromHand(p, id));
+  }
+  turn.hasDiscarded = true;
+  events.push({ type: 'discarded', playerId, count: cardIds.length });
 }
 
 // --- ability cards ---
@@ -435,7 +507,6 @@ function useAbility(
       pile.count -= 1;
       if (pile.count === 0 && pile.onBoard) {
         pile.onBoard = false;
-        promoteOffBoard(state);
       }
       break;
     }
@@ -467,20 +538,9 @@ function removeFromHand(p: Player, turn: GameState['turn'], cardIds: string[], m
 
 // --- end of turn ---
 
-function endTurn(
-  state: GameState,
-  playerId: string,
-  discardCardIds: string[],
-  events: GameEvent[],
-): void {
+function endTurn(state: GameState, playerId: string, events: GameEvent[]): void {
   const p = player(state, playerId);
   const turn = state.turn!;
-
-  // Optionally discard chosen leftover hand cards.
-  for (const id of discardCardIds) {
-    const card = takeFromHand(p, id);
-    p.discard.push(card);
-  }
 
   // Resolve cards played this turn.
   for (const card of turn.inPlay) {
@@ -518,6 +578,7 @@ function advanceTurn(state: GameState, events: GameEvent[]): void {
       inPlay: [],
       removedThisTurn: [],
       hasBought: false,
+      hasDiscarded: false,
     };
     events.push({ type: 'turnStarted', playerId: candId });
     return;

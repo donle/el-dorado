@@ -3,7 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="screen-orientation" content="landscape" />
     <title>冲向黄金城</title>
+    <link rel="icon" type="image/png" href="/textures/terrain-realistic/eldorado.png" />
+    <meta name="theme-color" content="#1b1f16" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -11,6 +17,26 @@
       <canvas id="board"></canvas>
       <div id="hud"></div>
       <div id="lobby"></div>
+      <div id="orientation-lock" role="dialog" aria-modal="true" aria-live="polite">
+        <div class="orientation-card">
+          <div class="orientation-icon">↻</div>
+          <div class="orientation-title">请横屏游玩</div>
+          <button id="orientation-lock-btn">横屏进入</button>
+        </div>
+      </div>
+      <div id="bootloader" role="status" aria-live="polite">
+        <div class="boot-shade"></div>
+        <div class="boot-panel">
+          <div class="boot-mark">🏆</div>
+          <div class="boot-kicker">正在进入探险</div>
+          <div class="boot-title">冲向黄金城</div>
+          <div class="boot-copy">装载地图、卡牌与遗迹画面</div>
+          <div class="boot-progress" aria-label="加载进度">
+            <span id="bootbar" style="width:0%"></span>
+          </div>
+          <div class="boot-percent"><b id="bootpct">0%</b><span id="boottext">准备资源</span></div>
+        </div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

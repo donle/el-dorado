@@ -123,6 +123,8 @@ export interface Player {
   name: string;
   color: PlayerColor;
   isAI: boolean;
+  /** True when a human left and the server AI is controlling this seat. */
+  offline?: boolean;
   /** Draw pile (top of deck is index 0). */
   deck: Card[];
   hand: Card[];
@@ -162,6 +164,8 @@ export interface TurnState {
   removedThisTurn: Card[];
   /** Whether the player has already bought a card this turn. */
   hasBought: boolean;
+  /** Whether the player has used the discard skill at least once this turn. */
+  hasDiscarded: boolean;
 }
 
 export interface GameState {
