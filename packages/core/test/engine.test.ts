@@ -878,4 +878,24 @@ describe('RemoveBlockade (decoupled)', () => {
     const r = run(s, 'p0', { type: 'RemoveBlockade', blockadeId: blockade.id });
     expect(r.result.ok).toBe(false);
   });
+
+  it('errors when the pawn is not beside the blockade', () => {
+    const s = createGame(
+      [ { id: 'p0', name: 'A', color: 'red' as const }, { id: 'p1', name: 'B', color: 'blue' as const } ],
+      'classic', 11,
+    );
+    const blockade = s.blockades[0];
+    // Place p0 at a start hex that is NOT on any of this blockade's edges
+    const start = s.hexes.find((h) => h.terrain === 'start')!;
+    placeAt(s, 'p0', { q: start.q, r: start.r });
+    // Verify p0 is not beside any edge of the blockade
+    const isAdjacent = blockade.edges.some((edge) =>
+      (edge.a.q === s.players[0].position.q && edge.a.r === s.players[0].position.r) ||
+      (edge.b.q === s.players[0].position.q && edge.b.r === s.players[0].position.r) ||
+      neighbors(s.players[0].position).some((n) => (edge.a.q === n.q && edge.a.r === n.r) || (edge.b.q === n.q && edge.b.r === n.r))
+    );
+    expect(isAdjacent).toBe(false); // Sanity check: confirm pawn is not beside blockade
+    const r = run(s, 'p0', { type: 'RemoveBlockade', blockadeId: blockade.id });
+    expect(r.result.ok).toBe(false);
+  });
 });
