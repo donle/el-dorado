@@ -916,24 +916,28 @@ class App {
         bar.appendChild(button('取消', () => this.cancelMode(), true));
       } else if (this.mode === 'discard') {
         const n = this.discardSet.size;
-        const all = button('全部弃掉', () => {
+        const all = button('全部', () => {
           (this.me?.hand ?? []).forEach((c) => this.discardSet.add(c.id));
           this.renderHud();
         }, true);
-        const done = button(n > 0 ? `弃 ${n} 张并结束` : '不弃，结束回合', () =>
-          this.act({ type: 'EndTurn', discardCardIds: [...this.discardSet] }),
+        const done = button(`弃掉 (${n})`, () =>
+          this.act({ type: 'DiscardCards', cardIds: [...this.discardSet] }),
         );
+        done.disabled = n === 0;
         bar.appendChild(all);
         bar.appendChild(done);
         bar.appendChild(button('取消', () => this.cancelMode(), true));
       } else {
         bar.appendChild(button('结束回合', () => this.act({ type: 'EndTurn' }), true));
-        bar.appendChild(button('弃牌…', () => {
+        const discarded = !!s.turn?.hasDiscarded;
+        const skill = button(discarded ? '已弃牌' : '弃牌', () => {
           this.mode = 'discard';
           this.discardSet.clear();
-          this.hint = '点手牌选择要弃掉的牌（可全弃）';
+          this.hint = '点要弃的手牌，再点「弃掉」确认（每回合一次）';
           this.renderHud();
-        }, true));
+        }, true);
+        skill.disabled = discarded;
+        bar.appendChild(skill);
       }
     }
     // Piles flank the hand on the same row; draw on the left, discard on the right.
