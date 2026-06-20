@@ -401,6 +401,7 @@ function discardCards(
   cardIds: string[],
   events: GameEvent[],
 ): void {
+  if (cardIds.length === 0) throw new RuleError('至少选择一张牌弃置');
   const p = player(state, playerId);
   const turn = state.turn!;
   if (turn.hasDiscarded) throw new RuleError('本回合已经弃过牌');

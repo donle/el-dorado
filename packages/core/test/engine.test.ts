@@ -756,5 +756,21 @@ describe('DiscardCards skill', () => {
     giveHand(s, 'p0', ['explorer']);
     const r = run(s, 'p0', { type: 'DiscardCards', cardIds: ['p0:ghost#t9'] });
     expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toContain('不在手牌中');
+  });
+
+  it('rejects empty discard and preserves the once-per-turn slot', () => {
+    const s = game(2);
+    setTurn(s, 'p0');
+    giveHand(s, 'p0', ['explorer', 'sailor']);
+    // Empty discard must be rejected
+    const r1 = run(s, 'p0', { type: 'DiscardCards', cardIds: [] });
+    expect(r1.result.ok).toBe(false);
+    // The slot must NOT have been consumed
+    expect(r1.state.turn!.hasDiscarded).toBe(false);
+    // A subsequent real discard should still succeed
+    const r2 = run(r1.state, 'p0', { type: 'DiscardCards', cardIds: ['p0:explorer#t0'] });
+    expect(r2.result.ok).toBe(true);
+    expect(r2.state.turn!.hasDiscarded).toBe(true);
   });
 });
