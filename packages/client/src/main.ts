@@ -522,7 +522,8 @@ class App {
     this.mode = this.buyTargetDefId === defId ? 'idle' : 'buy';
     this.buyTargetDefId = this.mode === 'buy' ? defId : null;
     this.selectedCardId = null;
-    this.payment.clear();
+    // 切换市场目标时保留已选付款手牌；仅退出买入模式才清空。
+    if (this.mode !== 'buy') this.payment.clear();
     this.hint = this.mode === 'buy' ? '选手牌支付，然后点「确认购买」' : '';
     // On mobile, close the market sheet so the hand is reachable for payment.
     if (this.mode === 'buy') this.mobilePanel = null;
