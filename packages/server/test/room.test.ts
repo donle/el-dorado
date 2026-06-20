@@ -36,4 +36,40 @@ describe('Room', () => {
     const res = room.handleAction(wrong, { type: 'EndTurn' });
     expect(res.ok).toBe(false);
   });
+
+  it('turns a disconnected in-game human into an offline AI seat', () => {
+    const room = new Room('TEST');
+    const a = room.addHuman('Alice', () => {});
+    room.addHuman('Bob', () => {});
+    room.start('classic', 1);
+
+    const changed = room.disconnect(a.id);
+    const member = room.member(a.id)!;
+    const player = room.game!.players.find((p) => p.id === a.id)!;
+
+    expect(changed).toBe(true);
+    expect(member.isAI).toBe(true);
+    expect(member.offline).toBe(true);
+    expect(player.isAI).toBe(true);
+    expect(player.offline).toBe(true);
+    expect(room.view().players.find((p) => p.id === a.id)?.offline).toBe(true);
+  });
+
+  it('returns host control to a connected human instead of keeping an AI host', () => {
+    const room = new Room('TEST');
+    const host = room.addHuman('Host', () => {});
+    const ai = room.addAI();
+    room.start('classic', 1);
+
+    room.disconnect(host.id);
+    expect(room.hostId).toBe(ai.id);
+
+    room.phase = 'finished';
+    room.returnToLobby();
+    expect(room.hostId).toBe(ai.id);
+
+    room.reconnect(host.id, () => {});
+    expect(room.hostId).toBe(host.id);
+    expect(room.view().players.find((p) => p.id === host.id)?.offline).toBe(false);
+  });
 });

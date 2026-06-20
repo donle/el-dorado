@@ -4,6 +4,7 @@ import { Board } from './board.js';
 import { cardFace } from './cardFaces.js';
 import {
   getDef,
+  CARD_DEFS,
   movableSymbols,
   coinValue,
   neighbors,
@@ -20,6 +21,21 @@ import {
   type Action,
   type Blockade,
 } from '@eldorado/core';
+
+const BOOT_ASSET_URLS = [
+  '/ui/loading-table.jpg',
+  '/ui/lobby-hero.jpg',
+  '/ui/lobby-props.jpg',
+  '/textures/golden-city-ground.png',
+  '/cards/card-back.jpg',
+  '/card-icons/machete.jpg',
+  '/card-icons/paddle.jpg',
+  '/card-icons/coin.jpg',
+  '/card-icons/discard.jpg',
+  '/card-icons/remove.jpg',
+  '/card-icons/single_use.jpg',
+  ...Object.keys(CARD_DEFS).map((id) => `/cards/${id}.jpg`),
+];
 
 const SYMBOL_GLYPH: Record<string, string> = {
   machete: '🗡️',
@@ -64,7 +80,7 @@ function requiredFor(hex: Hex): MoveSymbol | null {
 /** Power a single step onto this hex costs. */
 function stepCost(hex: Hex): number {
   if (hex.terrain === 'start') return 1;
-  if (hex.terrain === 'eldorado') return 1;
+  if (hex.terrain === 'eldorado') return 0;
   if (hex.terrain === 'finish') return Math.max(hex.cost, 1);
   return hex.cost;
 }
@@ -74,6 +90,9 @@ function sameCoord(a: Axial, b: Axial): boolean {
 }
 
 type Mode = 'idle' | 'clear';
+type LockableScreenOrientation = ScreenOrientation & {
+  lock?: (orientation: 'landscape') => Promise<void>;
+};
 
 class App {
   net = new Net();
@@ -86,6 +105,7 @@ class App {
   selected = new Set<string>();
   mode: Mode = 'idle';
   buyTargetDefId: string | null = null;
+  marketPreviewDefId: string | null = null;
   clearTarget: Axial | null = null;
   clearBlockadeId: string | null = null;
   viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
@@ -94,6 +114,11 @@ class App {
   /** Which panel is open as a bottom sheet on mobile (null = none). */
   mobilePanel: 'players' | 'market' | null = null;
   nameValue = localStorage.getItem('eldorado.name') ?? '';
+  /** True from "start game" until the first board state arrives (freezes lobby). */
+  private starting = false;
+  private startingTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Whether the in-game settings dropdown is open. */
+  private settingsOpen = false;
 
   private hud = document.getElementById('hud') as HTMLDivElement;
   private lobby = document.getElementById('lobby') as HTMLDivElement;
@@ -104,12 +129,16 @@ class App {
   private playerCardEls = new Map<string, HTMLElement>();
   private drawPileEl: HTMLElement | null = null;
   private discardPileEl: HTMLElement | null = null;
+  private orientationLockBtn = document.getElementById('orientation-lock-btn') as HTMLButtonElement | null;
+  private mobileDeviceQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
+  private portraitQuery = window.matchMedia('(orientation: portrait)');
   private hoveredTerrain: Axial | null = null;
   private pinnedTerrain: Axial | null = null;
   private hoveredBlockadeId: string | null = null;
   private pinnedBlockadeId: string | null = null;
 
   constructor() {
+    this.setupMobileLandscapeGuard();
     document.body.appendChild(this.preview);
     document.body.appendChild(this.terrainPanel);
     this.board = new Board(document.getElementById('board') as HTMLCanvasElement);
@@ -131,6 +160,48 @@ class App {
     }
   }
 
+  private setupMobileLandscapeGuard(): void {
+    const update = () => {
+      const mobile = this.isMobileDevice();
+      document.body.classList.toggle('mobile-device', mobile);
+      document.body.classList.toggle('mobile-portrait', mobile && this.portraitQuery.matches);
+    };
+    this.orientationLockBtn?.addEventListener('click', () => void this.requestLandscapeLock());
+    this.mobileDeviceQuery.addEventListener('change', update);
+    this.portraitQuery.addEventListener('change', update);
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    update();
+  }
+
+  private isMobileDevice(): boolean {
+    const uaMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    return uaMobile || (navigator.maxTouchPoints > 1 && this.mobileDeviceQuery.matches);
+  }
+
+  private isCompactLandscape(): boolean {
+    return document.body.classList.contains('mobile-device')
+      && !this.portraitQuery.matches
+      && window.innerHeight <= 500;
+  }
+
+  private async requestLandscapeLock(): Promise<void> {
+    if (!this.isMobileDevice()) return;
+    try {
+      if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch {
+      // Browsers may require installation/fullscreen support before orientation locking.
+    }
+    try {
+      const orientation = screen.orientation as LockableScreenOrientation | undefined;
+      await orientation?.lock?.('landscape');
+    } catch {
+      // Unsupported browsers keep the portrait blocker visible until the user rotates.
+    }
+  }
+
   // --- networking ---
 
   private onMessage(m: ServerMessage): void {
@@ -142,7 +213,19 @@ class App {
         break;
       case 'room':
         this.room = m.room;
-        if (m.room.phase === 'lobby') this.renderLobby();
+        if (m.room.phase === 'lobby') {
+          this.endStarting();
+          this.state = null;
+          this.resetSelection();
+          this.board.setHighlights([]);
+          this.board.setBlockadeHighlights([]);
+          this.renderLobby();
+          this.renderHud();
+        } else if (m.room.phase === 'playing' && !this.state) {
+          // Game is launching but board state hasn't arrived on this client yet
+          // (we're behind the host, or just reconnected) — freeze the lobby.
+          this.beginStarting();
+        }
         break;
       case 'state': {
         const buys = (m.events ?? []).filter((e) => e.type === 'bought') as Array<{
@@ -161,6 +244,7 @@ class App {
         this.state = m.state;
         this.syncSelectionToState();
         this.lobby.classList.add('hidden');
+        this.endStarting();
         this.board.setSelfPlayerId(this.you);
         this.board.render(m.state);
         this.renderHud();
@@ -170,6 +254,7 @@ class App {
         break;
       }
       case 'error':
+        this.endStarting(); // a failed startGame must release the frozen lobby
         this.error = m.message;
         this.renderLobby();
         this.renderHud();
@@ -194,6 +279,11 @@ class App {
   private isMyTurn(): boolean {
     return !!this.state && this.state.phase === 'playing' && this.state.turn?.playerId === this.you;
   }
+
+  private marketNeedsPromotion(state: GameState): boolean {
+    const active = state.market.filter((m) => m.onBoard && m.count > 0).length;
+    return active < 6 && state.market.some((m) => !m.onBoard && m.count > 0);
+  }
   private hexAt(c: Axial): Hex | undefined {
     return this.state?.hexes.find((h) => h.q === c.q && h.r === c.r);
   }
@@ -206,9 +296,32 @@ class App {
     this.selected.clear();
     this.mode = 'idle';
     this.buyTargetDefId = null;
+    this.marketPreviewDefId = null;
     this.clearTarget = null;
     this.clearBlockadeId = null;
     this.hint = '';
+  }
+
+  private leaveRoom(): void {
+    if (this.room || this.you) this.net.send({ type: 'leaveRoom' });
+    sessionStorage.removeItem('eldorado.session');
+    this.you = null;
+    this.room = null;
+    this.state = null;
+    this.resetSelection();
+    this.mobilePanel = null;
+    this.board.setSelfPlayerId(null);
+    this.board.setHighlights([]);
+    this.board.setBlockadeHighlights([]);
+    this.board.setInspectedHex(null);
+    this.board.setInspectedBlockade(null);
+    this.closeTerrainPanel();
+    this.renderLobby();
+    this.renderHud();
+  }
+
+  private returnToLobby(): void {
+    this.net.send({ type: 'returnToLobby' });
   }
 
   /**
@@ -221,6 +334,7 @@ class App {
   private syncSelectionToState(): void {
     this.mode = 'idle';
     this.buyTargetDefId = null;
+    this.marketPreviewDefId = null;
     this.clearTarget = null;
     this.clearBlockadeId = null;
     this.hint = '';
@@ -305,6 +419,17 @@ class App {
     return power >= requirement.cost;
   }
 
+  private canStepToEldorado(hex: Hex): boolean {
+    const me = this.me;
+    if (!me || hex.terrain !== 'eldorado') return false;
+    if (!isAdjacent(me.position, hex)) return false;
+    const current = this.hexAt(me.position);
+    if (current?.terrain !== 'finish') return false;
+    if (hex.occupant && hex.occupant !== me.id) return false;
+    const blockade = this.blockadeBetween(me.position, hex);
+    return !blockade || !!blockade.claimedBy;
+  }
+
   private recomputeHighlights(): void {
     if (!this.isMyTurn() || !this.me) {
       this.board.setHighlights([]);
@@ -350,6 +475,7 @@ class App {
     // clearable neighbors are always actionable on your turn
     for (const h of adj) {
       if ((h.terrain === 'rubble' || h.terrain === 'basecamp') && !h.occupant) out.push(h);
+      if (this.canStepToEldorado(h)) out.push(h);
     }
     this.board.setHighlights(out);
     this.board.setBlockadeHighlights([...blockadeOut]);
@@ -394,6 +520,11 @@ class App {
     const between = this.blockadeBetween(me.position, hex);
     if (between && !between.claimedBy) {
       this.flash('先点连接地形移除障碍');
+      return true;
+    }
+
+    if (this.canStepToEldorado(hex)) {
+      this.act({ type: 'StepTo', to: c });
       return true;
     }
 
@@ -520,11 +651,12 @@ class App {
   private onCardClick(cardId: string): void {
     if (!this.isMyTurn()) return;
     if (this.mode === 'clear') {
-      if (this.selected.has(cardId)) this.selected.delete(cardId);
-      else this.selected.add(cardId);
       const cost = this.clearBlockadeId
         ? this.blockadeById(this.clearBlockadeId)?.cost ?? 0
         : this.hexAt(this.clearTarget!)?.cost ?? 0;
+      if (this.selected.has(cardId)) this.selected.delete(cardId);
+      else if (this.selected.size < cost) this.selected.add(cardId);
+      else this.flash(`最多选择 ${cost} 张牌`);
       if (this.selected.size === cost) {
         if (this.clearBlockadeId) {
           this.act({ type: 'RemoveBlockade', blockadeId: this.clearBlockadeId, cardIds: [...this.selected] });
@@ -544,15 +676,81 @@ class App {
 
   private onMarketClick(defId: string): void {
     if (!this.isMyTurn()) return;
+    this.marketPreviewDefId = null;
     if (this.state!.turn?.hasBought) { this.flash('本回合已购买 · 每回合限买 1 张'); return; }
+    if (this.marketNeedsPromotion(this.state!)) {
+      this.mobilePanel = 'market';
+      this.flash('先从候补市场选择 1 类补位');
+      this.renderHud();
+      return;
+    }
     this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
     this.hint = this.buyTargetDefId ? '选手牌支付，然后点「确认购买」' : '';
     if (this.buyTargetDefId) this.mobilePanel = null;
     this.renderHud();
   }
 
+  private usesMarketPreviewFlow(): boolean {
+    if (this.mobilePanel !== 'market') return false;
+    return document.body.classList.contains('mobile-device')
+      || window.matchMedia('(max-width: 760px)').matches
+      || window.matchMedia('(max-height: 500px) and (orientation: landscape)').matches;
+  }
+
+  private previewMarketCard(defId: string): void {
+    this.marketPreviewDefId = this.marketPreviewDefId === defId ? null : defId;
+    this.renderHud();
+  }
+
+  private selectMarketPreviewCard(): void {
+    const defId = this.marketPreviewDefId;
+    const state = this.state;
+    if (!defId || !state) return;
+
+    const pile = state.market.find((m) => m.defId === defId);
+    this.marketPreviewDefId = null;
+    if (!pile || pile.count <= 0) {
+      this.flash('这张牌当前无法选择');
+      return;
+    }
+
+    if (pile.onBoard) {
+      this.onMarketClick(defId);
+      return;
+    }
+    this.promoteMarket(defId);
+  }
+
+  private canSelectMarketPreview(defId: string): boolean {
+    if (!this.isMyTurn() || !this.state || this.state.turn?.hasBought) return false;
+    const pile = this.state.market.find((m) => m.defId === defId);
+    if (!pile || pile.count <= 0) return false;
+    if (pile.onBoard) return !this.marketNeedsPromotion(this.state);
+    return this.marketNeedsPromotion(this.state);
+  }
+
+  private promoteMarket(defId: string): void {
+    if (!this.isMyTurn()) return;
+    if (this.state!.turn?.hasBought) {
+      this.flash('购买后不能补位 · 由下一位玩家选择');
+      return;
+    }
+    if (!this.marketNeedsPromotion(this.state!)) {
+      this.flash('当前市场没有空位');
+      return;
+    }
+    this.buyTargetDefId = null;
+    this.marketPreviewDefId = null;
+    this.hint = '';
+    this.act({ type: 'PromoteMarket', defId });
+  }
+
   private confirmBuy(): void {
     if (!this.buyTargetDefId) return;
+    if (this.state && this.marketNeedsPromotion(this.state)) {
+      this.flash('请先从候补市场选择 1 类补位');
+      return;
+    }
     this.act({ type: 'BuyCard', defId: this.buyTargetDefId, paymentCardIds: [...this.selected] });
   }
 
@@ -564,6 +762,7 @@ class App {
 
   private closeMobilePanel(): void {
     this.mobilePanel = null;
+    this.marketPreviewDefId = null;
     this.renderHud();
   }
 
@@ -572,6 +771,55 @@ class App {
     localStorage.setItem('eldorado.viewMode', this.viewMode);
     this.board.setViewMode(this.viewMode);
     this.renderHud();
+  }
+
+  private setViewMode(mode: '3d' | '2d'): void {
+    if (mode === this.viewMode) return;
+    this.toggleViewMode(); // only two modes; flips and re-renders (keeps menu open)
+  }
+
+  private toggleSettings(): void {
+    this.settingsOpen = !this.settingsOpen;
+    this.renderHud();
+  }
+
+  /** In-game settings modal: view mode + exit, blocking game interaction behind it. */
+  private renderSettingsMenu(s: GameState): void {
+    const scrim = el('div', 'settings-scrim');
+    scrim.onclick = () => {
+      this.settingsOpen = false;
+      this.renderHud();
+    };
+    this.hud.appendChild(scrim);
+
+    const menu = el('div', 'settings-menu panel');
+    menu.innerHTML = `
+      <button class="settings-close" aria-label="关闭设置">×</button>
+      <div class="settings-head">探险设置</div>
+      <div class="settings-group">
+        <span class="settings-label">视图模式</span>
+        <div class="seg" role="group" aria-label="视图模式">
+          <button class="seg-btn ${this.viewMode === '3d' ? 'on' : ''}" data-v="3d">3D</button>
+          <button class="seg-btn ${this.viewMode === '2d' ? 'on' : ''}" data-v="2d">2D</button>
+        </div>
+      </div>`;
+    menu.querySelector<HTMLButtonElement>('.settings-close')!.onclick = () => {
+      this.settingsOpen = false;
+      this.renderHud();
+    };
+    menu.querySelectorAll<HTMLButtonElement>('.seg-btn').forEach((b) => {
+      b.onclick = () => this.setViewMode(b.dataset.v as '3d' | '2d');
+    });
+    if (s.phase === 'playing') {
+      const exit = button('退出游戏', () => {
+        this.settingsOpen = false;
+        this.leaveRoom();
+      });
+      exit.className = 'danger settings-exit';
+      exit.title = '退出本局，AI 将接管你的座位';
+      menu.appendChild(exit);
+    }
+    this.hud.appendChild(menu);
   }
 
   private flashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -672,12 +920,16 @@ class App {
 
   /** A card is "pinned" while it's selected — its preview stays open. */
   private isPinned(): boolean {
-    return this.selected.size > 0 || !!this.buyTargetDefId;
+    return this.selected.size > 0 || !!this.buyTargetDefId || !!this.marketPreviewDefId;
   }
 
   private attachPreview(node: HTMLElement, defId: string): void {
-    node.addEventListener('mouseenter', () => this.showPreview(node, defId));
+    node.addEventListener('mouseenter', () => {
+      if (this.usesMarketPreviewFlow()) return;
+      this.showPreview(node, defId);
+    });
     node.addEventListener('mouseleave', () => {
+      if (this.usesMarketPreviewFlow()) return;
       if (this.isPinned()) this.refreshPinnedPreview();
       else this.hidePreview();
     });
@@ -694,13 +946,54 @@ class App {
       const node = this.shopEls.get(this.buyTargetDefId);
       if (node) return this.showPreview(node, this.buyTargetDefId);
     }
+    if (this.marketPreviewDefId) {
+      const node = this.shopEls.get(this.marketPreviewDefId);
+      if (node) return this.showPreview(node, this.marketPreviewDefId);
+    }
     this.hidePreview();
   }
 
   private showPreview(anchor: HTMLElement, defId: string): void {
+    const compactLandscape = this.isCompactLandscape();
+    const marketPreview = this.usesMarketPreviewFlow();
+
     this.preview.innerHTML = previewHtml(defId);
+    this.preview.classList.toggle('actionable', marketPreview && this.canSelectMarketPreview(defId));
+    if (marketPreview && this.canSelectMarketPreview(defId)) {
+      const select = button('选择卡牌', () => this.selectMarketPreviewCard(), false);
+      select.className = 'preview-select-card';
+      this.preview.appendChild(select);
+    }
     this.preview.style.display = 'block';
     const pr = this.preview.getBoundingClientRect();
+    if (marketPreview) {
+      const marketRect = document.querySelector<HTMLElement>('.market-panel.open')?.getBoundingClientRect();
+      const actionRect = document.querySelector<HTMLElement>('.action-bar')?.getBoundingClientRect();
+      const marketIsDrawer = !!marketRect && marketRect.width < window.innerWidth * 0.7;
+      if (compactLandscape && marketIsDrawer) {
+        const leftLimit = (actionRect?.right ?? 0) + 8;
+        const rightLimit = marketRect.left - 8;
+        const available = Math.max(0, rightLimit - leftLimit);
+        const x = available >= pr.width ? rightLimit - pr.width : Math.max(8, rightLimit - pr.width);
+        const y = 48;
+        this.preview.style.left = `${Math.max(8, Math.min(x, window.innerWidth - pr.width - 8))}px`;
+        this.preview.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
+      } else {
+        const x = window.innerWidth / 2 - pr.width / 2;
+        const y = 12;
+        this.preview.style.left = `${Math.max(8, Math.min(x, window.innerWidth - pr.width - 8))}px`;
+        this.preview.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
+      }
+      return;
+    }
+    if (compactLandscape) {
+      const x = window.innerWidth - pr.width - 8;
+      const y = 48;
+      this.preview.style.left = `${Math.max(8, x)}px`;
+      this.preview.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
+      return;
+    }
+
     // Dock every card preview (hand AND market) to the left edge, vertically
     // centered, so it never covers the board.
     let x = 14;
@@ -713,9 +1006,44 @@ class App {
 
   private hidePreview(): void {
     this.preview.style.display = 'none';
+    this.preview.classList.remove('actionable');
   }
 
   // --- rendering: lobby ---
+
+  /**
+   * Freeze the current lobby screen in place and lay a game-style "正在开始"
+   * crest over it. Not a separate layer — it dims/blurs the existing lobby modal
+   * (via the `launching` class) and appends the crest inside #lobby, so the same
+   * screen the player is looking at simply locks until board state arrives.
+   */
+  private beginStarting(): void {
+    if (this.starting || this.state) return;
+    this.starting = true;
+    this.lobby.classList.remove('hidden');
+    this.lobby.classList.add('launching');
+    if (!this.lobby.querySelector('.lobby-launch')) {
+      const crest = el('div', 'lobby-launch');
+      crest.innerHTML = `
+        <div class="lobby-launch-crest">
+          <div class="lobby-launch-ring"><span>🧭</span></div>
+          <div class="lobby-launch-title">正在开始</div>
+          <div class="lobby-launch-copy">正在集结探险队，进入黄金城之路…</div>
+        </div>`;
+      this.lobby.appendChild(crest);
+    }
+    // Safety: never strand the player on a frozen lobby if state never arrives.
+    clearTimeout(this.startingTimer);
+    this.startingTimer = setTimeout(() => this.endStarting(), 8000);
+  }
+
+  private endStarting(): void {
+    if (!this.starting && !this.lobby.classList.contains('launching')) return;
+    this.starting = false;
+    clearTimeout(this.startingTimer);
+    this.lobby.classList.remove('launching');
+    this.lobby.querySelector('.lobby-launch')?.remove();
+  }
 
   private renderLobby(): void {
     const inLobby = !this.state || this.state.phase !== 'playing';
@@ -729,20 +1057,34 @@ class App {
     const isHost = this.room?.hostId === this.you;
     this.lobby.innerHTML = '';
     const modal = el('div', 'modal');
+    modal.classList.add('lobby-modal');
+    modal.classList.add(this.room ? 'room-modal' : 'entry-modal');
+    const artHtml = `
+      <div class="lobby-art">
+        <div class="lobby-art-copy">
+          <span>探险日志</span>
+          <b>黄金城之路</b>
+          <small>补给、路线与同伴都准备好后再出发。</small>
+        </div>
+      </div>`;
 
     if (!this.room) {
       modal.innerHTML = `
-        <h1>冲向黄金城</h1>
-        <p class="sub">桌游改编 · 联机版</p>
-        <label>你的名字</label>
-        <input id="name" value="${escapeHtml(this.nameValue)}" placeholder="玩家名" />
-        <label>房间码（加入已有房间）</label>
-        <input id="code" placeholder="请输入 4 位房间码" maxlength="4" style="text-transform:uppercase" />
-        <div class="row">
-          <button id="create">创建房间</button>
-          <button id="join" class="secondary">加入房间</button>
-        </div>
-        <div class="error">${escapeHtml(this.error)}</div>`;
+        ${artHtml}
+        <div class="lobby-form">
+          <div class="lobby-kicker">联机探险</div>
+          <h1>冲向黄金城</h1>
+          <p class="sub">选择队伍，穿过丛林、河流与村庄，抢先抵达黄金城。</p>
+          <label>你的名字</label>
+          <span class="game-field"><input id="name" value="${escapeHtml(this.nameValue)}" placeholder="玩家名" /></span>
+          <label>房间码（加入已有房间）</label>
+          <span class="game-field"><input id="code" placeholder="请输入 4 位房间码" maxlength="4" style="text-transform:uppercase" /></span>
+          <div class="row">
+            <button id="create">创建房间</button>
+            <button id="join" class="secondary">加入房间</button>
+          </div>
+          <div class="error">${escapeHtml(this.error)}</div>
+        </div>`;
       modal.querySelector<HTMLInputElement>('#name')!.oninput = (e) => {
         this.nameValue = (e.target as HTMLInputElement).value;
         localStorage.setItem('eldorado.name', this.nameValue);
@@ -759,22 +1101,30 @@ class App {
           (p) =>
             `<div class="player-chip"><span class="dot" style="background:${colorHex(p.color)}"></span>${escapeHtml(
               playerDisplayName(p),
-            )}${p.isAI ? ' 🤖' : ''}${p.id === this.room!.hostId ? ' 👑' : ''}</div>`,
+            )}${p.isAI ? ' 🤖' : ''}${p.offline ? ' · 离线' : ''}${p.id === this.room!.hostId ? ' 👑' : ''}</div>`,
         )
         .join('');
       modal.innerHTML = `
-        <h1>房间 <span style="color:#ffd166;letter-spacing:3px">${this.room.code}</span></h1>
-        <p class="sub">把房间码发给朋友，或加入电脑玩家凑人数（2–4 人）</p>
-        <div class="lobby-players">${players}</div>
-        <div class="row">
-          ${isHost ? '<button id="ai" class="secondary">+ 添加电脑</button>' : ''}
-          ${isHost ? `<button id="start" ${this.room.players.length < 2 ? 'disabled' : ''}>开始游戏</button>` : '<div class="sub">等待房主开始…</div>'}
-        </div>
-        <div class="error">${escapeHtml(this.error)}</div>`;
+        ${artHtml}
+        <div class="lobby-form">
+          <div class="lobby-kicker">房间集结</div>
+          <h1>房间 <span class="room-code">${this.room.code}</span></h1>
+          <p class="sub">把房间码发给朋友，或加入电脑玩家凑人数（2–4 人）</p>
+          <div class="lobby-players">${players}</div>
+          <div class="row">
+            ${isHost ? '<button id="ai" class="secondary">+ 添加电脑</button>' : ''}
+            ${isHost ? `<button id="start" ${this.room.players.length < 2 ? 'disabled' : ''}>开始游戏</button>` : '<div class="sub">等待房主开始…</div>'}
+          </div>
+          <div class="error">${escapeHtml(this.error)}</div>
+        </div>`;
       if (isHost) {
         modal.querySelector<HTMLButtonElement>('#ai')!.onclick = () => this.net.send({ type: 'addAI' });
         const startBtn = modal.querySelector<HTMLButtonElement>('#start');
-        if (startBtn) startBtn.onclick = () => this.net.send({ type: 'startGame' });
+        if (startBtn)
+          startBtn.onclick = () => {
+            this.beginStarting(); // optimistic freeze covers the server round-trip
+            this.net.send({ type: 'startGame' });
+          };
       }
     }
     this.lobby.appendChild(modal);
@@ -813,6 +1163,13 @@ class App {
     this.handEls.clear();
     this.shopEls.clear();
 
+    const gearDock = el('div', 'settings-dock');
+    const gear = button('⚙', () => this.toggleSettings(), true);
+    gear.className = `settings-gear ${this.settingsOpen ? 'active' : ''}`;
+    gear.title = '设置';
+    gearDock.appendChild(gear);
+    this.hud.appendChild(gearDock);
+
     // --- top bar ---
     const top = el('div', 'topbar panel');
     let banner = `<div class="turn-banner">⏳ 等待 ${escapeHtml(turnName)}</div>`;
@@ -822,16 +1179,15 @@ class App {
       <div class="brand"><span class="logo">🏆</span><span>冲向黄金城</span><span class="code">${escapeHtml(this.room?.code ?? '')}</span></div>
       ${banner}
       <div class="hint-inline">${this.viewMode === '2d' ? '2D 俯视 · 拖拽平移 · 滚轮缩放' : '滚轮缩放 · 拖拽平移 · 右键转视角'}</div>`;
-    const viewBtn = button(this.viewMode === '3d' ? '2D 视图' : '3D 视图', () => this.toggleViewMode(), true);
-    viewBtn.className = `view-toggle ${this.viewMode === '2d' ? 'active' : ''}`;
-    viewBtn.title = this.viewMode === '3d' ? '切换到锁定俯视 2D 视图' : '切换回可旋转 3D 视图';
-    top.appendChild(viewBtn);
     this.hud.appendChild(top);
+
+    if (this.settingsOpen) this.renderSettingsMenu(s);
 
     // --- mobile toolbar (market sheet toggle) ---
     const toolbar = el('div', 'mobile-toolbar');
     const mbtn = button('🛒 市场', () => {
       this.mobilePanel = this.mobilePanel === 'market' ? null : 'market';
+      if (this.mobilePanel !== 'market') this.marketPreviewDefId = null;
       this.renderHud();
     });
     if (this.mobilePanel === 'market') mbtn.classList.add('active');
@@ -845,7 +1201,7 @@ class App {
       const active = p.id === s.turn?.playerId;
       const card = el('div', `pcard ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}`);
       card.style.setProperty('--pc', colorHex(p.color));
-      const tags = `${p.isAI ? '<span class="ptag">电脑</span>' : ''}${p.id === this.you ? '<span class="ptag you">你</span>' : ''}`;
+      const tags = `${p.isAI ? '<span class="ptag">电脑</span>' : ''}${p.offline ? '<span class="ptag offline">离线</span>' : ''}${p.id === this.you ? '<span class="ptag you">你</span>' : ''}`;
       card.innerHTML = `
         <div class="pc-top">
           <span class="pc-dot"></span>
@@ -853,7 +1209,11 @@ class App {
           ${tags}
           <span class="pc-flag">${p.finished ? '🏆' : active ? '▶' : ''}</span>
         </div>
-        <div class="pc-counts"><span>牌库 ${p.deck.length + p.hand.length}</span><span>弃牌 ${p.discard.length}</span><span>阻挡物 ${p.blockades}</span></div>
+        <div class="pc-counts">
+          <span><b>牌库</b>${p.deck.length + p.hand.length}</span>
+          <span><b>弃牌</b>${p.discard.length}</span>
+          <span><b>阻挡物</b>${p.blockades}</span>
+        </div>
         <div class="pc-progress"><span style="width:${Math.round(this.progressOf(p) * 100)}%"></span></div>`;
       pcards.appendChild(card);
       this.playerCardEls.set(p.id, card);
@@ -862,28 +1222,40 @@ class App {
 
     // --- right: market (all 18 cards; on-board buyable, others upcoming) ---
     const market = el('div', `market-panel panel ${this.mobilePanel === 'market' ? 'open' : ''}`);
-    const onBoard = s.market.filter((m) => m.onBoard);
-    const upcoming = s.market.filter((m) => !m.onBoard);
+    const onBoard = s.market.filter((m) => m.onBoard && m.count > 0);
+    const upcoming = s.market.filter((m) => !m.onBoard && m.count > 0);
+    const needsPromotion = onBoard.length < 6 && upcoming.length > 0;
+    const canPromote = myTurn && needsPromotion && !s.turn?.hasBought;
     const shopCard = (pile: (typeof s.market)[number], locked: boolean): HTMLDivElement => {
       const def = getDef(pile.defId);
       const sub = def.kind === 'action' ? '行动牌' : def.power ? `力量 ${def.power}` : '';
-      const cls = locked ? 'upcoming' : pile.count === 0 ? 'sold' : '';
-      const card = el('div', `shop-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${cls}`);
+      const cls = locked ? (canPromote ? 'promotable' : 'upcoming') : pile.count === 0 ? 'sold' : '';
+      const left = locked ? (canPromote ? '补位' : '候补') : `×${pile.count}`;
+      const card = el(
+        'div',
+        `shop-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${this.marketPreviewDefId === pile.defId ? 'previewing' : ''} ${cls}`,
+      );
       card.innerHTML = `
         <span class="ic card-thumb">${cardFace(def)}</span>
         <span class="nm">${escapeHtml(def.name)}<small>${sub}${def.singleUse ? ' · 单次' : ''}</small></span>
-        <span class="price"><span class="c">${def.cost}💰</span><span class="left">${locked ? '待补充' : `×${pile.count}`}</span></span>`;
-      if (!locked && pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
+        <span class="price"><span class="c">${def.cost}💰</span><span class="left">${left}</span></span>`;
+      if (this.usesMarketPreviewFlow()) {
+        card.onclick = () => this.previewMarketCard(pile.defId);
+      } else if (locked && canPromote) card.onclick = () => this.promoteMarket(pile.defId);
+      else if (!locked && pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
       this.attachPreview(card, pile.defId);
       this.shopEls.set(pile.defId, card);
       return card;
     };
     const bought = myTurn && !!s.turn?.hasBought;
-    market.innerHTML = `<h3>市场 · ${bought ? '本回合已购买' : '在售'}</h3>`;
+    const marketTitle = needsPromotion
+      ? canPromote ? '选择候补补位' : '待下一位补位'
+      : bought ? '本回合已购买' : '在售';
+    market.innerHTML = `<h3>市场 · ${marketTitle}</h3>`;
     for (const pile of onBoard) market.appendChild(shopCard(pile, false));
     if (upcoming.length) {
       const sub = el('h3', '');
-      sub.textContent = `待补充 · ${upcoming.length}`;
+      sub.textContent = `${canPromote ? '可补位' : '候补市场'} · ${upcoming.length}`;
       sub.style.marginTop = '14px';
       market.appendChild(sub);
       for (const pile of upcoming) market.appendChild(shopCard(pile, true));
@@ -918,32 +1290,39 @@ class App {
       }
     }
 
-    const bar = el('div', 'action-bar');
-    const ctx = el('div', 'ctx');
-    ctx.textContent = myTurn ? this.hint : `等待 ${turnName} 行动…`;
+    const bar = el('div', 'action-bar command-panel');
+    const ctx = el('div', 'ctx command-state');
+    ctx.innerHTML = this.commandStateHtml(myTurn, turnName);
     bar.appendChild(ctx);
+    const actions = el('div', 'command-actions');
     if (myTurn && s.phase === 'playing') {
       if (this.mode === 'clear') {
-        bar.appendChild(button('取消', () => this.cancelMode(), true));
+        const cancel = button('取消', () => this.cancelMode(), true);
+        cancel.classList.add('cmd-btn');
+        actions.appendChild(cancel);
       } else {
+        const compact = this.isCompactLandscape();
         if (this.buyTargetDefId) {
           const cost = getDef(this.buyTargetDefId).cost;
           const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-          const buy = button(`确认购买 (${have}/${cost}💰)`, () => this.confirmBuy(), false);
-          buy.className = 'gold';
+          const buy = button(compact ? `购买 ${have}/${cost}` : `确认购买 (${have}/${cost}💰)`, () => this.confirmBuy(), false);
+          buy.className = 'gold cmd-btn';
           buy.disabled = have < cost;
-          bar.appendChild(buy);
+          actions.appendChild(buy);
         }
-        bar.appendChild(button('结束回合', () => this.act({ type: 'EndTurn' }), true));
-        const discarded = !!s.turn?.hasDiscarded;
-        const skill = button(discarded ? '已弃牌' : '弃牌', () => {
-          if (discarded || this.selected.size === 0) return;
+        const end = button(compact ? '结束' : '结束回合', () => this.act({ type: 'EndTurn' }), true);
+        end.classList.add('cmd-btn');
+        actions.appendChild(end);
+        const skill = button('弃牌', () => {
+          if (this.selected.size === 0) return;
           this.act({ type: 'DiscardCards', cardIds: [...this.selected] });
         }, true);
-        skill.disabled = discarded || this.selected.size === 0;
-        bar.appendChild(skill);
+        skill.classList.add('cmd-btn');
+        skill.disabled = this.selected.size === 0;
+        actions.appendChild(skill);
       }
     }
+    bar.appendChild(actions);
     // Piles flank the hand on the same row; draw on the left, discard on the right.
     if (me) {
       this.drawPileEl = this.makePile('draw', '摸牌', me.deck.length);
@@ -966,7 +1345,72 @@ class App {
       t.textContent = this.error;
       this.hud.appendChild(t);
     }
+    if (s.phase === 'finished') this.renderGameOverOverlay(s);
     this.renderTerrainPanel();
+  }
+
+  private commandStateHtml(myTurn: boolean, turnName: string): string {
+    const s = this.state;
+    if (!s) return '';
+    if (s.phase === 'finished') return '<b>游戏结束</b><span>结算完成</span>';
+    if (!myTurn) return `<b>等待行动</b><span>${escapeHtml(turnName)}</span>`;
+    if (this.mode === 'clear') {
+      const cost = this.clearBlockadeId
+        ? this.blockadeById(this.clearBlockadeId)?.cost ?? 0
+        : this.hexAt(this.clearTarget!)?.cost ?? 0;
+      const verb = this.clearBlockadeId ? '移除连接地形' : '清除地形';
+      return `<b>${verb}</b><span>${this.selected.size}/${cost} 张牌</span>`;
+    }
+    if (this.buyTargetDefId) {
+      const cost = getDef(this.buyTargetDefId).cost;
+      const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
+      return `<b>购买 ${escapeHtml(getDef(this.buyTargetDefId).name)}</b><span>${have}/${cost} 金币</span>`;
+    }
+    const mover = s.turn?.activeMover;
+    if (mover) {
+      return `<b>${SYMBOL_GLYPH[mover.symbol]} ${SYMBOL_LABEL[mover.symbol]}</b><span>剩余 ${mover.remaining} 点</span>`;
+    }
+    if (this.selected.size > 0) return `<b>已选手牌</b><span>${this.selected.size} 张可用于行动</span>`;
+    if (myTurn && !s.turn?.hasBought && this.marketNeedsPromotion(s)) {
+      return '<b>市场补位</b><span>从候补市场选择 1 类</span>';
+    }
+    return '<b>你的回合</b><span>选择手牌或目标地形</span>';
+  }
+
+  private renderGameOverOverlay(s: GameState): void {
+    const winner = s.winnerId ? s.players.find((p) => p.id === s.winnerId) : null;
+    const ranked = [...s.players].sort((a, b) => {
+      if (a.finished !== b.finished) return a.finished ? -1 : 1;
+      if (b.blockades !== a.blockades) return b.blockades - a.blockades;
+      return (a.finishedAt ?? Infinity) - (b.finishedAt ?? Infinity);
+    });
+    const rows = ranked
+      .map(
+        (p, i) => `
+          <div class="end-row">
+            <span class="end-rank">${i + 1}</span>
+            <span class="end-dot" style="background:${colorHex(p.color)}"></span>
+            <span class="end-name">${escapeHtml(playerDisplayName(p))}${p.offline ? ' · 离线' : ''}</span>
+            <span class="end-score">${p.finished ? `第 ${p.finishedAt} 回合` : '未抵达'} · ${p.blockades} 阻挡物</span>
+          </div>`,
+      )
+      .join('');
+    const overlay = el('div', 'end-overlay');
+    overlay.innerHTML = `
+      <div class="end-modal">
+        <div class="end-kicker">游戏已经结束</div>
+        <h2>${winner ? `${escapeHtml(playerDisplayName(winner))} 抵达黄金城` : '无人抵达黄金城'}</h2>
+        <div class="end-sub">最终排名</div>
+        <div class="end-list">${rows}</div>
+        <div class="end-actions"></div>
+      </div>`;
+    const actionWrap = overlay.querySelector<HTMLDivElement>('.end-actions')!;
+    const roomBtn = button('返回房间', () => this.returnToLobby(), false);
+    roomBtn.className = 'gold';
+    const lobbyBtn = button('返回大厅', () => this.leaveRoom(), true);
+    actionWrap.appendChild(roomBtn);
+    actionWrap.appendChild(lobbyBtn);
+    this.hud.appendChild(overlay);
   }
 
   private closeTerrainPanel(): void {
@@ -1094,6 +1538,7 @@ class App {
     const current = this.hexAt(me.position);
     if (hex.terrain === 'eldorado' && current?.terrain !== 'finish') return '必须先进入相邻的黄金城入口，才能进入黄金城。';
     if (hex.occupant && hex.occupant !== me.id) return '此格已有其他玩家，当前不能进入。';
+    if (this.canStepToEldorado(hex)) return '点击即可进入黄金城，无需出牌。';
     if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') {
       return `点击可进入清除模式，需要选择 ${hex.cost} 张手牌${hex.terrain === 'basecamp' ? '并永久移出游戏' : '弃掉'}。`;
     }
@@ -1194,7 +1639,7 @@ const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     name: '黄金城',
     icon: '🏛',
     description: '传说中的黄金城主体区域。探险队必须从任一黄金城入口踏上这里才算完成旅程。',
-    rule: '只能从相邻的黄金城入口进入，消耗 1 点任意移动力。进入后触发最终结算阶段。',
+    rule: '只能从相邻的黄金城入口进入；最终踏入黄金城不需要出牌。进入后触发最终结算阶段。',
   },
 };
 
@@ -1228,7 +1673,7 @@ function blockadeInfo(blockade: Blockade): TerrainInfo {
 
 function terrainCostText(hex: Hex): string {
   if (hex.terrain === 'mountain') return '不可进入';
-  if (hex.terrain === 'eldorado') return '任意移动力 1 点';
+  if (hex.terrain === 'eldorado') return '无需出牌';
   if (hex.terrain === 'rubble') return `清除费用 ${hex.cost} 张手牌`;
   if (hex.terrain === 'basecamp') return `移除费用 ${hex.cost} 张手牌`;
   if (hex.terrain === 'start') return '进入消耗 1 点任意移动力';
@@ -1322,4 +1767,54 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!));
 }
 
-new App();
+async function preloadBootAssets(): Promise<void> {
+  const unique = [...new Set(BOOT_ASSET_URLS)];
+  const total = unique.length;
+  setBootProgress(3, '准备资源');
+  let done = 0;
+  await Promise.all(
+    unique.map((url) =>
+      preloadImage(url)
+        .catch(() => undefined)
+        .finally(() => {
+          done += 1;
+          setBootProgress(5 + Math.round((done / total) * 90), done < total ? '装载图像' : '整理界面');
+        }),
+    ),
+  );
+}
+
+function preloadImage(url: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error(url));
+    img.src = url;
+  });
+}
+
+function setBootProgress(value: number, text: string): void {
+  const pct = Math.max(0, Math.min(100, value));
+  const bar = document.getElementById('bootbar') as HTMLSpanElement | null;
+  const label = document.getElementById('bootpct');
+  const copy = document.getElementById('boottext');
+  if (bar) bar.style.width = `${pct}%`;
+  if (label) label.textContent = `${pct}%`;
+  if (copy) copy.textContent = text;
+}
+
+function hideBootloader(): void {
+  setBootProgress(100, '准备完成');
+  const boot = document.getElementById('bootloader');
+  if (!boot) return;
+  boot.classList.add('done');
+  setTimeout(() => boot.remove(), 420);
+}
+
+async function start(): Promise<void> {
+  await preloadBootAssets();
+  new App();
+  requestAnimationFrame(() => hideBootloader());
+}
+
+void start();

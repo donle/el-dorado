@@ -8,6 +8,8 @@ export interface RoomPlayer {
   color: PlayerColor;
   isAI: boolean;
   connected: boolean;
+  /** Human seat currently controlled by AI because the player left/disconnected. */
+  offline?: boolean;
 }
 
 export interface RoomView {
@@ -25,6 +27,8 @@ export type ClientMessage =
   | { type: 'addAI' }
   | { type: 'removePlayer'; playerId: string }
   | { type: 'startGame'; mapId?: string }
+  | { type: 'leaveRoom' }
+  | { type: 'returnToLobby' }
   | { type: 'action'; action: Action };
 
 export type ServerMessage =

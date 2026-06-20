@@ -38,6 +38,8 @@ wss.on('connection', (ws: WebSocket) => {
     if (session.room && session.playerId) {
       session.room.disconnect(session.playerId);
       session.room.broadcastRoom();
+      session.room.broadcastState();
+      session.room.runAITurns();
     }
   });
 });
@@ -85,6 +87,30 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
       requireHost(session);
       session.room!.remove(msg.playerId);
       session.room!.broadcastRoom();
+      return;
+    }
+    case 'leaveRoom': {
+      if (!session.room || !session.playerId) return;
+      const room = session.room;
+      const playerId = session.playerId;
+      if (room.phase === 'playing') {
+        room.disconnect(playerId);
+        room.broadcastRoom();
+        room.broadcastState();
+        room.runAITurns();
+      } else {
+        room.remove(playerId);
+        room.broadcastRoom();
+        if (room.members.length === 0) manager.dispose(room.code);
+      }
+      session.room = null;
+      session.playerId = null;
+      return;
+    }
+    case 'returnToLobby': {
+      if (!session.room || !session.playerId) return void send({ type: 'error', message: '你还没有进入房间' });
+      session.room.returnToLobby();
+      session.room.broadcastRoom();
       return;
     }
     case 'startGame': {

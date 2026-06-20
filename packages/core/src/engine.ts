@@ -90,6 +90,8 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
       return stepTo(state, playerId, action.to, events);
     case 'ClearSpace':
       return clearSpace(state, playerId, action.to, action.cardIds, events);
+    case 'PromoteMarket':
+      return promoteMarket(state, playerId, action.defId, events);
     case 'BuyCard':
       return buyCard(state, playerId, action.defId, action.paymentCardIds, events);
     case 'RemoveBlockade':
@@ -214,9 +216,6 @@ function assertEnterable(state: GameState, p: Player, to: Hex): void {
 
 function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent[]): void {
   const p = player(state, playerId);
-  const turn = state.turn!;
-  const mover = turn.activeMover;
-  if (!mover || mover.remaining <= 0) throw new RuleError('没有可用的移动牌');
   const hex = hexAt(state, to);
   if (!hex) throw new RuleError('没有这个地格');
   assertEnterable(state, p, hex);
@@ -230,7 +229,7 @@ function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent
   let destDeduct: number;
   if (hex.terrain === 'eldorado') {
     destRequired = null;
-    destDeduct = 1;
+    destDeduct = 0;
   } else if (hex.terrain === 'finish') {
     destRequired = hex.reqSymbol ?? null;
     destDeduct = Math.max(hex.cost, 1);
@@ -250,6 +249,14 @@ function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent
   if (blockade && !blockade.claimedBy) {
     throw new RuleError('需要先移除连接地形障碍');
   }
+  if (hex.terrain === 'eldorado') {
+    claimBlockade(p, blockade, events);
+    moveTo(state, p, hex, events);
+    return;
+  }
+  const turn = state.turn!;
+  const mover = turn.activeMover;
+  if (!mover || mover.remaining <= 0) throw new RuleError('没有可用的移动牌');
   const required = destRequired;
   const deduct = destDeduct;
   if (required !== null && required !== mover.symbol) {
@@ -329,14 +336,33 @@ function removeBlockade(
 
 // --- buying ---
 
-function freeOnBoardSlot(state: GameState): boolean {
-  const onBoard = state.market.filter((m) => m.onBoard);
-  return onBoard.some((m) => m.count === 0) || onBoard.length < 6;
+const MARKET_SLOTS = 6;
+
+function onBoardMarketCount(state: GameState): number {
+  return state.market.filter((m) => m.onBoard && m.count > 0).length;
 }
 
-function promoteOffBoard(state: GameState): void {
-  const pile = state.market.find((m) => !m.onBoard && m.count > 0);
-  if (pile) pile.onBoard = true;
+function hasMarketVacancy(state: GameState): boolean {
+  return onBoardMarketCount(state) < MARKET_SLOTS && state.market.some((m) => !m.onBoard && m.count > 0);
+}
+
+function promoteMarket(
+  state: GameState,
+  playerId: string,
+  defId: string,
+  events: GameEvent[],
+): void {
+  const turn = state.turn!;
+  if (turn.hasBought) throw new RuleError('购买后不能补位，由下一位玩家选择候补市场');
+  if (!hasMarketVacancy(state)) throw new RuleError('当前市场没有需要补位的空栏');
+
+  const pile = state.market.find((m) => m.defId === defId);
+  if (!pile || pile.count <= 0 || pile.onBoard) {
+    throw new RuleError('只能从候补市场选择仍有库存的卡牌');
+  }
+
+  pile.onBoard = true;
+  events.push({ type: 'marketPromoted', playerId, defId });
 }
 
 function buyCard(
@@ -352,7 +378,10 @@ function buyCard(
 
   const pile = state.market.find((m) => m.defId === defId);
   if (!pile || pile.count <= 0) throw new RuleError('这张牌当前无法购买');
-  if (!pile.onBoard && !freeOnBoardSlot(state)) {
+  if (hasMarketVacancy(state)) {
+    throw new RuleError('请先从候补市场选择一类卡牌补位');
+  }
+  if (!pile.onBoard) {
     throw new RuleError('这张牌还没有进入市场');
   }
 
@@ -376,7 +405,6 @@ function buyCard(
   pile.count -= 1;
   if (pile.count === 0 && pile.onBoard) {
     pile.onBoard = false;
-    promoteOffBoard(state);
   }
   turn.hasBought = true;
   events.push({ type: 'bought', playerId, defId });
@@ -407,7 +435,6 @@ function discardCards(
   if (cardIds.length === 0) throw new RuleError('至少选择一张牌弃置');
   const p = player(state, playerId);
   const turn = state.turn!;
-  if (turn.hasDiscarded) throw new RuleError('本回合已经弃过牌');
   for (const id of cardIds) {
     p.discard.push(takeFromHand(p, id));
   }
@@ -480,7 +507,6 @@ function useAbility(
       pile.count -= 1;
       if (pile.count === 0 && pile.onBoard) {
         pile.onBoard = false;
-        promoteOffBoard(state);
       }
       break;
     }

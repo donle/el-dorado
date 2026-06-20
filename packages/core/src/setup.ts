@@ -16,6 +16,7 @@ export interface PlayerSeed {
   name: string;
   color: PlayerColor;
   isAI?: boolean;
+  offline?: boolean;
 }
 
 /** Create a fresh, ready-to-play game state. */
@@ -65,6 +66,7 @@ export function createGame(
       name: s.name,
       color: s.color,
       isAI: !!s.isAI,
+      offline: !!s.offline,
       deck,
       hand,
       discard: [],

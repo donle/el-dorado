@@ -11,7 +11,7 @@
  * `planTurn` returns a full action sequence (ending in EndTurn) that the
  * server applies through the same validated reducer humans use.
  */
-import type { GameState, Player, Hex, MoveSymbol, Terrain, Axial, Blockade } from './types.js';
+import type { GameState, Player, Hex, MoveSymbol, Terrain, Axial, Blockade, MarketPile } from './types.js';
 import type { Action } from './actions.js';
 import { getDef, coinValue, movableSymbols } from './cards.js';
 import { neighbors, key } from './hex.js';
@@ -39,9 +39,13 @@ function requiredFor(h: Hex): MoveSymbol | null {
 
 function enterCost(h: Hex): number {
   if (h.terrain === 'start') return 1;
-  if (h.terrain === 'eldorado') return 1;
+  if (h.terrain === 'eldorado') return 0;
   if (h.terrain === 'finish') return Math.max(h.cost, 1);
   return h.cost;
+}
+
+function stepPathCost(h: Hex): number {
+  return h.terrain === 'eldorado' ? 0 : Math.max(enterCost(h), 1);
 }
 
 function sameCoord(a: Axial, b: Axial): boolean {
@@ -78,7 +82,7 @@ function capability(p: Player): Capability {
 function canTraverse(h: Hex, p: Player, cap: Capability, owned: number): boolean {
   if (h.terrain === 'mountain') return false;
   if (h.occupant && h.occupant !== p.id) return false;
-  if (h.terrain === 'eldorado') return cap.machete + cap.paddle + cap.coin > 0;
+  if (h.terrain === 'eldorado') return true;
   if (h.terrain === 'rubble' || h.terrain === 'basecamp') return owned >= h.cost;
   if (h.terrain === 'green') return cap.machete >= h.cost;
   if (h.terrain === 'blue') return cap.paddle >= h.cost;
@@ -139,9 +143,9 @@ export function pathToFinish(
       if (blockade && !blockade.claimedBy) {
         cost = blockadeRequiresDiscard(blockade)
           ? blockade.cost
-          : blockade.cost + Math.max(enterCost(hex), 1);
+          : blockade.cost + stepPathCost(hex);
       } else {
-        cost = Math.max(enterCost(hex), 1);
+        cost = stepPathCost(hex);
       }
       const nd = best + cost;
       if (nd < (dist.get(k) ?? Infinity)) {
@@ -173,6 +177,49 @@ interface Need {
   cost: number;
 }
 
+const MARKET_SLOTS = 6;
+
+function marketNeedsPromotion(state: GameState): boolean {
+  const active = state.market.filter((m) => m.onBoard && m.count > 0).length;
+  return active < MARKET_SLOTS && state.market.some((m) => !m.onBoard && m.count > 0);
+}
+
+function matchesNeed(defId: string, need: Need): boolean {
+  const d = getDef(defId);
+  const syms = movableSymbols(d.defId);
+  const ok = need.symbol === null ? syms.length > 0 : syms.includes(need.symbol);
+  return ok && d.power >= need.cost;
+}
+
+function cheapestFirst(a: MarketPile, b: MarketPile): number {
+  return getDef(a.defId).cost - getDef(b.defId).cost;
+}
+
+function chooseMarketPromotion(state: GameState, coins: number, gap: Need | null): string | null {
+  if (!marketNeedsPromotion(state)) return null;
+  const reserve = state.market.filter((m) => !m.onBoard && m.count > 0);
+
+  if (gap) {
+    const useful = reserve.filter((m) => matchesNeed(m.defId, gap)).sort(cheapestFirst);
+    const affordableUseful = useful.filter((m) => getDef(m.defId).cost <= coins);
+    if (affordableUseful.length > 0) return affordableUseful[0].defId;
+    if (useful.length > 0) return useful[0].defId;
+  }
+
+  const affordable = reserve.filter((m) => getDef(m.defId).cost <= coins);
+  const econ = affordable
+    .filter((m) => coinValue(m.defId) >= 1)
+    .sort((a, b) => coinValue(b.defId) - coinValue(a.defId) || cheapestFirst(a, b));
+  if (econ.length > 0) return econ[0].defId;
+
+  const movement = affordable
+    .filter((m) => movableSymbols(m.defId).length > 0)
+    .sort(cheapestFirst);
+  if (movement.length > 0) return movement[0].defId;
+
+  return reserve.slice().sort(cheapestFirst)[0]?.defId ?? null;
+}
+
 export function planTurn(state: GameState, playerId: string): Action[] {
   const p = state.players.find((x) => x.id === playerId);
   if (!p) return [{ type: 'EndTurn' }];
@@ -197,7 +244,7 @@ export function planTurn(state: GameState, playerId: string): Action[] {
     // for both costs combined.
     const destReq = requiredFor(to);
     if (destReq !== null && destReq !== symbol) return false;
-    return cap[symbol] >= blockade.cost + Math.max(enterCost(to), 1);
+    return cap[symbol] >= blockade.cost + stepPathCost(to);
   };
   const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned), edgeCanTraverse);
   let plannedPosition: Axial = { ...p.position };
@@ -215,7 +262,7 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       } else {
         const seamSym = blockadeMoveSymbol(blockade)!;
         // Need one mover of seamSym with enough power for seam.cost + far terrain.
-        const destDeduct = requiredFor(hex) === null ? 1 : enterCost(hex);
+        const destDeduct = hex.terrain === 'eldorado' ? 0 : requiredFor(hex) === null ? 1 : enterCost(hex);
         const need = blockade.cost + destDeduct;
         if (mover && mover.symbol === seamSym && mover.remaining >= need) {
           actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id });
@@ -251,7 +298,13 @@ export function planTurn(state: GameState, playerId: string): Action[] {
 
     // 3) Normal step onto `hex` by its terrain (blockade, if any, now open).
     const required = requiredFor(hex);
-    const deduct = required === null ? 1 : enterCost(hex);
+    const deduct = hex.terrain === 'eldorado' ? 0 : required === null ? 1 : enterCost(hex);
+    if (hex.terrain === 'eldorado') {
+      actions.push({ type: 'StepTo', to: { q: hex.q, r: hex.r } });
+      moved = true;
+      plannedPosition = { q: hex.q, r: hex.r };
+      continue;
+    }
     if (mover && mover.remaining >= deduct && (required === null || required === mover.symbol)) {
       actions.push({ type: 'StepTo', to: { q: hex.q, r: hex.r } });
       mover.remaining -= deduct;
@@ -276,8 +329,6 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   // --- buying ---
   const rest = available();
   const coins = rest.reduce((sum, c) => sum + coinValue(c.defId), 0);
-  const onBoard = state.market.filter((m) => m.onBoard && m.count > 0);
-  const affordable = onBoard.filter((m) => getDef(m.defId).cost <= coins);
 
   // What capability do we lack? Look at the ideal (unrestricted) route and find
   // the first hex our current deck can't traverse — buy toward closing that gap.
@@ -309,14 +360,15 @@ export function planTurn(state: GameState, playerId: string): Action[] {
     gapPosition = { q: h.q, r: h.r };
   }
 
+  const promotedDefId = chooseMarketPromotion(state, coins, gap);
+  if (promotedDefId) actions.push({ type: 'PromoteMarket', defId: promotedDefId });
+
+  const onBoard = state.market.filter((m) => (m.onBoard || m.defId === promotedDefId) && m.count > 0);
+  const affordable = onBoard.filter((m) => getDef(m.defId).cost <= coins);
+
   const buyableForGap = (n: Need) =>
     affordable
-      .filter((m) => {
-        const d = getDef(m.defId);
-        const syms = movableSymbols(d.defId);
-        const ok = n.symbol === null ? syms.length > 0 : syms.includes(n.symbol);
-        return ok && d.power >= n.cost;
-      })
+      .filter((m) => matchesNeed(m.defId, n))
       .sort((a, b) => getDef(a.defId).cost - getDef(b.defId).cost);
 
   let target: string | null = null;

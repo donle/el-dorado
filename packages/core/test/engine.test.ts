@@ -659,6 +659,82 @@ describe('buying', () => {
     });
     expect(r2.result.ok).toBe(false);
   });
+
+  it('leaves an empty market slot instead of auto-promoting a reserve pile', () => {
+    const s = game();
+    const photographer = s.market.find((m) => m.defId === 'photographer')!;
+    const pioneer = s.market.find((m) => m.defId === 'pioneer')!;
+    photographer.count = 1;
+    expect(photographer.onBoard).toBe(true);
+    expect(pioneer.onBoard).toBe(false);
+    giveHand(s, 'p0', ['traveller', 'traveller']);
+
+    const r = run(s, 'p0', {
+      type: 'BuyCard',
+      defId: 'photographer',
+      paymentCardIds: ['p0:traveller#t0', 'p0:traveller#t1'],
+    });
+
+    expect(r.result.ok).toBe(true);
+    expect(r.state.market.find((m) => m.defId === 'photographer')!).toMatchObject({ count: 0, onBoard: false });
+    expect(r.state.market.find((m) => m.defId === 'pioneer')!.onBoard).toBe(false);
+    expect(r.state.market.filter((m) => m.onBoard && m.count > 0)).toHaveLength(5);
+
+    const sameTurnPromote = run(r.state, 'p0', { type: 'PromoteMarket', defId: 'pioneer' });
+    expect(sameTurnPromote.result.ok).toBe(false);
+  });
+
+  it('requires the next player to promote a reserve pile before buying', () => {
+    const s = game();
+    s.market.find((m) => m.defId === 'photographer')!.count = 1;
+    giveHand(s, 'p0', ['traveller', 'traveller']);
+
+    let r = run(
+      s,
+      'p0',
+      {
+        type: 'BuyCard',
+        defId: 'photographer',
+        paymentCardIds: ['p0:traveller#t0', 'p0:traveller#t1'],
+      },
+      { type: 'EndTurn' },
+    );
+    expect(r.result.ok).toBe(true);
+    expect(r.state.turn!.playerId).toBe('p1');
+    giveHand(r.state, 'p1', ['millionaire', 'millionaire']);
+
+    const blockedBuy = run(r.state, 'p1', {
+      type: 'BuyCard',
+      defId: 'scout',
+      paymentCardIds: ['p1:millionaire#t0'],
+    });
+    expect(blockedBuy.result.ok).toBe(false);
+
+    r = run(r.state, 'p1', { type: 'PromoteMarket', defId: 'pioneer' });
+    expect(r.result.ok).toBe(true);
+    expect(r.result.events).toContainEqual({ type: 'marketPromoted', playerId: 'p1', defId: 'pioneer' });
+    expect(r.state.market.find((m) => m.defId === 'pioneer')!.onBoard).toBe(true);
+    expect(r.state.turn!.hasBought).toBe(false);
+
+    r = run(r.state, 'p1', {
+      type: 'BuyCard',
+      defId: 'pioneer',
+      paymentCardIds: ['p1:millionaire#t0', 'p1:millionaire#t1'],
+    });
+    expect(r.result.ok).toBe(true);
+    expect(r.state.players[1].discard.some((c) => c.defId === 'pioneer')).toBe(true);
+  });
+
+  it('rejects buying a reserve pile while the market is full', () => {
+    const s = game();
+    giveHand(s, 'p0', ['millionaire']);
+    const r = run(s, 'p0', {
+      type: 'BuyCard',
+      defId: 'pioneer',
+      paymentCardIds: ['p0:millionaire#t0'],
+    });
+    expect(r.result.ok).toBe(false);
+  });
 });
 
 describe('turn flow', () => {
@@ -700,10 +776,34 @@ describe('winning', () => {
     expect(r.result.ok).toBe(true);
     expect(r.state.players[0].finished).toBe(false);
 
+    r.state.turn!.activeMover = undefined;
     r = run(r.state, 'p0', { type: 'StepTo', to: { q: city.q, r: city.r } });
     expect(r.result.ok).toBe(true);
     expect(r.state.players[0].finished).toBe(true);
     expect(r.state.finalTurnsRemaining).toBe(1);
+  });
+
+  it('steps from an entrance onto El Dorado without playing a card', () => {
+    const s = createGame(
+      [
+        { id: 'p0', name: 'A', color: 'red' as const },
+        { id: 'p1', name: 'B', color: 'blue' as const },
+      ],
+      'classic',
+      7,
+    );
+    const entrance = s.hexes.find(
+      (h) => h.terrain === 'finish' && s.hexes.some((c) => c.terrain === 'eldorado' && isAdjacent(h, c)),
+    )!;
+    const city = s.hexes.find((h) => h.terrain === 'eldorado' && isAdjacent(h, entrance))!;
+
+    placeAt(s, 'p0', { q: entrance.q, r: entrance.r });
+    giveHand(s, 'p0', []);
+    s.turn!.activeMover = undefined;
+
+    const r = run(s, 'p0', { type: 'StepTo', to: { q: city.q, r: city.r } });
+    expect(r.result.ok).toBe(true);
+    expect(r.state.players[0].finished).toBe(true);
   });
 
   it('reaching El Dorado finishes the game after the final round', () => {
@@ -811,14 +911,17 @@ describe('DiscardCards skill', () => {
     expect(r.state.turn!.hasDiscarded).toBe(true);
   });
 
-  it('rejects a second discard in the same turn', () => {
+  it('allows multiple discards in the same turn', () => {
     const s = game(2);
     setTurn(s, 'p0');
     giveHand(s, 'p0', ['explorer', 'sailor']);
     let r = run(s, 'p0', { type: 'DiscardCards', cardIds: ['p0:explorer#t0'] });
     r = run(r.state, 'p0', { type: 'DiscardCards', cardIds: ['p0:sailor#t1'] });
-    expect(r.result.ok).toBe(false);
-    if (!r.result.ok) expect(r.result.error).toContain('已经弃过牌');
+    const p = r.state.players.find((x) => x.id === 'p0')!;
+    expect(r.result.ok).toBe(true);
+    expect(p.hand).toEqual([]);
+    expect(p.discard.map((c) => c.id)).toEqual(['p0:explorer#t0', 'p0:sailor#t1']);
+    expect(r.state.turn!.hasDiscarded).toBe(true);
   });
 
   it('rejects discarding a card not in hand', () => {
@@ -830,16 +933,13 @@ describe('DiscardCards skill', () => {
     if (!r.result.ok) expect(r.result.error).toContain('不在手牌中');
   });
 
-  it('rejects empty discard and preserves the once-per-turn slot', () => {
+  it('rejects empty discard and still allows a later discard', () => {
     const s = game(2);
     setTurn(s, 'p0');
     giveHand(s, 'p0', ['explorer', 'sailor']);
-    // Empty discard must be rejected
     const r1 = run(s, 'p0', { type: 'DiscardCards', cardIds: [] });
     expect(r1.result.ok).toBe(false);
-    // The slot must NOT have been consumed
     expect(r1.state.turn!.hasDiscarded).toBe(false);
-    // A subsequent real discard should still succeed
     const r2 = run(r1.state, 'p0', { type: 'DiscardCards', cardIds: ['p0:explorer#t0'] });
     expect(r2.result.ok).toBe(true);
     expect(r2.state.turn!.hasDiscarded).toBe(true);

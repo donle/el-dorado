@@ -5,6 +5,7 @@ export type Action =
   | { type: 'PlayMovementCard'; cardId: string; symbol: MoveSymbol }
   | { type: 'StepTo'; to: Axial }
   | { type: 'ClearSpace'; to: Axial; cardIds: string[] }
+  | { type: 'PromoteMarket'; defId: string }
   | { type: 'BuyCard'; defId: string; paymentCardIds: string[] }
   | { type: 'RemoveBlockade'; blockadeId: string; cardIds?: string[] }
   | { type: 'DiscardCards'; cardIds: string[] }
@@ -22,6 +23,7 @@ export type GameEvent =
   | { type: 'movedTo'; playerId: string; to: Axial }
   | { type: 'cardPlayed'; playerId: string; cardId: string }
   | { type: 'spaceCleared'; playerId: string; to: Axial; removed: boolean }
+  | { type: 'marketPromoted'; playerId: string; defId: string }
   | { type: 'bought'; playerId: string; defId: string }
   | { type: 'discarded'; playerId: string; count: number }
   | { type: 'ability'; playerId: string; cardId: string }
