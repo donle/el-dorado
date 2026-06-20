@@ -213,6 +213,8 @@ export class Room {
         }
         if (forcedEnd) {
           // Safety: ensure the AI relinquishes the turn even if its plan failed.
+          if (!first) await this.sleep(this.aiDelayMs);
+          first = false;
           const end = applyAction(this.game, cur, { type: 'EndTurn' });
           if (end.result.ok) {
             this.game = end.state;
