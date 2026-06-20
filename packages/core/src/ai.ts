@@ -203,17 +203,44 @@ export function planTurn(state: GameState, playerId: string): Action[] {
   let plannedPosition: Axial = { ...p.position };
   for (const hex of path) {
     const blockade = blockadeBetween(state, plannedPosition, hex);
-    const blockadeClear = !!blockade && !blockade.claimedBy && blockadeRequiresDiscard(blockade);
-    const required = blockade && !blockade.claimedBy && !blockadeClear ? blockadeMoveSymbol(blockade) : requiredFor(hex);
     const isClear = hex.terrain === 'rubble' || hex.terrain === 'basecamp';
 
-    if (blockadeClear || isClear) {
-      const cost = blockadeClear ? blockade.cost : hex.cost;
-      const pick = available()
-        .slice()
-        .sort((a, b) => getDef(a.defId).power - getDef(b.defId).power)
-        .slice(0, cost);
-      if (pick.length < cost) break; // not enough cards in hand this turn
+    // 1) Remove an unclaimed edge blockade first (stay put), then fall through to step.
+    if (blockade && !blockade.claimedBy) {
+      if (blockadeRequiresDiscard(blockade)) {
+        const pick = available().slice().sort((a, b) => getDef(a.defId).power - getDef(b.defId).power).slice(0, blockade.cost);
+        if (pick.length < blockade.cost) break;
+        pick.forEach((c) => used.add(c.id));
+        actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id, cardIds: pick.map((c) => c.id) });
+      } else {
+        const seamSym = blockadeMoveSymbol(blockade)!;
+        // Need one mover of seamSym with enough power for seam.cost + far terrain.
+        const destDeduct = requiredFor(hex) === null ? 1 : enterCost(hex);
+        const need = blockade.cost + destDeduct;
+        if (mover && mover.symbol === seamSym && mover.remaining >= need) {
+          actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id });
+          mover.remaining -= blockade.cost;
+        } else {
+          const cand = available()
+            .map((c) => ({ c, sym: declareSymbol(c.defId, seamSym), pow: getDef(c.defId).power }))
+            .filter((x) => x.sym !== null && x.pow >= need)
+            .sort((a, b) => a.pow - b.pow)[0];
+          if (!cand) break;
+          used.add(cand.c.id);
+          actions.push({ type: 'PlayMovementCard', cardId: cand.c.id, symbol: cand.sym! });
+          actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id });
+          mover = { symbol: cand.sym!, remaining: cand.pow - blockade.cost };
+        }
+      }
+      moved = true;
+      // blockade now open in-plan: fall through to step onto `hex` by terrain.
+    }
+
+    // 2) Clear a rubble/basecamp DESTINATION HEX (unchanged: enter+clear).
+    if (isClear) {
+      const cost = hex.cost;
+      const pick = available().slice().sort((a, b) => getDef(a.defId).power - getDef(b.defId).power).slice(0, cost);
+      if (pick.length < cost) break;
       pick.forEach((c) => used.add(c.id));
       actions.push({ type: 'ClearSpace', to: { q: hex.q, r: hex.r }, cardIds: pick.map((c) => c.id) });
       mover = null;
@@ -222,15 +249,9 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       continue;
     }
 
-    // Symbol-seam crossing deducts the seam cost plus the destination terrain;
-    // discard seams go through the ClearSpace branch above.
-    const deduct =
-      blockade && !blockade.claimedBy && !blockadeClear
-        ? blockade.cost + (required === null ? 1 : enterCost(hex))
-        : required === null
-          ? 1
-          : enterCost(hex);
-
+    // 3) Normal step onto `hex` by its terrain (blockade, if any, now open).
+    const required = requiredFor(hex);
+    const deduct = required === null ? 1 : enterCost(hex);
     if (mover && mover.remaining >= deduct && (required === null || required === mover.symbol)) {
       actions.push({ type: 'StepTo', to: { q: hex.q, r: hex.r } });
       mover.remaining -= deduct;
@@ -238,13 +259,11 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       plannedPosition = { q: hex.q, r: hex.r };
       continue;
     }
-
     const candidates = available()
       .map((c) => ({ c, sym: declareSymbol(c.defId, required), pow: getDef(c.defId).power }))
       .filter((x) => x.sym !== null && x.pow >= deduct)
       .sort((a, b) => a.pow - b.pow);
-    if (candidates.length === 0) break; // traversable, but not with this turn's hand
-
+    if (candidates.length === 0) break;
     const chosen = candidates[0];
     used.add(chosen.c.id);
     actions.push({ type: 'PlayMovementCard', cardId: chosen.c.id, symbol: chosen.sym! });
