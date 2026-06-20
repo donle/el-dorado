@@ -122,6 +122,12 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
       room.runAITurns(); // in case the first player is an AI
       return;
     }
+    case 'setAiDelay': {
+      if (!session.room || !session.playerId) return;
+      session.room.setAiDelay(session.playerId, msg.ms);
+      session.room.broadcastRoom();
+      return;
+    }
     case 'action': {
       if (!session.room || !session.playerId) return void send({ type: 'error', message: '你还没有进入游戏' });
       const res = session.room.handleAction(session.playerId, msg.action);

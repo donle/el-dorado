@@ -72,4 +72,24 @@ describe('Room', () => {
     expect(room.hostId).toBe(host.id);
     expect(room.view().players.find((p) => p.id === host.id)?.offline).toBe(false);
   });
+
+  it('only the host can change the AI delay, clamped to [0,10000]', () => {
+    const room = new Room('TEST');
+    const host = room.addHuman('Host', () => {});
+    const other = room.addHuman('Other', () => {});
+
+    expect(room.view().aiDelayMs).toBe(1000); // default 1s
+
+    room.setAiDelay(other.id, 3000); // non-host ignored
+    expect(room.view().aiDelayMs).toBe(1000);
+
+    room.setAiDelay(host.id, 3000);
+    expect(room.view().aiDelayMs).toBe(3000);
+
+    room.setAiDelay(host.id, 99999); // clamp max
+    expect(room.view().aiDelayMs).toBe(10000);
+
+    room.setAiDelay(host.id, -50); // clamp min
+    expect(room.view().aiDelayMs).toBe(0);
+  });
 });

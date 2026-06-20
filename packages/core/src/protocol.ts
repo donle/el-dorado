@@ -17,6 +17,7 @@ export interface RoomView {
   hostId: string;
   phase: 'lobby' | 'playing' | 'finished';
   mapId: string;
+  aiDelayMs: number;
   players: RoomPlayer[];
 }
 
@@ -29,6 +30,7 @@ export type ClientMessage =
   | { type: 'startGame'; mapId?: string }
   | { type: 'leaveRoom' }
   | { type: 'returnToLobby' }
+  | { type: 'setAiDelay'; ms: number }
   | { type: 'action'; action: Action };
 
 export type ServerMessage =

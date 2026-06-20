@@ -31,6 +31,7 @@ export class Room {
   readonly code: string;
   hostId = '';
   mapId = 'classic';
+  aiDelayMs = 1000;
   phase: 'lobby' | 'playing' | 'finished' = 'lobby';
   members: Member[] = [];
   game: GameState | null = null;
@@ -98,12 +99,19 @@ export class Room {
     return this.members.find((m) => m.id === id);
   }
 
+  /** Set the per-action AI pacing delay. Host-only; clamped to [0, 10000] ms. */
+  setAiDelay(playerId: string, ms: number): void {
+    if (playerId !== this.hostId) return;
+    this.aiDelayMs = Math.max(0, Math.min(10000, Math.round(ms)));
+  }
+
   view(): RoomView {
     return {
       code: this.code,
       hostId: this.hostId,
       phase: this.phase,
       mapId: this.mapId,
+      aiDelayMs: this.aiDelayMs,
       players: this.members.map((m) => ({
         id: m.id,
         name: m.name,
