@@ -159,7 +159,7 @@ class App {
           if (thumb) sources.set(`${e.defId}|${e.playerId}`, thumb.getBoundingClientRect());
         }
         this.state = m.state;
-        this.resetSelection();
+        this.syncSelectionToState();
         this.lobby.classList.add('hidden');
         this.board.setSelfPlayerId(this.you);
         this.board.render(m.state);
@@ -209,6 +209,27 @@ class App {
     this.clearTarget = null;
     this.clearBlockadeId = null;
     this.hint = '';
+  }
+
+  /**
+   * Reconcile selection when fresh server state arrives. Transient targets
+   * (buy/clear/mode) always reset, but the hand selection is PRESERVED across
+   * the player's own turn so a multi-card movement chain keeps walking without
+   * re-selecting — each step's played card simply drops out of the hand and is
+   * pruned here. Selection is cleared entirely when it isn't our turn.
+   */
+  private syncSelectionToState(): void {
+    this.mode = 'idle';
+    this.buyTargetDefId = null;
+    this.clearTarget = null;
+    this.clearBlockadeId = null;
+    this.hint = '';
+    if (!this.isMyTurn() || !this.me) {
+      this.selected.clear();
+      return;
+    }
+    const handIds = new Set(this.me.hand.map((c) => c.id));
+    for (const id of [...this.selected]) if (!handIds.has(id)) this.selected.delete(id);
   }
 
   private blockadeBetween(from: Axial, to: Axial): Blockade | undefined {
