@@ -260,10 +260,6 @@ class App {
     return undefined;
   }
 
-  private canUseBlockade(blockade: Blockade, symbol: MoveSymbol, power: number): boolean {
-    return !blockade.claimedBy && !blockadeRequiresDiscard(blockade) && !!this.blockadeDestination(blockade, symbol, power);
-  }
-
   private canClearBlockade(blockade: Blockade): boolean {
     return !blockade.claimedBy && blockadeRequiresDiscard(blockade) && !!this.blockadeDestination(blockade);
   }
@@ -1069,23 +1065,23 @@ class App {
     if (blockade.claimedBy) return '这块连接地形已经被领取，不再作为可领取阻挡物。';
     if (!this.blockadeDestination(blockade)) return '当前棋子不在这块连接地形覆盖的边旁边，暂时不能行动。';
 
-    const requirementText = `连接地形需要 ${blockadeCostText(blockade)}；第一个通过的玩家会领取它，玩家信息中的阻挡物数量会增加。`;
+    const requirementText = `连接地形需要 ${blockadeCostText(blockade)}；第一个移除的玩家会领取它，玩家信息中的阻挡物数量会增加。`;
     if (blockadeRequiresDiscard(blockade)) {
-      return `${requirementText} 点击这块地形会进入清除模式，选择 ${blockade.cost} 张手牌弃掉后通过。`;
+      return `${requirementText} 选 ${blockade.cost} 张手牌弃掉即可移除这块连接地形（棋子留在原地），之后再走到对面。`;
     }
     const mover = this.state!.turn?.activeMover;
     if (mover) {
       const dest = this.blockadeDestination(blockade, mover.symbol, mover.remaining);
       return dest
-        ? `${requirementText} 当前移动力可以通过，点击这块地形会跨到另一侧。`
-        : `${requirementText} 当前正在使用的移动力不能通过这里。`;
+        ? `${requirementText} 当前移动力足够，点击会移除这块连接地形（棋子留在原地），之后再走到对面。`
+        : `${requirementText} 当前正在使用的移动力不足以移除这里的连接地形。`;
     }
 
     if (this.selected.size > 0) {
-      return `${requirementText} 已选 ${this.selected.size} 张手牌，点击这块地形会自动挑最省的一张打出并通过。`;
+      return `${requirementText} 已选 ${this.selected.size} 张手牌，点击这块地形会自动挑最省的一张打出移除（棋子留在原地），之后再走到对面。`;
     }
 
-    return `${requirementText} 选择匹配的移动牌后，可以点击这块连接地形通过。`;
+    return `${requirementText} 选择匹配的移动牌后，可以点击这块连接地形移除障碍（棋子留在原地），之后再走到对面。`;
   }
 
   private terrainActionStatus(hex: Hex): string {
