@@ -242,33 +242,16 @@ function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent
     destDeduct = hex.cost;
   }
 
-  // Crossing an unclaimed seam pays the blockade AND enters the destination
-  // terrain in one move: the cost is the seam cost plus the terrain cost, and
-  // because a single mover carries one symbol, that symbol must satisfy both —
-  // so the destination terrain must accept the seam's symbol (or be wildcard).
-  // The first player to pay claims the marker; once claimed the seam is open
-  // and later crossings pay only the normal destination terrain.
+  // An unclaimed seam must be removed first via RemoveBlockade (a separate
+  // action that claims the marker in place). Stepping is then a normal move
+  // that pays only the destination terrain. Once claimed the seam is open, so
+  // claimBlockade below is a no-op for an already-claimed (or absent) seam.
   const blockade = blockadeBetween(state, p.position, hex);
-  let required: MoveSymbol | null;
-  let deduct: number;
   if (blockade && !blockade.claimedBy) {
-    const blockSym = blockadeMoveSymbol(blockade);
-    // Discard-type seams (rubble / no symbol) cannot be crossed with a movement
-    // card — they are paid via ClearSpace.
-    if (blockSym === null) {
-      throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
-    }
-    if (destRequired !== null && destRequired !== blockSym) {
-      throw new RuleError(
-        `跨越连接地形需要${symbolLabel(blockSym)}，无法用它进入对岸的${symbolLabel(destRequired)}地形`,
-      );
-    }
-    required = blockSym;
-    deduct = blockade.cost + destDeduct;
-  } else {
-    required = destRequired;
-    deduct = destDeduct;
+    throw new RuleError('需要先移除连接地形障碍');
   }
+  const required = destRequired;
+  const deduct = destDeduct;
   if (required !== null && required !== mover.symbol) {
     throw new RuleError(`需要${symbolLabel(required)}才能进入`);
   }
@@ -289,24 +272,6 @@ function clearSpace(
   const p = player(state, playerId);
   const hex = hexAt(state, to);
   if (!hex) throw new RuleError('没有这个地格');
-  const blockade = blockadeBetween(state, p.position, hex);
-  if (blockade && !blockade.claimedBy) {
-    if (!blockadeRequiresDiscard(blockade)) {
-      throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);
-    }
-    assertEnterable(state, p, hex);
-    if (cardIds.length !== blockade.cost) {
-      throw new RuleError(`需要正好选择 ${blockade.cost} 张牌`);
-    }
-    for (const id of cardIds) {
-      p.discard.push(takeFromHand(p, id));
-    }
-    state.turn!.activeMover = undefined;
-    claimBlockade(p, blockade, events);
-    moveTo(state, p, hex, events);
-    events.push({ type: 'spaceCleared', playerId, to: { q: to.q, r: to.r }, removed: false });
-    return;
-  }
   if (hex.terrain !== 'rubble' && hex.terrain !== 'basecamp') {
     throw new RuleError('这个地格不能被清除');
   }

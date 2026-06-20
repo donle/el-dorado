@@ -256,19 +256,25 @@ describe('movement', () => {
     placeAt(s, 'p0', crossing.from);
     giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[symbol]]);
 
-    const { state, result } = run(
+    const removed = run(
       s,
       'p0',
       { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
-      { type: 'StepTo', to: crossing.to },
+      { type: 'RemoveBlockade', blockadeId: blockade.id },
     );
+    // The marker is claimed by RemoveBlockade, before the step.
+    expect(removed.result.ok).toBe(true);
+    expect(removed.state.blockades[0].claimedBy).toBe('p0');
+    expect(removed.result.events).toContainEqual({ type: 'blockadeClaimed', playerId: 'p0', blockadeId: blockade.id });
+
+    const { state, result } = run(removed.state, 'p0', { type: 'StepTo', to: crossing.to });
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.error);
     expect(state.blockades[0].claimedBy).toBe('p0');
     expect(state.players[0].claimedBlockades).toEqual([blockade.id]);
     expect(state.players[0].blockades).toBe(1);
-    expect(result.events).toContainEqual({ type: 'blockadeClaimed', playerId: 'p0', blockadeId: blockade.id });
+    expect(pos(state, 'p0')).toEqual(crossing.to);
   });
 
   it('claims the same blockade when crossing any covered seam edge', () => {
@@ -306,12 +312,14 @@ describe('movement', () => {
       s,
       'p0',
       { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
+      { type: 'RemoveBlockade', blockadeId: blockade.id },
       { type: 'StepTo', to: crossing.to },
     );
 
     expect(result.ok).toBe(true);
     expect(state.blockades[0].claimedBy).toBe('p0');
     expect(state.players[0].claimedBlockades).toEqual([blockade.id]);
+    expect(pos(state, 'p0')).toEqual(crossing.to);
   });
 
   it('requires the blockade resource before it is claimed', () => {
@@ -356,8 +364,16 @@ describe('movement', () => {
       blockade.edges.find((e) => hexAt(e.a).terrain !== 'mountain' && hexAt(e.b).terrain !== 'mountain') ??
       blockade.edges[0];
 
+    // edge.b is a green (machete) terrain cost 3 — keep pioneer (machete, power 5)
+    // as the mover for the step, and discard explorer to claim the rubble seam.
+    const destHex = hexAt(edge.b);
+    expect(destHex.terrain).toBe('green');
     placeAt(s, 'p0', edge.a);
     giveHand(s, 'p0', ['pioneer', 'explorer']);
+
+    // A step across the still-unclaimed rubble seam is now rejected: the seam
+    // must be removed first (the rubble seam carries no symbol, so a movement
+    // card cannot cross it at all).
     let r = run(
       s,
       'p0',
@@ -365,19 +381,31 @@ describe('movement', () => {
       { type: 'StepTo', to: edge.b },
     );
     expect(r.result.ok).toBe(false);
-    expect((r.result as { error: string }).error).toMatch(/弃 1 张手牌/);
+    expect((r.result as { error: string }).error).toMatch(/先移除连接地形/);
 
+    // Claim the rubble seam in place by discarding cost cards; the pawn stays.
+    // (Start fresh from `s` so the mover/hand are untouched for the real run.)
     r = run(s, 'p0', {
-      type: 'ClearSpace',
-      to: edge.b,
-      cardIds: ['p0:pioneer#t0'],
+      type: 'RemoveBlockade',
+      blockadeId: blockade.id,
+      cardIds: ['p0:explorer#t1'],
     });
     expect(r.result.ok).toBe(true);
-    expect(pos(r.state, 'p0')).toEqual(edge.b);
+    expect(pos(r.state, 'p0')).toEqual(edge.a); // 留在原地
     expect(r.state.blockades.find((b) => b.id === blockade.id)!.claimedBy).toBe('p0');
     expect(r.state.players[0].claimedBlockades).toEqual([blockade.id]);
-    expect(r.state.players[0].discard.some((c) => c.id === 'p0:pioneer#t0')).toBe(true);
+    expect(r.state.players[0].discard.some((c) => c.id === 'p0:explorer#t1')).toBe(true);
     expect(r.result.events).toContainEqual({ type: 'blockadeClaimed', playerId: 'p0', blockadeId: blockade.id });
+
+    // Now a separate step onto the far hex (green, cost 3) succeeds.
+    r = run(
+      r.state,
+      'p0',
+      { type: 'PlayMovementCard', cardId: 'p0:pioneer#t0', symbol: 'machete' },
+      { type: 'StepTo', to: edge.b },
+    );
+    expect(r.result.ok).toBe(true);
+    expect(pos(r.state, 'p0')).toEqual(edge.b);
   });
 
   it('does not require the blockade resource after the first player claims it', () => {
@@ -409,6 +437,7 @@ describe('movement', () => {
       s,
       'p0',
       { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[blockadeSymbol]}#t0`, symbol: blockadeSymbol },
+      { type: 'RemoveBlockade', blockadeId: blockade.id },
       { type: 'StepTo', to: claim.to },
     );
 
@@ -461,7 +490,7 @@ describe('seam crossing cost (blockade + destination terrain)', () => {
       11,
     );
 
-  it('charges blockade cost PLUS destination terrain cost on the first crossing', () => {
+  it('charges blockade cost on removal, then only the destination terrain on the step', () => {
     const s = startGame();
     const blockade = s.blockades[0]; // green / machete, cost 1
     const symbol = blockadeSymbolForTest(blockade);
@@ -469,51 +498,89 @@ describe('seam crossing cost (blockade + destination terrain)', () => {
     expect(crossing).toBeTruthy();
     placeAt(s, 'p0', crossing!.from);
     giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[symbol]]); // pioneer, machete power 5
-    const { state, result } = run(
+    const power = getDef(STRONG_CARD_BY_SYMBOL[symbol]).power;
+
+    // Step 1: remove the seam — only blockade.cost is deducted; pawn stays put.
+    let r = run(
       s,
       'p0',
       { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
-      { type: 'StepTo', to: crossing!.to },
+      { type: 'RemoveBlockade', blockadeId: blockade.id },
     );
-    expect(result.ok).toBe(true);
-    expect(pos(state, 'p0')).toEqual(crossing!.to);
-    expect(state.blockades[0].claimedBy).toBe('p0');
-    // 5 (pioneer) − (blockade.cost + destination terrain cost)
-    expect(state.turn!.activeMover!.remaining).toBe(5 - (blockade.cost + crossing!.dest.cost));
+    expect(r.result.ok).toBe(true);
+    expect(r.state.blockades[0].claimedBy).toBe('p0');
+    expect(pos(r.state, 'p0')).toEqual(crossing!.from);
+    expect(r.state.turn!.activeMover!.remaining).toBe(power - blockade.cost);
+
+    // Step 2: the step onto the far hex charges only the destination terrain.
+    r = run(r.state, 'p0', { type: 'StepTo', to: crossing!.to });
+    expect(r.result.ok).toBe(true);
+    expect(pos(r.state, 'p0')).toEqual(crossing!.to);
+    expect(r.state.turn!.activeMover!.remaining).toBe(power - blockade.cost - crossing!.dest.cost);
   });
 
-  it('rejects crossing onto a terrain whose symbol differs from the seam symbol', () => {
+  it('can reach a different-symbol far hex by removing with the seam symbol then stepping with the far symbol', () => {
+    // The old atomic crossing rejected a far terrain whose symbol differed from
+    // the seam symbol (one mover had to satisfy both). With removal and the step
+    // decoupled they may use different cards, so this is now possible.
     const s = startGame();
-    const blockade = s.blockades[0]; // machete
-    const symbol = blockadeSymbolForTest(blockade);
+    const blockade = s.blockades[0]; // green / machete
+    const symbol = blockadeSymbolForTest(blockade); // machete
     const crossing = seamCrossing(s, blockade, false);
     if (!crossing) return; // no incompatible edge on this seam → nothing to assert
+    const destSymbol = terrainSymbolForTest(crossing.dest.terrain)!; // e.g. paddle
+    expect(destSymbol).not.toBe(symbol);
     placeAt(s, 'p0', crossing.from);
     giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[symbol]]);
-    const { result } = run(
+
+    // Same seam-symbol mover cannot continue onto the different-symbol far hex.
+    let r = run(
       s,
       'p0',
       { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
+      { type: 'RemoveBlockade', blockadeId: blockade.id },
       { type: 'StepTo', to: crossing.to },
     );
-    expect(result.ok).toBe(false);
+    expect(r.result.ok).toBe(false);
+    expect((r.result as { error: string }).error).toMatch(/才能进入/);
+    // The seam is now claimed (removal succeeded) but the pawn never crossed.
+    expect(r.state.blockades[0].claimedBy).toBe('p0');
+    expect(pos(r.state, 'p0')).toEqual(crossing.from);
+
+    // Playing a far-terrain-symbol card and stepping now succeeds.
+    giveHand(r.state, 'p0', [STRONG_CARD_BY_SYMBOL[destSymbol]]);
+    r = run(
+      r.state,
+      'p0',
+      { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[destSymbol]}#t0`, symbol: destSymbol },
+      { type: 'StepTo', to: crossing.to },
+    );
+    expect(r.result.ok).toBe(true);
+    expect(pos(r.state, 'p0')).toEqual(crossing.to);
   });
 
-  it('rejects crossing when power covers the blockade but not the destination terrain', () => {
+  it('rejects the step when the mover has spent its power on the seam removal', () => {
+    // Under the old atomic model a single weak mover paid blockade + terrain at
+    // once. Now removal and the step are independent power checks: a weak mover
+    // can claim the seam but is then too spent to enter the far terrain.
     const s = startGame();
     const blockade = s.blockades[0]; // machete, cost 1
     const symbol = blockadeSymbolForTest(blockade);
     const crossing = seamCrossing(s, blockade, true);
     placeAt(s, 'p0', crossing!.from);
     giveHand(s, 'p0', [BASIC_CARD_BY_SYMBOL[symbol]]); // explorer, machete power 1
-    const { result } = run(
+    // Removal succeeds and spends the mover down to 0 power.
+    let r = run(
       s,
       'p0',
       { type: 'PlayMovementCard', cardId: `p0:${BASIC_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
-      { type: 'StepTo', to: crossing!.to },
+      { type: 'RemoveBlockade', blockadeId: blockade.id },
     );
-    expect(result.ok).toBe(false);
-    expect((result as { error: string }).error).toMatch(/移动力量不足/);
+    expect(r.result.ok).toBe(true);
+    expect(r.state.turn!.activeMover!.remaining).toBe(0);
+    // The far hex (green, cost 2) can no longer be entered with this mover.
+    r = run(r.state, 'p0', { type: 'StepTo', to: crossing!.to });
+    expect(r.result.ok).toBe(false);
   });
 });
 
