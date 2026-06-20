@@ -268,6 +268,11 @@ class App {
     return !blockade.claimedBy && blockadeRequiresDiscard(blockade) && !!this.blockadeDestination(blockade);
   }
 
+  private canRemoveBlockade(blockade: Blockade, symbol: MoveSymbol, power: number): boolean {
+    return !blockade.claimedBy && !blockadeRequiresDiscard(blockade)
+      && blockadeMoveSymbol(blockade) === symbol && power >= blockade.cost;
+  }
+
   private movementRequirement(
     hex: Hex,
   ): { required: MoveSymbol | null; cost: number; blockade?: Blockade; discard?: boolean; destReq?: MoveSymbol | null } {
@@ -324,7 +329,7 @@ class App {
     } else if (mover && mover.remaining > 0) {
       for (const h of adj) if (this.canEnter(h, mover.symbol, mover.remaining)) out.push(h);
       for (const blockade of unclaimedBlockades) {
-        if (this.canUseBlockade(blockade, mover.symbol, mover.remaining)) blockadeOut.add(blockade.id);
+        if (this.canRemoveBlockade(blockade, mover.symbol, mover.remaining)) blockadeOut.add(blockade.id);
         if (this.canClearBlockade(blockade)) blockadeOut.add(blockade.id);
       }
     } else if (this.selected.size > 0) {
@@ -335,7 +340,7 @@ class App {
           if (syms.some((s) => this.canEnter(h, s, def.power))) out.push(h);
         }
         for (const blockade of unclaimedBlockades) {
-          if (syms.some((s) => this.canUseBlockade(blockade, s, def.power))) blockadeOut.add(blockade.id);
+          if (syms.some((s) => this.canRemoveBlockade(blockade, s, def.power))) blockadeOut.add(blockade.id);
         }
       }
       for (const blockade of unclaimedBlockades) {
@@ -352,16 +357,6 @@ class App {
     }
     this.board.setHighlights(out);
     this.board.setBlockadeHighlights([...blockadeOut]);
-  }
-
-  private startBlockadeClear(blockade: Blockade, dest: Hex): void {
-    this.mode = 'clear';
-    this.clearTarget = { q: dest.q, r: dest.r };
-    this.clearBlockadeId = blockade.id;
-    this.selected.clear();
-    this.hint = `选 ${blockade.cost} 张牌弃掉，打开这块碎石连接地形`;
-    this.renderHud();
-    this.recomputeHighlights();
   }
 
   // --- input ---
@@ -400,9 +395,9 @@ class App {
     const me = this.me;
     if (!hex || !me || !isAdjacent(me.position, hex)) return false;
 
-    const blockade = this.blockadeBetween(me.position, hex);
-    if (blockade && !blockade.claimedBy && blockadeRequiresDiscard(blockade)) {
-      this.startBlockadeClear(blockade, hex);
+    const between = this.blockadeBetween(me.position, hex);
+    if (between && !between.claimedBy) {
+      this.flash('先点连接地形移除障碍');
       return true;
     }
 
@@ -464,30 +459,55 @@ class App {
     if (!this.isMyTurn()) return false;
     if (this.mode === 'clear') return false;
     const blockade = this.blockadeById(id);
-    if (!blockade || blockade.claimedBy) return false;
+    if (!blockade) return false;
 
-    if (blockadeRequiresDiscard(blockade)) {
-      const dest = this.blockadeDestination(blockade);
-      if (dest) this.startBlockadeClear(blockade, dest);
-      return !!dest;
+    // Unclaimed: REMOVE in place (do not move).
+    if (!blockade.claimedBy) {
+      if (blockadeRequiresDiscard(blockade)) {
+        // enter card-selection to discard exactly blockade.cost cards
+        this.mode = 'clear';
+        this.clearBlockadeId = blockade.id;
+        this.clearTarget = null; // marker: removing a blockade, not a hex
+        this.selected.clear();
+        this.hint = `选 ${blockade.cost} 张牌弃掉，移除这块连接地形`;
+        this.renderHud();
+        this.recomputeHighlights();
+        return true;
+      }
+      const seamSym = blockadeMoveSymbol(blockade);
+      const mover = this.state!.turn?.activeMover;
+      if (seamSym && mover && mover.symbol === seamSym && mover.remaining >= blockade.cost) {
+        this.act({ type: 'RemoveBlockade', blockadeId: blockade.id });
+        return true;
+      }
+      const hand = this.me?.hand ?? [];
+      const candidates = [...this.selected]
+        .filter((cid) => hand.some((h) => h.id === cid))
+        .map((cid) => ({ id: cid, defId: cardDefId(cid, this.state!) }));
+      const pick = pickHandMover(seamSym, blockade.cost, candidates);
+      if (pick) {
+        this.selected.delete(pick.cardId);
+        this.act({ type: 'PlayMovementCard', cardId: pick.cardId, symbol: pick.symbol });
+        this.act({ type: 'RemoveBlockade', blockadeId: blockade.id });
+        return true;
+      }
+      this.flash('没有可用于移除这块连接地形的牌');
+      return true;
     }
 
+    // Claimed: cross normally onto the far hex.
     const mover = this.state!.turn?.activeMover;
     if (mover && mover.remaining > 0) {
       const dest = this.blockadeDestination(blockade, mover.symbol, mover.remaining);
-      if (dest) {
-        this.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
-        return true;
-      }
+      if (dest) { this.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } }); return true; }
     }
-
     const destGeo = this.blockadeDestination(blockade);
     if (!destGeo) return false;
     const req = this.movementRequirement(destGeo);
     const hand = this.me?.hand ?? [];
     const candidates = [...this.selected]
-      .filter((id) => hand.some((h) => h.id === id))
-      .map((id) => ({ id, defId: cardDefId(id, this.state!) }));
+      .filter((cid) => hand.some((h) => h.id === cid))
+      .map((cid) => ({ id: cid, defId: cardDefId(cid, this.state!) }));
     const pick = pickHandMover(req.required, req.cost, candidates);
     if (pick) {
       const pickDefId = candidates.find((c) => c.id === pick.cardId)!.defId;
@@ -503,14 +523,18 @@ class App {
 
   private onCardClick(cardId: string): void {
     if (!this.isMyTurn()) return;
-    if (this.mode === 'clear' && this.clearTarget) {
+    if (this.mode === 'clear') {
       if (this.selected.has(cardId)) this.selected.delete(cardId);
       else this.selected.add(cardId);
       const cost = this.clearBlockadeId
         ? this.blockadeById(this.clearBlockadeId)?.cost ?? 0
-        : this.hexAt(this.clearTarget)?.cost ?? 0;
+        : this.hexAt(this.clearTarget!)?.cost ?? 0;
       if (this.selected.size === cost) {
-        this.act({ type: 'ClearSpace', to: this.clearTarget, cardIds: [...this.selected] });
+        if (this.clearBlockadeId) {
+          this.act({ type: 'RemoveBlockade', blockadeId: this.clearBlockadeId, cardIds: [...this.selected] });
+        } else if (this.clearTarget) {
+          this.act({ type: 'ClearSpace', to: this.clearTarget, cardIds: [...this.selected] });
+        }
         return;
       }
       this.renderHud();
