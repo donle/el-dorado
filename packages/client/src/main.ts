@@ -9,6 +9,7 @@ import {
   neighbors,
   isAdjacent,
   distance,
+  pickHandMover,
   type GameState,
   type RoomView,
   type ServerMessage,
@@ -72,7 +73,7 @@ function sameCoord(a: Axial, b: Axial): boolean {
   return a.q === b.q && a.r === b.r;
 }
 
-type Mode = 'idle' | 'buy' | 'clear' | 'discard';
+type Mode = 'idle' | 'clear';
 
 class App {
   net = new Net();
@@ -82,11 +83,9 @@ class App {
   state: GameState | null = null;
 
   // interaction
-  selectedCardId: string | null = null;
+  selected = new Set<string>();
   mode: Mode = 'idle';
   buyTargetDefId: string | null = null;
-  payment = new Set<string>();
-  discardSet = new Set<string>();
   clearTarget: Axial | null = null;
   clearBlockadeId: string | null = null;
   viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
@@ -204,11 +203,9 @@ class App {
   }
 
   private resetSelection(): void {
-    this.selectedCardId = null;
+    this.selected.clear();
     this.mode = 'idle';
     this.buyTargetDefId = null;
-    this.payment.clear();
-    this.discardSet.clear();
     this.clearTarget = null;
     this.clearBlockadeId = null;
     this.hint = '';
@@ -301,7 +298,7 @@ class App {
     const mover = this.state!.turn?.activeMover;
     const unclaimedBlockades = this.state!.blockades.filter((b) => !b.claimedBy);
 
-    if (this.mode === 'clear' || this.mode === 'buy' || this.mode === 'discard') {
+    if (this.mode === 'clear') {
       // selection happens in the hand panel; no hex highlight
     } else if (mover && mover.remaining > 0) {
       for (const h of adj) if (this.canEnter(h, mover.symbol, mover.remaining)) out.push(h);
@@ -309,14 +306,18 @@ class App {
         if (this.canUseBlockade(blockade, mover.symbol, mover.remaining)) blockadeOut.add(blockade.id);
         if (this.canClearBlockade(blockade)) blockadeOut.add(blockade.id);
       }
-    } else if (this.selectedCardId) {
-      const def = getDef(cardDefId(this.selectedCardId, this.state!));
-      const syms = movableSymbols(def.defId);
-      for (const h of adj) {
-        if (syms.some((s) => this.canEnter(h, s, def.power))) out.push(h);
+    } else if (this.selected.size > 0) {
+      for (const id of this.selected) {
+        const def = getDef(cardDefId(id, this.state!));
+        const syms = movableSymbols(def.defId);
+        for (const h of adj) {
+          if (syms.some((s) => this.canEnter(h, s, def.power))) out.push(h);
+        }
+        for (const blockade of unclaimedBlockades) {
+          if (syms.some((s) => this.canUseBlockade(blockade, s, def.power))) blockadeOut.add(blockade.id);
+        }
       }
       for (const blockade of unclaimedBlockades) {
-        if (syms.some((s) => this.canUseBlockade(blockade, s, def.power))) blockadeOut.add(blockade.id);
         if (this.canClearBlockade(blockade)) blockadeOut.add(blockade.id);
       }
     } else {
@@ -336,8 +337,7 @@ class App {
     this.mode = 'clear';
     this.clearTarget = { q: dest.q, r: dest.r };
     this.clearBlockadeId = blockade.id;
-    this.selectedCardId = null;
-    this.payment.clear();
+    this.selected.clear();
     this.hint = `选 ${blockade.cost} 张牌弃掉，打开这块碎石连接地形`;
     this.renderHud();
     this.recomputeHighlights();
@@ -374,7 +374,7 @@ class App {
 
   private tryActOnHex(c: Axial): boolean {
     if (!this.isMyTurn()) return false;
-    if (this.mode === 'buy' || this.mode === 'clear' || this.mode === 'discard') return false;
+    if (this.mode === 'clear') return false;
     const hex = this.hexAt(c);
     const me = this.me;
     if (!hex || !me || !isAdjacent(me.position, hex)) return false;
@@ -390,8 +390,7 @@ class App {
       this.mode = 'clear';
       this.clearTarget = c;
       this.clearBlockadeId = null;
-      this.selectedCardId = null;
-      this.payment.clear();
+      this.selected.clear();
       this.hint = `选 ${hex.cost} 张牌${hex.terrain === 'basecamp' ? '（将被永久移除）' : ''}清除此格`;
       this.renderHud();
       this.recomputeHighlights();
@@ -399,21 +398,23 @@ class App {
     }
 
     const mover = this.state!.turn?.activeMover;
-    // 2) Continue with the active mover.
+    // 2) Continue with the active mover (zero waste).
     if (mover && this.canEnter(hex, mover.symbol, mover.remaining)) {
       this.act({ type: 'StepTo', to: c });
       return true;
     }
-    // 3) Play the selected card to move.
-    if (this.selectedCardId) {
-      const def = getDef(cardDefId(this.selectedCardId, this.state!));
-      const req = this.movementRequirement(hex).required;
-      const syms = movableSymbols(def.defId);
-      const sym: MoveSymbol | undefined = req && syms.includes(req) ? req : syms[0];
-      if (sym && this.canEnter(hex, sym, def.power)) {
-        const cardId = this.selectedCardId;
-        this.selectedCardId = null;
-        this.act({ type: 'PlayMovementCard', cardId, symbol: sym });
+    // 3) Pick least-waste card from selected that can pay this step.
+    const { required, cost } = this.movementRequirement(hex);
+    const hand = this.me?.hand ?? [];
+    const candidates = [...this.selected]
+      .filter((id) => hand.some((h) => h.id === id))
+      .map((id) => ({ id, defId: cardDefId(id, this.state!) }));
+    const pick = pickHandMover(required, cost, candidates);
+    if (pick) {
+      const pickDefId = candidates.find((c) => c.id === pick.cardId)!.defId;
+      if (this.canEnter(hex, pick.symbol, getDef(pickDefId).power)) {
+        this.selected.delete(pick.cardId);
+        this.act({ type: 'PlayMovementCard', cardId: pick.cardId, symbol: pick.symbol });
         this.act({ type: 'StepTo', to: c });
         return true;
       }
@@ -440,7 +441,7 @@ class App {
 
   private tryActOnBlockade(id: string): boolean {
     if (!this.isMyTurn()) return false;
-    if (this.mode === 'buy' || this.mode === 'clear' || this.mode === 'discard') return false;
+    if (this.mode === 'clear') return false;
     const blockade = this.blockadeById(id);
     if (!blockade || blockade.claimedBy) return false;
 
@@ -459,81 +460,59 @@ class App {
       }
     }
 
-    if (this.selectedCardId) {
-      const def = getDef(cardDefId(this.selectedCardId, this.state!));
-      const syms = movableSymbols(def.defId);
-      const required = blockadeMoveSymbol(blockade);
-      const preferred = required && syms.includes(required) ? required : syms[0];
-      const sym = preferred && this.canUseBlockade(blockade, preferred, def.power) ? preferred : syms.find((s) => this.canUseBlockade(blockade, s, def.power));
-      if (sym) {
-        const dest = this.blockadeDestination(blockade, sym, def.power);
-        if (!dest) return false;
-        const cardId = this.selectedCardId;
-        this.selectedCardId = null;
-        this.act({ type: 'PlayMovementCard', cardId, symbol: sym });
-        this.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
-        return true;
-      }
+    const destGeo = this.blockadeDestination(blockade);
+    if (!destGeo) return false;
+    const req = this.movementRequirement(destGeo);
+    const hand = this.me?.hand ?? [];
+    const candidates = [...this.selected]
+      .filter((id) => hand.some((h) => h.id === id))
+      .map((id) => ({ id, defId: cardDefId(id, this.state!) }));
+    const pick = pickHandMover(req.required, req.cost, candidates);
+    if (pick) {
+      const pickDefId = candidates.find((c) => c.id === pick.cardId)!.defId;
+      const dest = this.blockadeDestination(blockade, pick.symbol, getDef(pickDefId).power);
+      if (!dest) return false;
+      this.selected.delete(pick.cardId);
+      this.act({ type: 'PlayMovementCard', cardId: pick.cardId, symbol: pick.symbol });
+      this.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
+      return true;
     }
     return false;
   }
 
   private onCardClick(cardId: string): void {
     if (!this.isMyTurn()) return;
-    if (this.mode === 'buy') {
-      if (this.payment.has(cardId)) this.payment.delete(cardId);
-      else this.payment.add(cardId);
-      this.renderHud();
-      return;
-    }
     if (this.mode === 'clear' && this.clearTarget) {
-      if (this.payment.has(cardId)) this.payment.delete(cardId);
-      else this.payment.add(cardId);
+      if (this.selected.has(cardId)) this.selected.delete(cardId);
+      else this.selected.add(cardId);
       const cost = this.clearBlockadeId
         ? this.blockadeById(this.clearBlockadeId)?.cost ?? 0
         : this.hexAt(this.clearTarget)?.cost ?? 0;
-      if (this.payment.size === cost) {
-        this.act({ type: 'ClearSpace', to: this.clearTarget, cardIds: [...this.payment] });
+      if (this.selected.size === cost) {
+        this.act({ type: 'ClearSpace', to: this.clearTarget, cardIds: [...this.selected] });
         return;
       }
       this.renderHud();
       return;
     }
-    if (this.mode === 'discard') {
-      if (this.discardSet.has(cardId)) this.discardSet.delete(cardId);
-      else this.discardSet.add(cardId);
-      this.renderHud();
-      return;
-    }
-    // movement selection
-    const def = getDef(cardDefId(cardId, this.state!));
-    if (def.kind === 'action') return; // actions not wired into the MVP UI yet
-    this.selectedCardId = this.selectedCardId === cardId ? null : cardId;
+    if (this.selected.has(cardId)) this.selected.delete(cardId);
+    else this.selected.add(cardId);
     this.recomputeHighlights();
     this.renderHud();
   }
 
   private onMarketClick(defId: string): void {
     if (!this.isMyTurn()) return;
-    if (this.state!.turn?.hasBought) {
-      this.flash('本回合已购买 · 每回合限买 1 张');
-      return;
-    }
-    this.mode = this.buyTargetDefId === defId ? 'idle' : 'buy';
-    this.buyTargetDefId = this.mode === 'buy' ? defId : null;
-    this.selectedCardId = null;
-    // 切换市场目标时保留已选付款手牌；仅退出买入模式才清空。
-    if (this.mode !== 'buy') this.payment.clear();
-    this.hint = this.mode === 'buy' ? '选手牌支付，然后点「确认购买」' : '';
-    // On mobile, close the market sheet so the hand is reachable for payment.
-    if (this.mode === 'buy') this.mobilePanel = null;
+    if (this.state!.turn?.hasBought) { this.flash('本回合已购买 · 每回合限买 1 张'); return; }
+    this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
+    this.hint = this.buyTargetDefId ? '选手牌支付，然后点「确认购买」' : '';
+    if (this.buyTargetDefId) this.mobilePanel = null;
     this.renderHud();
-    this.recomputeHighlights();
   }
 
   private confirmBuy(): void {
     if (!this.buyTargetDefId) return;
-    this.act({ type: 'BuyCard', defId: this.buyTargetDefId, paymentCardIds: [...this.payment] });
+    this.act({ type: 'BuyCard', defId: this.buyTargetDefId, paymentCardIds: [...this.selected] });
   }
 
   private cancelMode(): void {
@@ -652,7 +631,7 @@ class App {
 
   /** A card is "pinned" while it's selected — its preview stays open. */
   private isPinned(): boolean {
-    return !!this.selectedCardId || !!this.buyTargetDefId;
+    return this.selected.size > 0 || !!this.buyTargetDefId;
   }
 
   private attachPreview(node: HTMLElement, defId: string): void {
@@ -665,9 +644,10 @@ class App {
 
   /** Show the preview for the currently-selected card, anchored to its element. */
   private refreshPinnedPreview(): void {
-    if (this.selectedCardId && this.state) {
-      const node = this.handEls.get(this.selectedCardId);
-      if (node) return this.showPreview(node, cardDefId(this.selectedCardId, this.state));
+    if (this.selected.size === 1 && this.state) {
+      const id = [...this.selected][0];
+      const node = this.handEls.get(id);
+      if (node) return this.showPreview(node, cardDefId(id, this.state));
     }
     if (this.buyTargetDefId) {
       const node = this.shopEls.get(this.buyTargetDefId);
@@ -886,10 +866,8 @@ class App {
     if (me) {
       for (const c of me.hand) {
         const def = getDef(c.defId);
-        const selected = this.selectedCardId === c.id;
-        const inPayment = (this.mode === 'buy' || this.mode === 'clear') && this.payment.has(c.id);
-        const discarding = this.mode === 'discard' && this.discardSet.has(c.id);
-        const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''} ${inPayment ? 'payment' : ''} ${discarding ? 'discarding' : ''}`);
+        const selected = this.selected.has(c.id);
+        const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''}`);
         card.innerHTML = `
           ${cardFace(def)}`;
         if (myTurn) card.onclick = () => this.onCardClick(c.id);
@@ -904,39 +882,24 @@ class App {
     ctx.textContent = myTurn ? this.hint : `等待 ${turnName} 行动…`;
     bar.appendChild(ctx);
     if (myTurn && s.phase === 'playing') {
-      if (this.mode === 'buy') {
-        const cost = this.buyTargetDefId ? getDef(this.buyTargetDefId).cost : 0;
-        const have = [...this.payment].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-        const buy = button(`确认购买 (${have}/${cost}💰)`, () => this.confirmBuy(), false);
-        buy.className = 'gold';
-        buy.disabled = have < cost;
-        bar.appendChild(buy);
-        bar.appendChild(button('取消', () => this.cancelMode(), true));
-      } else if (this.mode === 'clear') {
-        bar.appendChild(button('取消', () => this.cancelMode(), true));
-      } else if (this.mode === 'discard') {
-        const n = this.discardSet.size;
-        const all = button('全部', () => {
-          (this.me?.hand ?? []).forEach((c) => this.discardSet.add(c.id));
-          this.renderHud();
-        }, true);
-        const done = button(`弃掉 (${n})`, () =>
-          this.act({ type: 'DiscardCards', cardIds: [...this.discardSet] }),
-        );
-        done.disabled = n === 0;
-        bar.appendChild(all);
-        bar.appendChild(done);
+      if (this.mode === 'clear') {
         bar.appendChild(button('取消', () => this.cancelMode(), true));
       } else {
+        if (this.buyTargetDefId) {
+          const cost = getDef(this.buyTargetDefId).cost;
+          const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
+          const buy = button(`确认购买 (${have}/${cost}💰)`, () => this.confirmBuy(), false);
+          buy.className = 'gold';
+          buy.disabled = have < cost;
+          bar.appendChild(buy);
+        }
         bar.appendChild(button('结束回合', () => this.act({ type: 'EndTurn' }), true));
         const discarded = !!s.turn?.hasDiscarded;
         const skill = button(discarded ? '已弃牌' : '弃牌', () => {
-          this.mode = 'discard';
-          this.discardSet.clear();
-          this.hint = '点要弃的手牌，再点「弃掉」确认（每回合一次）';
-          this.renderHud();
+          if (discarded || this.selected.size === 0) return;
+          this.act({ type: 'DiscardCards', cardIds: [...this.selected] });
         }, true);
-        skill.disabled = discarded;
+        skill.disabled = discarded || this.selected.size === 0;
         bar.appendChild(skill);
       }
     }
@@ -1057,9 +1020,7 @@ class App {
 
   private blockadeActionStatus(blockade: Blockade): string {
     if (!this.isMyTurn()) return '当前不是你的回合，可以查看说明，但不能执行地形行动。';
-    if (this.mode === 'buy') return '你正在购买卡牌，点击连接地形只会固定说明。取消购买后才能移动。';
     if (this.mode === 'clear') return '你正在清除地形，点击手牌支付费用。点击连接地形只会固定说明。';
-    if (this.mode === 'discard') return '你正在弃牌，点击连接地形只会固定说明。';
     if (blockade.claimedBy) return '这块连接地形已经被领取，不再作为可领取阻挡物。';
     if (!this.blockadeDestination(blockade)) return '当前棋子不在这块连接地形覆盖的边旁边，暂时不能行动。';
 
@@ -1075,13 +1036,8 @@ class App {
         : `${requirementText} 当前正在使用的移动力不能通过这里。`;
     }
 
-    if (this.selectedCardId) {
-      const def = getDef(cardDefId(this.selectedCardId, this.state!));
-      const syms = movableSymbols(def.defId);
-      const usable = syms.some((s) => this.canUseBlockade(blockade, s, def.power));
-      return usable
-        ? `${requirementText} 已选「${def.name}」，点击这块地形会打出这张牌并通过。`
-        : `${requirementText} 已选「${def.name}」，但它不能通过这里。`;
+    if (this.selected.size > 0) {
+      return `${requirementText} 已选 ${this.selected.size} 张手牌，点击这块地形会自动挑最省的一张打出并通过。`;
     }
 
     return `${requirementText} 选择匹配的移动牌后，可以点击这块连接地形通过。`;
@@ -1091,9 +1047,7 @@ class App {
     if (!this.isMyTurn()) return '当前不是你的回合，可以查看说明，但不能执行地形行动。';
     const me = this.me;
     if (!me) return '没有找到你的棋子。';
-    if (this.mode === 'buy') return '你正在购买卡牌，点击地形只会固定说明。取消购买后才能移动。';
     if (this.mode === 'clear') return '你正在清除地形，点击手牌支付费用。点击地形只会固定说明。';
-    if (this.mode === 'discard') return '你正在弃牌，点击地形只会固定说明。';
     if (hex.terrain === 'mountain') return '山地不可进入，只能绕行。';
     if (!isAdjacent(me.position, hex)) return '此格不与当前棋子相邻，暂时不能行动。';
     const current = this.hexAt(me.position);
@@ -1116,13 +1070,8 @@ class App {
         : `${requirementText} 当前正在使用的移动力不能进入此处。`;
     }
 
-    if (this.selectedCardId) {
-      const def = getDef(cardDefId(this.selectedCardId, this.state!));
-      const syms = movableSymbols(def.defId);
-      const usable = syms.some((s) => this.canEnter(hex, s, def.power));
-      return usable
-        ? `${requirementText} 已选「${def.name}」，点击此格会打出这张牌并移动。`
-        : `${requirementText} 已选「${def.name}」，但它不能进入此处。`;
+    if (this.selected.size > 0) {
+      return `${requirementText} 已选 ${this.selected.size} 张手牌，点击此格会自动挑最省的一张打出并移动。`;
     }
 
     return `${requirementText} 选择匹配的移动牌后，点击相邻格即可移动。`;
