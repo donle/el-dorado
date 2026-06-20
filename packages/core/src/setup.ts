@@ -99,6 +99,7 @@ export function createGame(
       inPlay: [],
       removedThisTurn: [],
       hasBought: false,
+      hasDiscarded: false,
     },
     finalRoundTriggeredBy: null,
     finalTurnsRemaining: null,

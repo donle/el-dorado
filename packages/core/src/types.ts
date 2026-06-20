@@ -162,6 +162,8 @@ export interface TurnState {
   removedThisTurn: Card[];
   /** Whether the player has already bought a card this turn. */
   hasBought: boolean;
+  /** Whether the player has already used the discard skill this turn. */
+  hasDiscarded: boolean;
 }
 
 export interface GameState {

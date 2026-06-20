@@ -39,6 +39,7 @@ function setTurn(s: GameState, pid: string): void {
     inPlay: [],
     removedThisTurn: [],
     hasBought: false,
+    hasDiscarded: false,
   };
 }
 
@@ -718,5 +719,42 @@ describe('winning', () => {
     const r = run(s, 'p0', { type: 'EndTurn' });
     expect(r.state.phase).toBe('finished');
     expect(r.state.winnerId).toBe('p1');
+  });
+});
+
+describe('DiscardCards skill', () => {
+  it('moves chosen cards to the discard pile without drawing', () => {
+    const s = game(2);
+    setTurn(s, 'p0');
+    giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer']);
+    const before = s.players.find((p) => p.id === 'p0')!.deck.length;
+    const r = run(s, 'p0', {
+      type: 'DiscardCards',
+      cardIds: ['p0:explorer#t0', 'p0:sailor#t1'],
+    });
+    const p = r.state.players.find((x) => x.id === 'p0')!;
+    expect(r.result.ok).toBe(true);
+    expect(p.hand.map((c) => c.id)).toEqual(['p0:traveller#t2', 'p0:photographer#t3']);
+    expect(p.discard.map((c) => c.id)).toEqual(['p0:explorer#t0', 'p0:sailor#t1']);
+    expect(p.deck.length).toBe(before); // 不补牌
+    expect(r.state.turn!.hasDiscarded).toBe(true);
+  });
+
+  it('rejects a second discard in the same turn', () => {
+    const s = game(2);
+    setTurn(s, 'p0');
+    giveHand(s, 'p0', ['explorer', 'sailor']);
+    let r = run(s, 'p0', { type: 'DiscardCards', cardIds: ['p0:explorer#t0'] });
+    r = run(r.state, 'p0', { type: 'DiscardCards', cardIds: ['p0:sailor#t1'] });
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toContain('已经弃过牌');
+  });
+
+  it('rejects discarding a card not in hand', () => {
+    const s = game(2);
+    setTurn(s, 'p0');
+    giveHand(s, 'p0', ['explorer']);
+    const r = run(s, 'p0', { type: 'DiscardCards', cardIds: ['p0:ghost#t9'] });
+    expect(r.result.ok).toBe(false);
   });
 });

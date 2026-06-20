@@ -92,6 +92,8 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
       return clearSpace(state, playerId, action.to, action.cardIds, events);
     case 'BuyCard':
       return buyCard(state, playerId, action.defId, action.paymentCardIds, events);
+    case 'DiscardCards':
+      return discardCards(state, playerId, action.cardIds, events);
     case 'UseAbility':
       return useAbility(state, playerId, action, events);
     case 'EndTurn':
@@ -391,6 +393,24 @@ function mintCard(p: Player, defId: string): Card {
   return { id: `${prefix}${max + 1}`, defId };
 }
 
+// --- discard skill ---
+
+function discardCards(
+  state: GameState,
+  playerId: string,
+  cardIds: string[],
+  events: GameEvent[],
+): void {
+  const p = player(state, playerId);
+  const turn = state.turn!;
+  if (turn.hasDiscarded) throw new RuleError('本回合已经弃过牌');
+  for (const id of cardIds) {
+    p.discard.push(takeFromHand(p, id));
+  }
+  turn.hasDiscarded = true;
+  events.push({ type: 'discarded', playerId, count: cardIds.length });
+}
+
 // --- ability cards ---
 
 function drawInto(state: GameState, p: Player, count: number): number {
@@ -539,6 +559,7 @@ function advanceTurn(state: GameState, events: GameEvent[]): void {
       inPlay: [],
       removedThisTurn: [],
       hasBought: false,
+      hasDiscarded: false,
     };
     events.push({ type: 'turnStarted', playerId: candId });
     return;

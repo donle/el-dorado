@@ -6,6 +6,7 @@ export type Action =
   | { type: 'StepTo'; to: Axial }
   | { type: 'ClearSpace'; to: Axial; cardIds: string[] }
   | { type: 'BuyCard'; defId: string; paymentCardIds: string[] }
+  | { type: 'DiscardCards'; cardIds: string[] }
   | {
       type: 'UseAbility';
       cardId: string;
@@ -21,6 +22,7 @@ export type GameEvent =
   | { type: 'cardPlayed'; playerId: string; cardId: string }
   | { type: 'spaceCleared'; playerId: string; to: Axial; removed: boolean }
   | { type: 'bought'; playerId: string; defId: string }
+  | { type: 'discarded'; playerId: string; count: number }
   | { type: 'ability'; playerId: string; cardId: string }
   | { type: 'drew'; playerId: string; count: number }
   | { type: 'blockadeClaimed'; playerId: string; blockadeId: string }
