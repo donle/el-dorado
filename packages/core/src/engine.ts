@@ -92,6 +92,8 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
       return clearSpace(state, playerId, action.to, action.cardIds, events);
     case 'BuyCard':
       return buyCard(state, playerId, action.defId, action.paymentCardIds, events);
+    case 'RemoveBlockade':
+      return removeBlockade(state, playerId, action.blockadeId, action.cardIds ?? [], events);
     case 'DiscardCards':
       return discardCards(state, playerId, action.cardIds, events);
     case 'UseAbility':
@@ -322,6 +324,42 @@ function clearSpace(
   state.turn!.activeMover = undefined;
   moveTo(state, p, hex, events);
   events.push({ type: 'spaceCleared', playerId, to: { q: to.q, r: to.r }, removed });
+}
+
+function removeBlockade(
+  state: GameState,
+  playerId: string,
+  blockadeId: string,
+  cardIds: string[],
+  events: GameEvent[],
+): void {
+  const p = player(state, playerId);
+  const blockade = state.blockades.find((b) => b.id === blockadeId);
+  if (!blockade) throw new RuleError('没有这个连接地形');
+  if (blockade.claimedBy) throw new RuleError('这块连接地形已经打开');
+  // The player must be standing beside one of this seam's covered edges.
+  const beside = blockade.edges.some(
+    (e) => sameCoord(e.a, p.position) || sameCoord(e.b, p.position),
+  );
+  if (!beside) throw new RuleError('当前棋子不在这块连接地形旁边');
+
+  if (blockadeRequiresDiscard(blockade)) {
+    if (cardIds.length !== blockade.cost) {
+      throw new RuleError(`需要正好选择 ${blockade.cost} 张牌`);
+    }
+    for (const id of cardIds) p.discard.push(takeFromHand(p, id));
+    claimBlockade(p, blockade, events);
+    return; // 留在原地，不动 activeMover
+  }
+
+  const sym = blockadeMoveSymbol(blockade);
+  const mover = state.turn!.activeMover;
+  if (!mover || sym === null || mover.symbol !== sym || mover.remaining < blockade.cost) {
+    throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能移除连接地形`);
+  }
+  mover.remaining -= blockade.cost; // 只扣障碍 cost，剩余力量保留
+  claimBlockade(p, blockade, events);
+  // 留在原地。
 }
 
 // --- buying ---

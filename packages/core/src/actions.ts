@@ -6,6 +6,7 @@ export type Action =
   | { type: 'StepTo'; to: Axial }
   | { type: 'ClearSpace'; to: Axial; cardIds: string[] }
   | { type: 'BuyCard'; defId: string; paymentCardIds: string[] }
+  | { type: 'RemoveBlockade'; blockadeId: string; cardIds?: string[] }
   | { type: 'DiscardCards'; cardIds: string[] }
   | {
       type: 'UseAbility';

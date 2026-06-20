@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createGame } from '../src/setup.js';
 import { applyAction } from '../src/engine.js';
 import { isAdjacent, key, neighbors } from '../src/hex.js';
+import { getDef } from '../src/cards.js';
 import type { GameState, Axial, Card, Hex, MoveSymbol, Terrain, Blockade } from '../src/types.js';
 import type { Action } from '../src/actions.js';
 
@@ -785,5 +786,96 @@ describe('DiscardCards skill', () => {
     expect(r.result.ok).toBe(true);
     expect(p.discard.length).toBe(0);
     expect(p.hand).toHaveLength(4);
+  });
+});
+
+describe('RemoveBlockade (decoupled)', () => {
+  it('symbol blockade: deducts only blockade.cost, keeps remaining mover power, stays put, claims', () => {
+    const s = createGame(
+      [ { id: 'p0', name: 'A', color: 'red' as const }, { id: 'p1', name: 'B', color: 'blue' as const } ],
+      'classic', 11,
+    );
+    const blockade = s.blockades[0];
+    const symbol = blockadeSymbolForTest(blockade);
+    const crossing = seamCrossing(s, blockade, true)!;
+    placeAt(s, 'p0', crossing.from);
+    giveHand(s, 'p0', [STRONG_CARD_BY_SYMBOL[symbol]]);
+    const before = pos(s, 'p0');
+    const r = run(
+      s, 'p0',
+      { type: 'PlayMovementCard', cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol },
+      { type: 'RemoveBlockade', blockadeId: blockade.id },
+    );
+    expect(r.result.ok).toBe(true);
+    expect(r.state.blockades.find((b) => b.id === blockade.id)!.claimedBy).toBe('p0');
+    expect(pos(r.state, 'p0')).toEqual(before); // 留在原地
+    const power = getDef(STRONG_CARD_BY_SYMBOL[symbol]).power;
+    expect(r.state.turn!.activeMover).toEqual({ cardId: `p0:${STRONG_CARD_BY_SYMBOL[symbol]}#t0`, symbol, remaining: power - blockade.cost });
+  });
+
+  it('symbol blockade: errors when mover power < blockade.cost', () => {
+    const s = createGame(
+      [ { id: 'p0', name: 'A', color: 'red' as const }, { id: 'p1', name: 'B', color: 'blue' as const } ],
+      'classic', 11,
+    );
+    const blockade = s.blockades[0];
+    blockade.cost = 2; // force cost to 2 so the weak card (power 1) is insufficient
+    const symbol = blockadeSymbolForTest(blockade);
+    const crossing = seamCrossing(s, blockade, true)!;
+    placeAt(s, 'p0', crossing.from);
+    // weak card: power 1 (explorer/sailor/traveller); blockade.cost is 2
+    const weak = BASIC_CARD_BY_SYMBOL[symbol];
+    giveHand(s, 'p0', [weak]);
+    const r = run(
+      s, 'p0',
+      { type: 'PlayMovementCard', cardId: `p0:${weak}#t0`, symbol },
+      { type: 'RemoveBlockade', blockadeId: blockade.id },
+    );
+    expect(r.result.ok).toBe(false);
+  });
+
+  it('rubble blockade: discards exactly cost cards, stays put, claims, no draw', () => {
+    const s = createGame(
+      [ { id: 'p0', name: 'A', color: 'red' as const }, { id: 'p1', name: 'B', color: 'blue' as const } ],
+      'classic', 11,
+    );
+    const blockade = s.blockades.find((b) => b.terrain === 'rubble')!;
+    const hexAt = (c: Axial) => s.hexes.find((h) => h.q === c.q && h.r === c.r)!;
+    const edge = blockade.edges.find((e) => hexAt(e.a).terrain !== 'mountain' && hexAt(e.b).terrain !== 'mountain') ?? blockade.edges[0];
+    placeAt(s, 'p0', edge.a);
+    giveHand(s, 'p0', ['pioneer', 'explorer']);
+    const before = pos(s, 'p0');
+    const r = run(s, 'p0', { type: 'RemoveBlockade', blockadeId: blockade.id, cardIds: ['p0:pioneer#t0'] });
+    expect(r.result.ok).toBe(true);
+    expect(r.state.blockades.find((b) => b.id === blockade.id)!.claimedBy).toBe('p0');
+    expect(pos(r.state, 'p0')).toEqual(before); // 留在原地
+    expect(r.state.players[0].discard.some((c) => c.id === 'p0:pioneer#t0')).toBe(true);
+  });
+
+  it('rubble blockade: errors when card count != cost', () => {
+    const s = createGame(
+      [ { id: 'p0', name: 'A', color: 'red' as const }, { id: 'p1', name: 'B', color: 'blue' as const } ],
+      'classic', 11,
+    );
+    const blockade = s.blockades.find((b) => b.terrain === 'rubble')!;
+    const hexAt = (c: Axial) => s.hexes.find((h) => h.q === c.q && h.r === c.r)!;
+    const edge = blockade.edges.find((e) => hexAt(e.a).terrain !== 'mountain' && hexAt(e.b).terrain !== 'mountain') ?? blockade.edges[0];
+    placeAt(s, 'p0', edge.a);
+    giveHand(s, 'p0', ['pioneer', 'explorer']);
+    const r = run(s, 'p0', { type: 'RemoveBlockade', blockadeId: blockade.id, cardIds: ['p0:pioneer#t0', 'p0:explorer#t1'] });
+    expect(r.result.ok).toBe(false);
+  });
+
+  it('errors on an already-claimed blockade', () => {
+    const s = createGame(
+      [ { id: 'p0', name: 'A', color: 'red' as const }, { id: 'p1', name: 'B', color: 'blue' as const } ],
+      'classic', 11,
+    );
+    const blockade = s.blockades[0];
+    blockade.claimedBy = 'p1';
+    const crossing = seamCrossing(s, blockade, true)!;
+    placeAt(s, 'p0', crossing.from);
+    const r = run(s, 'p0', { type: 'RemoveBlockade', blockadeId: blockade.id });
+    expect(r.result.ok).toBe(false);
   });
 });
