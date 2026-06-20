@@ -89,8 +89,11 @@ describe('AI', () => {
 
     const plan = planTurn(s, 'a');
     const ri = plan.findIndex((x) => x.type === 'RemoveBlockade');
-    const si = plan.findIndex((x, i) => x.type === 'StepTo' && i > ri);
+    // Assert ri is valid BEFORE deriving si, so `i > ri` can never trivially
+    // match the first StepTo against a -1 ri (keeps the ordering check honest
+    // regardless of assertion order).
     expect(ri, 'RemoveBlockade should appear in plan').toBeGreaterThanOrEqual(0);
+    const si = plan.findIndex((x, i) => x.type === 'StepTo' && i > ri);
     expect(si, 'StepTo should appear after RemoveBlockade').toBeGreaterThan(ri);
   });
 
