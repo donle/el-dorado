@@ -526,8 +526,11 @@ describe('seam crossing cost (blockade + destination terrain)', () => {
     const s = startGame();
     const blockade = s.blockades[0]; // green / machete
     const symbol = blockadeSymbolForTest(blockade); // machete
+    // seed 11/classic: blockade[0] has incompatible (paddle) edges. Assert it
+    // loudly so a future map change fails here instead of going silently vacuous.
     const crossing = seamCrossing(s, blockade, false);
-    if (!crossing) return; // no incompatible edge on this seam → nothing to assert
+    expect(crossing, 'expected an incompatible-symbol edge on seed 11/classic').toBeTruthy();
+    if (!crossing) return; // narrows for TS; the expect above already failed if null
     const destSymbol = terrainSymbolForTest(crossing.dest.terrain)!; // e.g. paddle
     expect(destSymbol).not.toBe(symbol);
     placeAt(s, 'p0', crossing.from);
