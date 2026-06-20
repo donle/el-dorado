@@ -14,7 +14,7 @@ export type Action =
       takeDefId?: string;
       nativeTo?: Axial;
     }
-  | { type: 'EndTurn'; discardCardIds?: string[] };
+  | { type: 'EndTurn' };
 
 /** Events emitted by a successful action, for the client to animate. */
 export type GameEvent =

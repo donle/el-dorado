@@ -97,7 +97,7 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
     case 'UseAbility':
       return useAbility(state, playerId, action, events);
     case 'EndTurn':
-      return endTurn(state, playerId, action.discardCardIds ?? [], events);
+      return endTurn(state, playerId, events);
   }
 }
 
@@ -509,20 +509,9 @@ function removeFromHand(p: Player, turn: GameState['turn'], cardIds: string[], m
 
 // --- end of turn ---
 
-function endTurn(
-  state: GameState,
-  playerId: string,
-  discardCardIds: string[],
-  events: GameEvent[],
-): void {
+function endTurn(state: GameState, playerId: string, events: GameEvent[]): void {
   const p = player(state, playerId);
   const turn = state.turn!;
-
-  // Optionally discard chosen leftover hand cards.
-  for (const id of discardCardIds) {
-    const card = takeFromHand(p, id);
-    p.discard.push(card);
-  }
 
   // Resolve cards played this turn.
   for (const card of turn.inPlay) {

@@ -773,4 +773,16 @@ describe('DiscardCards skill', () => {
     expect(r2.result.ok).toBe(true);
     expect(r2.state.turn!.hasDiscarded).toBe(true);
   });
+
+  it('EndTurn no longer discards leftover hand cards', () => {
+    const s = game(2);
+    setTurn(s, 'p0');
+    giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer']);
+    const r = run(s, 'p0', { type: 'EndTurn' });
+    // 回合已切换；p0 的手牌不会因 EndTurn 被弃（仍是原 4 张，不再补抽）。
+    const p = r.state.players.find((x) => x.id === 'p0')!;
+    expect(r.result.ok).toBe(true);
+    expect(p.discard.length).toBe(0);
+    expect(p.hand).toHaveLength(4);
+  });
 });

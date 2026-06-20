@@ -339,7 +339,10 @@ export function planTurn(state: GameState, playerId: string): Action[] {
 
   // If we made no progress, rest: discard the (useless this turn) hand so we
   // draw a fresh one next turn. Without this a stuck hand never cycles.
-  const discardCardIds = moved ? undefined : available().map((c) => c.id);
-  actions.push({ type: 'EndTurn', discardCardIds });
+  if (!moved) {
+    const cardIds = available().map((c) => c.id);
+    if (cardIds.length) actions.push({ type: 'DiscardCards', cardIds });
+  }
+  actions.push({ type: 'EndTurn' });
   return actions;
 }
