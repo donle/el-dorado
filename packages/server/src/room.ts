@@ -32,12 +32,15 @@ export class Room {
   hostId = '';
   mapId = 'classic';
   aiDelayMs = 1000;
+  private aiRunning = false;
+  private sleep: (ms: number) => Promise<void>;
   phase: 'lobby' | 'playing' | 'finished' = 'lobby';
   members: Member[] = [];
   game: GameState | null = null;
 
-  constructor(code: string) {
+  constructor(code: string, sleep?: (ms: number) => Promise<void>) {
     this.code = code;
+    this.sleep = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
   private nextColor(): PlayerColor {
@@ -175,48 +178,56 @@ export class Room {
       this.broadcastRoom();
     }
 
-    this.runAITurns();
+    void this.runAITurns();
     return { ok: true };
   }
 
-  /** Run AI turns until it's a human's turn or the game ends. */
-  runAITurns(): void {
-    // Safety backstop against a pathological no-progress loop. A full
-    // all-AI game on a large map can legitimately take many hundreds of turns.
-    let guard = 0;
-    while (this.game && this.game.phase === 'playing' && guard++ < 5000) {
-      const cur = this.currentPlayerId();
-      if (!cur) break;
-      const m = this.member(cur);
-      if (!m || !m.isAI) break;
+  /** Run AI turns until it's a human's turn or the game ends, pacing each
+   * applied action by aiDelayMs. async; callers fire-and-forget with `void`. */
+  async runAITurns(): Promise<void> {
+    if (this.aiRunning) return;
+    this.aiRunning = true;
+    try {
+      // Safety backstop against a pathological no-progress loop. A full
+      // all-AI game on a large map can legitimately take many hundreds of turns.
+      let guard = 0;
+      let first = true; // no delay before the very first action of the run
+      while (this.game && this.game.phase === 'playing' && guard++ < 5000) {
+        const cur = this.currentPlayerId();
+        if (!cur) break;
+        const m = this.member(cur);
+        if (!m || !m.isAI) break;
 
-      const plan = planTurn(this.game, cur);
-      const events: GameEvent[] = [];
-      let forcedEnd = false;
-      for (const act of plan) {
-        const r = applyAction(this.game, cur, act);
-        if (!r.result.ok) {
-          forcedEnd = true;
-          break;
+        const plan = planTurn(this.game, cur);
+        let forcedEnd = false;
+        for (const act of plan) {
+          if (!first) await this.sleep(this.aiDelayMs);
+          first = false;
+          const r = applyAction(this.game, cur, act);
+          if (!r.result.ok) {
+            forcedEnd = true;
+            break;
+          }
+          this.game = r.state;
+          this.broadcastState(r.result.events);
         }
-        this.game = r.state;
-        events.push(...r.result.events);
-      }
-      if (forcedEnd) {
-        // Safety: ensure the AI relinquishes the turn even if its plan failed.
-        const end = applyAction(this.game, cur, { type: 'EndTurn' });
-        if (end.result.ok) {
-          this.game = end.state;
-          events.push(...end.result.events);
-        } else {
-          break; // cannot recover; avoid an infinite loop
+        if (forcedEnd) {
+          // Safety: ensure the AI relinquishes the turn even if its plan failed.
+          const end = applyAction(this.game, cur, { type: 'EndTurn' });
+          if (end.result.ok) {
+            this.game = end.state;
+            this.broadcastState(end.result.events);
+          } else {
+            break; // cannot recover; avoid an infinite loop
+          }
         }
       }
-      this.broadcastState(events);
-    }
-    if (this.game && this.game.phase === 'finished' && this.phase !== 'finished') {
-      this.phase = 'finished';
-      this.broadcastRoom();
+      if (this.game && this.game.phase === 'finished' && this.phase !== 'finished') {
+        this.phase = 'finished';
+        this.broadcastRoom();
+      }
+    } finally {
+      this.aiRunning = false;
     }
   }
 

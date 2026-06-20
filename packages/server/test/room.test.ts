@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Room } from '../src/room.js';
+import { planTurn } from '@eldorado/core';
 
 describe('Room', () => {
   it('assigns distinct colors and a host', () => {
@@ -11,8 +12,8 @@ describe('Room', () => {
     expect(room.view().players).toHaveLength(2);
   });
 
-  it('runs two AIs to a finished game with a winner', () => {
-    const room = new Room('TEST');
+  it('runs two AIs to a finished game with a winner', async () => {
+    const room = new Room('TEST', () => Promise.resolve());
     room.addHuman('Host', () => {}); // host, but we drive via AI here
     room.addAI();
     // Convert the host into an AI for a fully-automated game.
@@ -20,11 +21,35 @@ describe('Room', () => {
 
     room.start('classic', 7);
     // Kick off: first player is now AI, so runAITurns plays the whole game.
-    room.runAITurns();
+    await room.runAITurns();
 
     expect(room.game).not.toBeNull();
     expect(room.game!.phase).toBe('finished');
     expect(room.game!.winnerId).toBeTruthy();
+  });
+
+  it('paces AI by broadcasting once per action, not once per turn', async () => {
+    let stateCount = 0;
+    const room = new Room('TEST', () => Promise.resolve()); // instant sleep
+    room.addHuman('H', (m) => {
+      if (m.type === 'state') stateCount++;
+    });
+    room.addHuman('B', () => {});
+    room.start('classic', 1);
+
+    // Make the CURRENT player an AI so runAITurns plays exactly that one turn,
+    // then stops at the remaining human.
+    const curId = room.game!.turn!.playerId;
+    const curIdx = room.members.findIndex((m) => m.id === curId);
+    (room as unknown as { members: Array<{ isAI: boolean }> }).members[curIdx].isAI = true;
+
+    const expected = planTurn(room.game!, curId).length;
+    expect(expected).toBeGreaterThanOrEqual(2); // a real opening turn has >1 action (seed 1)
+
+    await room.runAITurns();
+
+    // One broadcast per applied action (per-action pacing), not a single batched one.
+    expect(stateCount).toBe(expected);
   });
 
   it('rejects actions out of turn', () => {

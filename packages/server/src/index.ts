@@ -39,7 +39,7 @@ wss.on('connection', (ws: WebSocket) => {
       session.room.disconnect(session.playerId);
       session.room.broadcastRoom();
       session.room.broadcastState();
-      session.room.runAITurns();
+      void session.room.runAITurns();
     }
   });
 });
@@ -97,7 +97,7 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
         room.disconnect(playerId);
         room.broadcastRoom();
         room.broadcastState();
-        room.runAITurns();
+        void room.runAITurns();
       } else {
         room.remove(playerId);
         room.broadcastRoom();
@@ -119,7 +119,7 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
       room.start(msg.mapId ?? 'classic');
       room.broadcastRoom();
       room.broadcastState();
-      room.runAITurns(); // in case the first player is an AI
+      void room.runAITurns(); // in case the first player is an AI
       return;
     }
     case 'setAiDelay': {
