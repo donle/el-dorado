@@ -162,6 +162,8 @@ export interface TurnState {
   inPlay: Card[];
   /** Cards removed from the game this turn (go to player's removed pile). */
   removedThisTurn: Card[];
+  /** Optional hand-removal choice that must be resolved after an action draws cards. */
+  pendingRemoval?: { sourceCardId: string; max: number };
   /** Whether the player has already bought a card this turn. */
   hasBought: boolean;
   /** Whether the player has used the discard skill at least once this turn. */

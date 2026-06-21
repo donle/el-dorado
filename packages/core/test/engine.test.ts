@@ -31,6 +31,11 @@ function giveHand(s: GameState, pid: string, defs: string[]): void {
   p.hand = defs.map((d, i): Card => ({ id: `${pid}:${d}#t${i}`, defId: d }));
 }
 
+function giveDeck(s: GameState, pid: string, defs: string[]): void {
+  const p = s.players.find((x) => x.id === pid)!;
+  p.deck = defs.map((d, i): Card => ({ id: `${pid}:${d}#d${i}`, defId: d }));
+}
+
 function placeAt(s: GameState, pid: string, c: Axial): void {
   const p = s.players.find((x) => x.id === pid)!;
   const old = s.hexes.find((h) => h.q === p.position.q && h.r === p.position.r);
@@ -1065,6 +1070,70 @@ describe('DiscardCards skill', () => {
     expect(r.result.ok).toBe(true);
     expect(p.discard.length).toBe(0);
     expect(p.hand).toHaveLength(4);
+  });
+});
+
+describe('draw-then-remove abilities', () => {
+  it('draws before choosing removal, so the drawn card can be removed', () => {
+    const s = game(2);
+    setTurn(s, 'p0');
+    giveHand(s, 'p0', ['scientist', 'explorer']);
+    giveDeck(s, 'p0', ['sailor']);
+
+    const used = run(s, 'p0', { type: 'UseAbility', cardId: 'p0:scientist#t0' });
+    expect(used.result.ok).toBe(true);
+    expect(used.result.events).toContainEqual({ type: 'drew', playerId: 'p0', count: 1 });
+    expect(used.result.events).toContainEqual({ type: 'ability', playerId: 'p0', cardId: 'p0:scientist#t0' });
+    expect(used.state.turn!.pendingRemoval).toEqual({ sourceCardId: 'p0:scientist#t0', max: 1 });
+    expect(used.state.turn!.inPlay.map((c) => c.id)).toEqual(['p0:scientist#t0']);
+    expect(used.state.players[0].hand.map((c) => c.id)).toEqual(['p0:explorer#t1', 'p0:sailor#d0']);
+
+    const removed = run(used.state, 'p0', { type: 'RemoveCards', cardIds: ['p0:sailor#d0'] });
+    expect(removed.result.ok).toBe(true);
+    expect(removed.result.events).toContainEqual({ type: 'removedCards', playerId: 'p0', count: 1 });
+    expect(removed.state.turn!.pendingRemoval).toBeUndefined();
+    expect(removed.state.players[0].hand.map((c) => c.id)).toEqual(['p0:explorer#t1']);
+    expect(removed.state.turn!.removedThisTurn.map((c) => c.id)).toEqual(['p0:sailor#d0']);
+  });
+
+  it('allows skipping the optional removal after drawing', () => {
+    const s = game(2);
+    setTurn(s, 'p0');
+    giveHand(s, 'p0', ['travel_log']);
+    giveDeck(s, 'p0', ['sailor', 'explorer']);
+
+    const used = run(s, 'p0', { type: 'UseAbility', cardId: 'p0:travel_log#t0' });
+    expect(used.result.ok).toBe(true);
+    expect(used.state.turn!.pendingRemoval).toEqual({ sourceCardId: 'p0:travel_log#t0', max: 2 });
+    expect(used.state.turn!.removedThisTurn.map((c) => c.id)).toEqual(['p0:travel_log#t0']);
+    expect(used.state.players[0].hand.map((c) => c.id)).toEqual(['p0:sailor#d0', 'p0:explorer#d1']);
+
+    const skipped = run(used.state, 'p0', { type: 'RemoveCards', cardIds: [] });
+    expect(skipped.result.ok).toBe(true);
+    expect(skipped.result.events).toContainEqual({ type: 'removedCards', playerId: 'p0', count: 0 });
+    expect(skipped.state.turn!.pendingRemoval).toBeUndefined();
+    expect(skipped.state.players[0].hand.map((c) => c.id)).toEqual(['p0:sailor#d0', 'p0:explorer#d1']);
+  });
+
+  it('blocks other actions until the removal choice is resolved', () => {
+    const s = game(2);
+    setTurn(s, 'p0');
+    giveHand(s, 'p0', ['scientist', 'explorer']);
+    giveDeck(s, 'p0', ['sailor']);
+
+    const used = run(s, 'p0', { type: 'UseAbility', cardId: 'p0:scientist#t0' });
+    const moved = run(used.state, 'p0', { type: 'PlayMovementCard', cardId: 'p0:explorer#t1', symbol: 'machete' });
+    expect(moved.result.ok).toBe(false);
+    if (!moved.result.ok) expect(moved.result.error).toContain('请先处理要移除的手牌');
+    const ended = run(used.state, 'p0', { type: 'EndTurn' });
+    expect(ended.result.ok).toBe(false);
+    if (!ended.result.ok) expect(ended.result.error).toContain('请先处理要移除的手牌');
+    expect(moved.state.turn!.pendingRemoval).toEqual({ sourceCardId: 'p0:scientist#t0', max: 1 });
+    expect(moved.state.players[0].hand.map((c) => c.id)).toEqual(['p0:explorer#t1', 'p0:sailor#d0']);
+
+    const resolved = run(moved.state, 'p0', { type: 'RemoveCards', cardIds: [] });
+    expect(resolved.result.ok).toBe(true);
+    expect(resolved.state.turn!.pendingRemoval).toBeUndefined();
   });
 });
 

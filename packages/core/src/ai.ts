@@ -223,6 +223,9 @@ function chooseMarketPromotion(state: GameState, coins: number, gap: Need | null
 export function planTurn(state: GameState, playerId: string): Action[] {
   const p = state.players.find((x) => x.id === playerId);
   if (!p) return [{ type: 'EndTurn' }];
+  if (state.turn?.playerId === playerId && state.turn.pendingRemoval) {
+    return [{ type: 'RemoveCards', cardIds: [] }, { type: 'EndTurn' }];
+  }
 
   const actions: Action[] = [];
   const used = new Set<string>();

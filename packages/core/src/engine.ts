@@ -83,6 +83,10 @@ export function applyAction(
 }
 
 function dispatch(state: GameState, playerId: string, action: Action, events: GameEvent[]): void {
+  if (state.turn?.pendingRemoval && action.type !== 'RemoveCards') {
+    throw new RuleError('请先处理要移除的手牌');
+  }
+
   switch (action.type) {
     case 'PlayMovementCard':
       return playMovementCard(state, playerId, action.cardId, action.symbol, events);
@@ -98,6 +102,8 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
       return removeBlockade(state, playerId, action, events);
     case 'DiscardCards':
       return discardCards(state, playerId, action.cardIds, events);
+    case 'RemoveCards':
+      return removeCards(state, playerId, action.cardIds, events);
     case 'UseAbility':
       return useAbility(state, playerId, action, events);
     case 'EndTurn':
@@ -448,6 +454,21 @@ function discardCards(
   events.push({ type: 'discarded', playerId, count: cardIds.length });
 }
 
+function removeCards(
+  state: GameState,
+  playerId: string,
+  cardIds: string[],
+  events: GameEvent[],
+): void {
+  const p = player(state, playerId);
+  const turn = state.turn!;
+  const pending = turn.pendingRemoval;
+  if (!pending) throw new RuleError('当前没有需要移除的手牌');
+  removeFromHand(p, turn, cardIds, pending.max);
+  turn.pendingRemoval = undefined;
+  events.push({ type: 'removedCards', playerId, count: cardIds.length });
+}
+
 // --- ability cards ---
 
 function drawInto(state: GameState, p: Player, count: number): number {
@@ -493,15 +514,17 @@ function useAbility(
       events.push({ type: 'drew', playerId, count: drawInto(state, p, 3) });
       break;
     case 'draw1_remove1': {
-      drawInto(state, p, 1);
-      removeFromHand(p, turn, action.removeCardIds ?? [], 1);
-      events.push({ type: 'drew', playerId, count: 1 });
+      const drawn = drawInto(state, p, 1);
+      turn.pendingRemoval = { sourceCardId: action.cardId, max: 1 };
+      events.push({ type: 'drew', playerId, count: drawn });
+      if (action.removeCardIds) removeCards(state, playerId, action.removeCardIds, events);
       break;
     }
     case 'draw2_remove2': {
-      drawInto(state, p, 2);
-      removeFromHand(p, turn, action.removeCardIds ?? [], 2);
-      events.push({ type: 'drew', playerId, count: 2 });
+      const drawn = drawInto(state, p, 2);
+      turn.pendingRemoval = { sourceCardId: action.cardId, max: 2 };
+      events.push({ type: 'drew', playerId, count: drawn });
+      if (action.removeCardIds) removeCards(state, playerId, action.removeCardIds, events);
       break;
     }
     case 'take_free': {

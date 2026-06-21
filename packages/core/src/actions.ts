@@ -9,6 +9,7 @@ export type Action =
   | { type: 'BuyCard'; defId: string; paymentCardIds: string[] }
   | { type: 'RemoveBlockade'; blockadeId: string; cardIds?: string[]; cardId?: string; symbol?: MoveSymbol }
   | { type: 'DiscardCards'; cardIds: string[] }
+  | { type: 'RemoveCards'; cardIds: string[] }
   | {
       type: 'UseAbility';
       cardId: string;
@@ -26,6 +27,7 @@ export type GameEvent =
   | { type: 'marketPromoted'; playerId: string; defId: string }
   | { type: 'bought'; playerId: string; defId: string }
   | { type: 'discarded'; playerId: string; count: number }
+  | { type: 'removedCards'; playerId: string; count: number }
   | { type: 'ability'; playerId: string; cardId: string }
   | { type: 'drew'; playerId: string; count: number }
   | { type: 'blockadeClaimed'; playerId: string; blockadeId: string }

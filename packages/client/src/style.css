@@ -27,39 +27,6 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 #app { position: relative; width: 100vw; height: 100vh; }
 #board { display: block; width: 100%; height: 100%; touch-action: none; }
 
-#orientation-lock {
-  position: fixed; inset: 0; z-index: 220;
-  display: none; place-items: center; padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
-  background:
-    radial-gradient(circle at 50% 34%, rgba(255,209,102,0.2), rgba(0,0,0,0.48) 44%, rgba(0,0,0,0.84) 78%),
-    rgba(10, 13, 8, 0.94);
-  pointer-events: auto;
-}
-body.mobile-portrait #orientation-lock { display: grid; }
-body.mobile-portrait #board,
-body.mobile-portrait #hud,
-body.mobile-portrait #lobby,
-body.mobile-portrait #bootloader {
-  pointer-events: none;
-  filter: blur(2px) brightness(0.62);
-}
-.orientation-card {
-  width: min(340px, calc(100vw - 36px));
-  display: grid; justify-items: center; gap: 14px;
-  padding: 24px 22px; border-radius: 10px;
-  background: linear-gradient(180deg, rgba(37,39,25,0.98), rgba(14,17,11,0.98));
-  border: 1px solid var(--border-strong); border-top: 2px solid rgba(255,209,102,0.55);
-  box-shadow: 0 18px 60px rgba(0,0,0,0.68), inset 0 1px 0 rgba(255,255,255,0.08);
-}
-.orientation-icon {
-  width: 62px; height: 62px; display: grid; place-items: center;
-  border-radius: 50%; color: var(--gold); font-size: 42px; line-height: 1;
-  border: 1px solid rgba(255,209,102,0.38);
-  background: rgba(255,209,102,0.08);
-}
-.orientation-title { font-size: 23px; font-weight: 950; }
-#orientation-lock-btn { min-width: 150px; }
-
 /* ---------- First-load screen ---------- */
 #bootloader {
   position: absolute; inset: 0; z-index: 100;
@@ -290,7 +257,7 @@ body.mobile-portrait #bootloader {
   display: flex; align-items: flex-end; justify-content: center; gap: 16px;
   padding: 0 18px 16px; pointer-events: none; }
 .hand-tray { pointer-events: auto; display: flex; gap: 10px; align-items: flex-end;
-  flex: 0 1 auto; min-width: 0; max-width: clamp(300px, calc(100vw - 560px), 760px);
+  flex: 0 1 auto; min-width: 132px; min-height: 170px; max-width: clamp(300px, calc(100vw - 560px), 760px);
   overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain;
   justify-content: flex-start; touch-action: pan-x; -webkit-overflow-scrolling: touch;
   padding: 22px 18px 14px; border-radius: 10px 10px 0 0;
@@ -299,6 +266,17 @@ body.mobile-portrait #bootloader {
     linear-gradient(90deg, rgba(255,209,102,0.16), rgba(47,159,143,0.12));
   border: 1px solid rgba(246,214,145,0.16); border-bottom: 0;
   box-shadow: 0 -6px 22px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.08); }
+.hand-tray:empty::before {
+  content: '';
+  width: 96px; height: 134px; flex: 0 0 auto; border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.01)),
+    repeating-linear-gradient(135deg, rgba(255,209,102,0.035) 0 2px, transparent 2px 9px),
+    linear-gradient(160deg, rgba(255,209,102,0.09), rgba(47,159,143,0.06));
+  border: 1px solid rgba(246,214,145,0.13);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), inset 0 0 20px rgba(0,0,0,0.18);
+  opacity: .75;
+}
 .card {
   width: 96px; height: 134px; border-radius: 10px; padding: 0;
   background: transparent;
@@ -907,7 +885,9 @@ body.mobile-device .action-log { display: none; }
   /* Hand: horizontally scrollable strip of smaller cards. */
   .dock { padding: 0 8px calc(10px + env(safe-area-inset-bottom)); gap: 8px; align-items: flex-end; }
   .hand-tray { overflow-x: auto; overflow-y: hidden; justify-content: flex-start;
-    flex: 1; max-width: none; padding: 18px 10px 12px; -webkit-overflow-scrolling: touch; }
+    flex: 1; max-width: none; min-width: 92px; min-height: 132px;
+    padding: 18px 10px 12px; -webkit-overflow-scrolling: touch; }
+  .hand-tray:empty::before { width: 72px; height: 102px; border-radius: 8px; }
   .card { width: 72px; height: 102px; flex: 0 0 auto; }
   .card .art svg { width: 40px; height: 40px; }
   /* Actions: a centred horizontal row floating just above the hand, so they
@@ -1385,8 +1365,15 @@ body.mobile-device .action-log { display: none; }
     padding-left: calc(8px + env(safe-area-inset-left));
   }
   body.mobile-device .hand-tray {
+    min-width: 62px;
+    min-height: 83px;
     padding: 10px 7px 5px;
     gap: 5px;
+  }
+  body.mobile-device .hand-tray:empty::before {
+    width: 48px;
+    height: 68px;
+    border-radius: 6px;
   }
   body.mobile-device .card {
     width: 48px;
@@ -1453,6 +1440,223 @@ body.mobile-device .action-log { display: none; }
   .end-modal h2 { font-size: 23px; }
   .end-row { grid-template-columns: 22px 10px 1fr; }
   .end-score { grid-column: 3; text-align: left; }
+}
+
+@media (max-width: 760px) and (orientation: portrait) {
+  body.mobile-device.mobile-portrait .settings-dock {
+    top: calc(7px + env(safe-area-inset-top));
+    left: calc(7px + env(safe-area-inset-left));
+  }
+  body.mobile-device.mobile-portrait .settings-gear {
+    width: 38px; height: 38px; min-width: 38px; min-height: 38px;
+  }
+  body.mobile-device.mobile-portrait .mobile-toolbar {
+    display: flex;
+    top: calc(7px + env(safe-area-inset-top));
+    right: calc(7px + env(safe-area-inset-right));
+    z-index: 45;
+  }
+  body.mobile-device.mobile-portrait .mobile-toolbar button {
+    min-height: 38px;
+    padding: 7px 10px;
+    font-size: 12px;
+  }
+  body.mobile-device.mobile-portrait .topbar {
+    top: calc(50px + env(safe-area-inset-top));
+    left: calc(8px + env(safe-area-inset-left));
+    right: calc(8px + env(safe-area-inset-right));
+    transform: none;
+    max-width: none;
+    justify-content: center;
+    padding: 5px 8px;
+    gap: 7px;
+  }
+  body.mobile-device.mobile-portrait .brand {
+    gap: 6px;
+  }
+  body.mobile-device.mobile-portrait .brand .code {
+    padding: 1px 6px;
+    font-size: 11px;
+    letter-spacing: 2px;
+  }
+  body.mobile-device.mobile-portrait .turn-banner {
+    padding: 4px 8px;
+    font-size: 11.5px;
+  }
+  body.mobile-device.mobile-portrait .player-cards {
+    top: calc(96px + env(safe-area-inset-top));
+    left: calc(7px + env(safe-area-inset-left));
+    right: calc(7px + env(safe-area-inset-right));
+    transform: none;
+    max-width: none;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding: 0 1px 4px;
+    gap: 6px;
+  }
+  body.mobile-device.mobile-portrait .pcard {
+    flex: 0 0 clamp(116px, 42vw, 150px);
+    width: auto;
+    padding: 6px 7px;
+  }
+  body.mobile-device.mobile-portrait .pcard .pc-top {
+    font-size: 10.5px;
+  }
+  body.mobile-device.mobile-portrait .pcard .pc-counts {
+    margin-top: 4px;
+    gap: 3px;
+    font-size: 8px;
+  }
+  body.mobile-device.mobile-portrait .pcard .pc-counts span {
+    padding: 1px 3px;
+  }
+  body.mobile-device.mobile-portrait .pcard .pc-counts b {
+    font-size: 7px;
+  }
+  body.mobile-device.mobile-portrait .pcard .pc-progress {
+    height: 3px;
+    margin-top: 4px;
+  }
+  body.mobile-device.mobile-portrait .dock {
+    left: 0; right: 0; bottom: 0;
+    gap: 5px;
+    padding: 0 calc(6px + env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) calc(6px + env(safe-area-inset-left));
+    z-index: 22;
+  }
+  body.mobile-device.mobile-portrait .hand-tray {
+    flex: 1 1 auto;
+    min-width: 78px;
+    min-height: 107px;
+    padding: 10px 6px 7px;
+    gap: 6px;
+    border-radius: 9px 9px 0 0;
+  }
+  body.mobile-device.mobile-portrait .hand-tray:empty::before {
+    width: 64px;
+    height: 90px;
+    border-radius: 7px;
+  }
+  body.mobile-device.mobile-portrait .card {
+    width: 64px;
+    height: 90px;
+    border-radius: 7px;
+  }
+  body.mobile-device.mobile-portrait .card.selected {
+    transform: translateY(-10px);
+  }
+  body.mobile-device.mobile-portrait .card-use-btn {
+    bottom: 5px;
+    height: 20px;
+    padding: 0 6px;
+    font-size: 10px;
+    line-height: 18px;
+  }
+  body.mobile-device.mobile-portrait .pile {
+    gap: 3px;
+    padding-bottom: 1px;
+  }
+  body.mobile-device.mobile-portrait .pile-stack {
+    width: 38px;
+    height: 54px;
+  }
+  body.mobile-device.mobile-portrait .pile-card {
+    border-radius: 6px;
+  }
+  body.mobile-device.mobile-portrait .pile-label {
+    font-size: 9px;
+  }
+  body.mobile-device.mobile-portrait .pile-label b {
+    font-size: 10px;
+  }
+  body.mobile-device.mobile-portrait .action-bar {
+    left: calc(8px + env(safe-area-inset-left));
+    right: calc(8px + env(safe-area-inset-right));
+    bottom: calc(120px + env(safe-area-inset-bottom));
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    z-index: 34;
+  }
+  body.mobile-device.mobile-portrait .command-panel {
+    display: grid;
+    grid-template-columns: minmax(88px, .7fr) minmax(0, 1.3fr);
+    align-items: center;
+    gap: 8px;
+    padding: 7px;
+  }
+  body.mobile-device.mobile-portrait .command-state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 1px;
+    min-height: 0;
+    padding: 0 0 0 7px;
+    border-bottom: 0;
+    border-left: 3px solid rgba(255,209,102,0.42);
+  }
+  body.mobile-device.mobile-portrait .command-state b {
+    font-size: 11.5px;
+    line-height: 1.15;
+  }
+  body.mobile-device.mobile-portrait .command-state span {
+    font-size: 10px;
+    line-height: 1.2;
+    text-align: left;
+  }
+  body.mobile-device.mobile-portrait .command-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    padding-top: 0;
+  }
+  body.mobile-device.mobile-portrait .action-bar button {
+    flex: 0 0 auto;
+    min-width: 52px;
+    min-height: 32px;
+    padding: 5px 8px;
+    border-width: 1px;
+    font-size: 11px;
+    line-height: 1.08;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+  body.mobile-device.mobile-portrait .terrain-panel {
+    left: calc(8px + env(safe-area-inset-left));
+    right: calc(8px + env(safe-area-inset-right));
+    top: auto;
+    bottom: calc(180px + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: min(30vh, 230px);
+    padding: 10px;
+    border-radius: 10px;
+  }
+  body.mobile-device.mobile-portrait .card-preview:not(.hidden) {
+    left: calc(8px + env(safe-area-inset-left)) !important;
+    top: calc(142px + env(safe-area-inset-top)) !important;
+    width: min(188px, calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    max-height: calc(100vh - 326px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+    padding: 8px;
+  }
+  body.mobile-device.mobile-portrait .card-preview .cp-art {
+    width: 86px;
+    height: 120px;
+    margin-bottom: 6px;
+  }
+  body.mobile-device.mobile-portrait .card-preview .cp-title {
+    font-size: 13px;
+  }
+  body.mobile-device.mobile-portrait .card-preview .cp-desc {
+    font-size: 10.5px;
+    line-height: 1.32;
+  }
+  body.mobile-device.mobile-portrait .market-panel,
+  body.mobile-device.mobile-portrait .players-panel {
+    max-height: 64vh;
+  }
 }
 
 /* When the host launches, the lobby screen freezes in place — its modal dims and

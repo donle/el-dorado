@@ -16,7 +16,7 @@ export default defineConfig({
         lang: 'zh-CN',
         start_url: '/',
         display: 'standalone',
-        orientation: 'landscape',
+        orientation: 'any',
         background_color: '#0b0d08',
         theme_color: '#1b1f16',
         icons: [
