@@ -241,6 +241,8 @@ export class Board {
   private hoverArrow!: THREE.Mesh;
   private hoverKey: string | null = null;
   private hoverBlockadeId: string | null = null;
+  private infoHoverKey: string | null = null;
+  private infoHoverBlockadeId: string | null = null;
   private inspectedKey: string | null = null;
   private inspectedBlockadeId: string | null = null;
   onHexHover: (c: Axial | null) => void = () => {};
@@ -1316,7 +1318,7 @@ export class Board {
 
   private updateHoverAffordance(): void {
     const wasVisible = this.hoverGroup.visible;
-    const key = this.hoverKey;
+    const key = this.hoverKey ?? this.infoHoverKey;
     const reachableHex = !!key && this.highlights.has(key);
     if (reachableHex) {
       const mesh = this.hexMeshes.get(key!)!;
@@ -1326,7 +1328,7 @@ export class Board {
       this.canvas.style.cursor = 'pointer';
     } else {
       this.hoverGroup.visible = false;
-      this.canvas.style.cursor = this.hoverBlockadeId ? 'pointer' : '';
+      this.canvas.style.cursor = (this.hoverBlockadeId ?? this.infoHoverBlockadeId) ? 'pointer' : '';
     }
     if (wasVisible !== this.hoverGroup.visible) this.requestFrame();
   }
@@ -1347,6 +1349,31 @@ export class Board {
 
   clearHover(): void {
     this.setHoverTarget(null);
+  }
+
+  setInfoHoverHex(coord: Axial | null): void {
+    this.infoHoverKey = coord ? `${coord.q},${coord.r}` : null;
+    if (coord) this.infoHoverBlockadeId = null;
+    this.applyInspectionHighlights();
+    this.updateHoverAffordance();
+    this.requestFrame();
+  }
+
+  setInfoHoverBlockade(id: string | null): void {
+    this.infoHoverBlockadeId = id;
+    if (id) this.infoHoverKey = null;
+    this.applyInspectionHighlights();
+    this.updateHoverAffordance();
+    this.requestFrame();
+  }
+
+  clearInfoHover(): void {
+    if (!this.infoHoverKey && !this.infoHoverBlockadeId) return;
+    this.infoHoverKey = null;
+    this.infoHoverBlockadeId = null;
+    this.applyInspectionHighlights();
+    this.updateHoverAffordance();
+    this.requestFrame();
   }
 
   setInspectedHex(coord: Axial | null): void {
@@ -1414,14 +1441,16 @@ export class Board {
   }
 
   private applyInspectionHighlights(): void {
+    const hoverKey = this.hoverKey ?? this.infoHoverKey;
+    const hoverBlockadeId = this.hoverBlockadeId ?? this.infoHoverBlockadeId;
     this.inspectionGroup.clear();
     this.addInspectionFill(this.inspectedKey, this.inspectedFillMaterial);
-    if (this.hoverKey !== this.inspectedKey) {
-      this.addInspectionFill(this.hoverKey, this.hoverFillMaterial);
+    if (hoverKey !== this.inspectedKey) {
+      this.addInspectionFill(hoverKey, this.hoverFillMaterial);
     }
     this.addBlockadeFill(this.inspectedBlockadeId, this.blockadeInspectedMaterial, this.inspectionGroup, 0.04);
-    if (this.hoverBlockadeId !== this.inspectedBlockadeId) {
-      this.addBlockadeFill(this.hoverBlockadeId, this.blockadeHoverMaterial, this.inspectionGroup, 0.05);
+    if (hoverBlockadeId !== this.inspectedBlockadeId) {
+      this.addBlockadeFill(hoverBlockadeId, this.blockadeHoverMaterial, this.inspectionGroup, 0.05);
     }
   }
 

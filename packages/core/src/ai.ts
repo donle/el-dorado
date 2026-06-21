@@ -274,8 +274,7 @@ export function planTurn(state: GameState, playerId: string): Action[] {
             .sort((a, b) => a.pow - b.pow)[0];
           if (!cand) break;
           used.add(cand.c.id);
-          actions.push({ type: 'PlayMovementCard', cardId: cand.c.id, symbol: cand.sym! });
-          actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id });
+          actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id, cardId: cand.c.id, symbol: cand.sym! });
           mover = { symbol: cand.sym!, remaining: cand.pow - blockade.cost };
         }
       }

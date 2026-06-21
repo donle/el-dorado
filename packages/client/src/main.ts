@@ -20,13 +20,14 @@ import {
   type Terrain,
   type Action,
   type Blockade,
+  type GameEvent,
 } from '@eldorado/core';
 
 const BOOT_ASSET_URLS = [
   '/ui/loading-table.jpg',
   '/ui/lobby-hero.jpg',
   '/ui/lobby-props.jpg',
-  '/textures/golden-city-ground.png',
+  '/textures/golden-city-ground.jpg',
   '/cards/card-back.jpg',
   '/card-icons/machete.jpg',
   '/card-icons/paddle.jpg',
@@ -34,6 +35,7 @@ const BOOT_ASSET_URLS = [
   '/card-icons/discard.jpg',
   '/card-icons/remove.jpg',
   '/card-icons/single_use.jpg',
+  '/card-icons/native-move.png',
   ...Object.keys(CARD_DEFS).map((id) => `/cards/${id}.jpg`),
 ];
 
@@ -93,6 +95,14 @@ type Mode = 'idle' | 'clear';
 type LockableScreenOrientation = ScreenOrientation & {
   lock?: (orientation: 'landscape') => Promise<void>;
 };
+type ActionLogSegment = { text: string; defId?: string; coord?: Axial; blockadeId?: string };
+type ActionLogEntry = {
+  id: number;
+  playerId: string | null;
+  playerName: string;
+  playerColor: string;
+  segments: ActionLogSegment[];
+};
 
 class App {
   net = new Net();
@@ -106,9 +116,12 @@ class App {
   mode: Mode = 'idle';
   buyTargetDefId: string | null = null;
   marketPreviewDefId: string | null = null;
+  nativeActionCardId: string | null = null;
   clearTarget: Axial | null = null;
   clearBlockadeId: string | null = null;
   viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
+  /** Host's preferred per-action AI delay in ms (default 1s), persisted locally. */
+  aiDelay = Number(localStorage.getItem('eldorado.aiDelay')) || 1000;
   hint = '';
   error = '';
   /** Which panel is open as a bottom sheet on mobile (null = none). */
@@ -122,8 +135,8 @@ class App {
 
   private hud = document.getElementById('hud') as HTMLDivElement;
   private lobby = document.getElementById('lobby') as HTMLDivElement;
-  private preview = el('div', 'card-preview');
-  private terrainPanel = el('div', 'terrain-panel panel hidden');
+  private preview = el('div', 'card-preview inspector-popover panel hidden');
+  private terrainPanel = el('div', 'terrain-panel inspector-popover panel hidden');
   private handEls = new Map<string, HTMLElement>();
   private shopEls = new Map<string, HTMLElement>();
   private playerCardEls = new Map<string, HTMLElement>();
@@ -136,6 +149,11 @@ class App {
   private pinnedTerrain: Axial | null = null;
   private hoveredBlockadeId: string | null = null;
   private pinnedBlockadeId: string | null = null;
+  private terrainPanelHovering = false;
+  private terrainHoverClearTimer: ReturnType<typeof setTimeout> | undefined;
+  private actionLog: ActionLogEntry[] = [];
+  private actionLogSeq = 0;
+  private knownCardDefs = new Map<string, string>();
 
   constructor() {
     this.setupMobileLandscapeGuard();
@@ -216,6 +234,7 @@ class App {
         if (m.room.phase === 'lobby') {
           this.endStarting();
           this.state = null;
+          this.resetActionLog();
           this.resetSelection();
           this.board.setHighlights([]);
           this.board.setBlockadeHighlights([]);
@@ -228,6 +247,7 @@ class App {
         }
         break;
       case 'state': {
+        const previousState = this.state;
         const buys = (m.events ?? []).filter((e) => e.type === 'bought') as Array<{
           type: 'bought';
           playerId: string;
@@ -241,6 +261,9 @@ class App {
           const thumb = node?.querySelector('.card-thumb') ?? node;
           if (thumb) sources.set(`${e.defId}|${e.playerId}`, thumb.getBoundingClientRect());
         }
+        this.rememberCards(previousState);
+        this.rememberCards(m.state);
+        this.appendActionLog(m.events ?? [], m.state, previousState);
         this.state = m.state;
         this.syncSelectionToState();
         this.lobby.classList.add('hidden');
@@ -297,6 +320,7 @@ class App {
     this.mode = 'idle';
     this.buyTargetDefId = null;
     this.marketPreviewDefId = null;
+    this.nativeActionCardId = null;
     this.clearTarget = null;
     this.clearBlockadeId = null;
     this.hint = '';
@@ -308,6 +332,7 @@ class App {
     this.you = null;
     this.room = null;
     this.state = null;
+    this.resetActionLog();
     this.resetSelection();
     this.mobilePanel = null;
     this.board.setSelfPlayerId(null);
@@ -324,6 +349,265 @@ class App {
     this.net.send({ type: 'returnToLobby' });
   }
 
+  private resetActionLog(): void {
+    this.actionLog = [];
+    this.actionLogSeq = 0;
+    this.knownCardDefs.clear();
+  }
+
+  private rememberCards(state: GameState | null): void {
+    if (!state) return;
+    for (const p of state.players) {
+      for (const card of [...p.deck, ...p.hand, ...p.discard, ...p.removed]) {
+        this.knownCardDefs.set(card.id, card.defId);
+      }
+    }
+    for (const card of [...(state.turn?.inPlay ?? []), ...(state.turn?.removedThisTurn ?? [])]) {
+      this.knownCardDefs.set(card.id, card.defId);
+    }
+  }
+
+  private cardDefIdForLog(cardId: string, state: GameState, previousState: GameState | null): string {
+    return findCardDefId(cardId, state)
+      ?? (previousState ? findCardDefId(cardId, previousState) : null)
+      ?? this.knownCardDefs.get(cardId)
+      ?? fallbackCardDefId(cardId);
+  }
+
+  private cardSegmentByDefId(defId: string): ActionLogSegment {
+    if (!CARD_DEFS[defId]) return { text: defId };
+    return { text: getDef(defId).name, defId };
+  }
+
+  private cardSegmentByCardId(cardId: string, state: GameState, previousState: GameState | null): ActionLogSegment {
+    return this.cardSegmentByDefId(this.cardDefIdForLog(cardId, state, previousState));
+  }
+
+  private playerLogInfo(
+    playerId: string | null,
+    state: GameState,
+    previousState: GameState | null,
+  ): { name: string; color: string } {
+    const p = playerId
+      ? state.players.find((x) => x.id === playerId) ?? previousState?.players.find((x) => x.id === playerId)
+      : null;
+    return p
+      ? { name: playerDisplayName(p), color: colorHex(p.color) }
+      : { name: '系统', color: '#ffd166' };
+  }
+
+  private activeMoverForPlayer(
+    playerId: string,
+    state: GameState,
+    previousState: GameState | null,
+  ): { cardId: string; symbol: MoveSymbol; remaining: number } | null {
+    const states = [state, previousState].filter((x): x is GameState => !!x);
+    for (const s of states) {
+      const mover = s.turn?.playerId === playerId ? s.turn.activeMover : undefined;
+      if (mover) return mover;
+    }
+    return null;
+  }
+
+  private activeMoverForCard(
+    cardId: string,
+    state: GameState,
+    previousState: GameState | null,
+  ): { cardId: string; symbol: MoveSymbol; remaining: number } | null {
+    const states = [state, previousState].filter((x): x is GameState => !!x);
+    for (const s of states) {
+      const mover = s.turn?.activeMover;
+      if (mover?.cardId === cardId) return mover;
+    }
+    return null;
+  }
+
+  private terrainLogSegment(to: Axial, state: GameState): ActionLogSegment {
+    const hex = state.hexes.find((h) => sameCoord(h, to));
+    return {
+      text: hex ? `${terrainInfo(hex).name} (${to.q}, ${to.r})` : `(${to.q}, ${to.r})`,
+      coord: { q: to.q, r: to.r },
+    };
+  }
+
+  private blockadeLogSegment(blockadeId: string): ActionLogSegment {
+    return { text: '连接地形', blockadeId };
+  }
+
+  private inferTakenMarketDefId(state: GameState, previousState: GameState | null): string | null {
+    if (!previousState) return null;
+    for (const pile of state.market) {
+      const before = previousState.market.find((m) => m.defId === pile.defId);
+      if (before && before.count > pile.count) return pile.defId;
+    }
+    return null;
+  }
+
+  private appendActionLog(events: GameEvent[], state: GameState, previousState: GameState | null): void {
+    if (events.length === 0) return;
+    const entry = this.describeActionEvents(events, state, previousState);
+    if (!entry) return;
+    this.actionLog.push(entry);
+    this.actionLog = this.actionLog.slice(-60);
+  }
+
+  private makeActionLogEntry(
+    playerId: string | null,
+    segments: ActionLogSegment[],
+    state: GameState,
+    previousState: GameState | null,
+  ): ActionLogEntry {
+    const player = this.playerLogInfo(playerId, state, previousState);
+    return {
+      id: ++this.actionLogSeq,
+      playerId,
+      playerName: player.name,
+      playerColor: player.color,
+      segments,
+    };
+  }
+
+  private describeActionEvents(
+    events: GameEvent[],
+    state: GameState,
+    previousState: GameState | null,
+  ): ActionLogEntry | null {
+    const cardPlayed = events.find((e) => e.type === 'cardPlayed') as Extract<GameEvent, { type: 'cardPlayed' }> | undefined;
+    const moved = events.find((e) => e.type === 'movedTo') as Extract<GameEvent, { type: 'movedTo' }> | undefined;
+    const spaceCleared = events.find((e) => e.type === 'spaceCleared') as Extract<GameEvent, { type: 'spaceCleared' }> | undefined;
+    const marketPromoted = events.find((e) => e.type === 'marketPromoted') as Extract<GameEvent, { type: 'marketPromoted' }> | undefined;
+    const bought = events.find((e) => e.type === 'bought') as Extract<GameEvent, { type: 'bought' }> | undefined;
+    const discarded = events.find((e) => e.type === 'discarded') as Extract<GameEvent, { type: 'discarded' }> | undefined;
+    const ability = events.find((e) => e.type === 'ability') as Extract<GameEvent, { type: 'ability' }> | undefined;
+    const drew = events.find((e) => e.type === 'drew') as Extract<GameEvent, { type: 'drew' }> | undefined;
+    const blockadeClaimed = events.find((e) => e.type === 'blockadeClaimed') as Extract<GameEvent, { type: 'blockadeClaimed' }> | undefined;
+    const reachedEldorado = events.find((e) => e.type === 'reachedEldorado') as Extract<GameEvent, { type: 'reachedEldorado' }> | undefined;
+    const turnStarted = events.find((e) => e.type === 'turnStarted') as Extract<GameEvent, { type: 'turnStarted' }> | undefined;
+    const gameOver = events.find((e) => e.type === 'gameOver') as Extract<GameEvent, { type: 'gameOver' }> | undefined;
+
+    if (gameOver) {
+      const winner = gameOver.winnerId ? this.playerLogInfo(gameOver.winnerId, state, previousState).name : null;
+      return this.makeActionLogEntry(gameOver.winnerId, [{ text: winner ? '赢得游戏' : '游戏结束' }], state, previousState);
+    }
+
+    if (bought) {
+      return this.makeActionLogEntry(
+        bought.playerId,
+        [{ text: '购买 ' }, this.cardSegmentByDefId(bought.defId)],
+        state,
+        previousState,
+      );
+    }
+
+    if (marketPromoted) {
+      return this.makeActionLogEntry(
+        marketPromoted.playerId,
+        [{ text: '将 ' }, this.cardSegmentByDefId(marketPromoted.defId), { text: ' 补入市场' }],
+        state,
+        previousState,
+      );
+    }
+
+    if (ability) {
+      const segments: ActionLogSegment[] = [
+        { text: '使用 ' },
+        this.cardSegmentByCardId(ability.cardId, state, previousState),
+      ];
+      if (moved) segments.push({ text: '，移动到 ' }, this.terrainLogSegment(moved.to, state));
+      if (drew) segments.push({ text: `，摸 ${drew.count} 张牌` });
+      const takenDefId = this.inferTakenMarketDefId(state, previousState);
+      if (takenDefId) segments.push({ text: '，获得 ' }, this.cardSegmentByDefId(takenDefId));
+      if (reachedEldorado) segments.push({ text: '，抵达黄金城' });
+      return this.makeActionLogEntry(ability.playerId, segments, state, previousState);
+    }
+
+    if (spaceCleared) {
+      return this.makeActionLogEntry(
+        spaceCleared.playerId,
+        [
+          { text: `${spaceCleared.removed ? '移除手牌清除营地' : '弃掉手牌清除碎石'}，移动到 ` },
+          this.terrainLogSegment(spaceCleared.to, state),
+        ],
+        state,
+        previousState,
+      );
+    }
+
+    if (cardPlayed && blockadeClaimed) {
+      return this.makeActionLogEntry(
+        cardPlayed.playerId,
+        [
+          { text: '打出 ' },
+          this.cardSegmentByCardId(cardPlayed.cardId, state, previousState),
+          { text: '，移除' },
+          this.blockadeLogSegment(blockadeClaimed.blockadeId),
+        ],
+        state,
+        previousState,
+      );
+    }
+
+    if (cardPlayed) {
+      const mover = this.activeMoverForCard(cardPlayed.cardId, state, previousState);
+      const symbol = mover ? `（${SYMBOL_LABEL[mover.symbol]}）` : '';
+      return this.makeActionLogEntry(
+        cardPlayed.playerId,
+        [{ text: '打出 ' }, this.cardSegmentByCardId(cardPlayed.cardId, state, previousState), { text: symbol }],
+        state,
+        previousState,
+      );
+    }
+
+    if (blockadeClaimed) {
+      return this.makeActionLogEntry(
+        blockadeClaimed.playerId,
+        [{ text: '移除' }, this.blockadeLogSegment(blockadeClaimed.blockadeId)],
+        state,
+        previousState,
+      );
+    }
+
+    if (moved) {
+      const mover = this.activeMoverForPlayer(moved.playerId, state, previousState);
+      const segments: ActionLogSegment[] = mover
+        ? [
+          { text: '使用 ' },
+          this.cardSegmentByCardId(mover.cardId, state, previousState),
+          { text: '，移动到 ' },
+          this.terrainLogSegment(moved.to, state),
+        ]
+        : [{ text: '移动到 ' }, this.terrainLogSegment(moved.to, state)];
+      if (reachedEldorado) segments.push({ text: '，抵达黄金城' });
+      return this.makeActionLogEntry(moved.playerId, segments, state, previousState);
+    }
+
+    if (discarded) {
+      return this.makeActionLogEntry(
+        discarded.playerId,
+        [{ text: `弃掉 ${discarded.count} 张手牌` }],
+        state,
+        previousState,
+      );
+    }
+
+    if (drew || turnStarted) {
+      const actorId = drew?.playerId ?? previousState?.turn?.playerId ?? turnStarted?.playerId ?? null;
+      const segments: ActionLogSegment[] = [];
+      if (turnStarted && actorId !== turnStarted.playerId) {
+        segments.push({ text: '结束回合' });
+        if (drew) segments.push({ text: `，摸 ${drew.count} 张牌` });
+        segments.push({ text: `；轮到 ${this.playerLogInfo(turnStarted.playerId, state, previousState).name}` });
+      } else if (drew) {
+        segments.push({ text: `摸 ${drew.count} 张牌` });
+      } else if (turnStarted) {
+        segments.push({ text: '开始回合' });
+      }
+      return this.makeActionLogEntry(actorId, segments, state, previousState);
+    }
+
+    return null;
+  }
+
   /**
    * Reconcile selection when fresh server state arrives. Transient targets
    * (buy/clear/mode) always reset, but the hand selection is PRESERVED across
@@ -335,6 +619,7 @@ class App {
     this.mode = 'idle';
     this.buyTargetDefId = null;
     this.marketPreviewDefId = null;
+    this.nativeActionCardId = null;
     this.clearTarget = null;
     this.clearBlockadeId = null;
     this.hint = '';
@@ -380,6 +665,7 @@ class App {
 
   private canRemoveBlockade(blockade: Blockade, symbol: MoveSymbol, power: number): boolean {
     return !blockade.claimedBy && !blockadeRequiresDiscard(blockade)
+      && !!this.blockadeDestination(blockade)
       && blockadeMoveSymbol(blockade) === symbol && power >= blockade.cost;
   }
 
@@ -430,6 +716,17 @@ class App {
     return !blockade || !!blockade.claimedBy;
   }
 
+  private canUseNativeOn(hex: Hex): boolean {
+    const me = this.me;
+    if (!me) return false;
+    if (!isAdjacent(me.position, hex)) return false;
+    if (hex.terrain === 'mountain') return false;
+    if (hex.terrain === 'eldorado' && this.hexAt(me.position)?.terrain !== 'finish') return false;
+    if (hex.occupant && hex.occupant !== me.id) return false;
+    const blockade = this.blockadeBetween(me.position, hex);
+    return !blockade || !!blockade.claimedBy;
+  }
+
   private recomputeHighlights(): void {
     if (!this.isMyTurn() || !this.me) {
       this.board.setHighlights([]);
@@ -447,6 +744,8 @@ class App {
 
     if (this.mode === 'clear') {
       // selection happens in the hand panel; no hex highlight
+    } else if (this.nativeActionCardId) {
+      for (const h of adj) if (this.canUseNativeOn(h)) out.push(h);
     } else if (mover && mover.remaining > 0) {
       for (const h of adj) if (this.canEnter(h, mover.symbol, mover.remaining)) out.push(h);
       for (const blockade of unclaimedBlockades) {
@@ -484,6 +783,11 @@ class App {
   // --- input ---
 
   private onHexHover(c: Axial | null): void {
+    this.cancelTerrainHoverClear();
+    if (!c && this.hoveredTerrain && !this.pinnedTerrain && !this.pinnedBlockadeId) {
+      this.scheduleTerrainHoverClear();
+      return;
+    }
     this.hoveredTerrain = c;
     if (c) this.hoveredBlockadeId = null;
     this.renderTerrainPanel();
@@ -523,6 +827,18 @@ class App {
       return true;
     }
 
+    if (this.nativeActionCardId) {
+      if (!this.canUseNativeOn(hex)) {
+        this.flash('原住民向导只能移动到可进入的相邻地形');
+        return true;
+      }
+      const cardId = this.nativeActionCardId;
+      this.nativeActionCardId = null;
+      this.selected.delete(cardId);
+      this.act({ type: 'UseAbility', cardId, nativeTo: c });
+      return true;
+    }
+
     if (this.canStepToEldorado(hex)) {
       this.act({ type: 'StepTo', to: c });
       return true;
@@ -537,6 +853,7 @@ class App {
       this.hint = `选 ${hex.cost} 张牌${hex.terrain === 'basecamp' ? '（将被永久移除）' : ''}清除此格`;
       this.renderHud();
       this.recomputeHighlights();
+      this.renderTerrainPanel();
       return true;
     }
 
@@ -566,6 +883,11 @@ class App {
   }
 
   private onBlockadeHover(id: string | null): void {
+    this.cancelTerrainHoverClear();
+    if (!id && this.hoveredBlockadeId && !this.pinnedTerrain && !this.pinnedBlockadeId) {
+      this.scheduleTerrainHoverClear();
+      return;
+    }
     this.hoveredBlockadeId = id;
     if (id) this.hoveredTerrain = null;
     this.renderTerrainPanel();
@@ -574,6 +896,16 @@ class App {
 
   private onBlockadeClick(id: string): void {
     if (this.tryActOnBlockade(id)) return;
+
+    if (this.pinnedBlockadeId === id && !this.pinnedTerrain) {
+      this.pinnedBlockadeId = null;
+      this.hoveredBlockadeId = null;
+      this.board.setInspectedBlockade(null);
+      this.board.clearHover();
+      this.renderTerrainPanel();
+      this.refreshPinnedPreview();
+      return;
+    }
 
     this.pinnedBlockadeId = id;
     this.pinnedTerrain = null;
@@ -590,6 +922,7 @@ class App {
 
     // Unclaimed: REMOVE in place (do not move).
     if (!blockade.claimedBy) {
+      if (!this.blockadeDestination(blockade)) return false;
       if (blockadeRequiresDiscard(blockade)) {
         // enter card-selection to discard exactly blockade.cost cards
         this.mode = 'clear';
@@ -599,6 +932,7 @@ class App {
         this.hint = `选 ${blockade.cost} 张牌弃掉，移除这块连接地形`;
         this.renderHud();
         this.recomputeHighlights();
+        this.renderTerrainPanel();
         return true;
       }
       const seamSym = blockadeMoveSymbol(blockade);
@@ -614,12 +948,10 @@ class App {
       const pick = pickHandMover(seamSym, blockade.cost, candidates);
       if (pick) {
         this.selected.delete(pick.cardId);
-        this.act({ type: 'PlayMovementCard', cardId: pick.cardId, symbol: pick.symbol });
-        this.act({ type: 'RemoveBlockade', blockadeId: blockade.id });
+        this.act({ type: 'RemoveBlockade', blockadeId: blockade.id, cardId: pick.cardId, symbol: pick.symbol });
         return true;
       }
-      this.flash('没有可用于移除这块连接地形的牌');
-      return true;
+      return false;
     }
 
     // Claimed: cross normally onto the far hex.
@@ -666,17 +998,28 @@ class App {
         return;
       }
       this.renderHud();
+      this.renderTerrainPanel();
       return;
     }
+    this.nativeActionCardId = null;
     if (this.selected.has(cardId)) this.selected.delete(cardId);
     else this.selected.add(cardId);
+    if (this.selectedActionCard()?.def.ability !== 'take_free') this.buyTargetDefId = null;
     this.recomputeHighlights();
     this.renderHud();
+    this.renderTerrainPanel();
   }
 
   private onMarketClick(defId: string): void {
     if (!this.isMyTurn()) return;
     this.marketPreviewDefId = null;
+    if (this.selectedActionCard()?.def.ability === 'take_free') {
+      this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
+      this.hint = this.buyTargetDefId ? '点击「免费获得」使用发报机' : '';
+      if (this.buyTargetDefId) this.mobilePanel = null;
+      this.renderHud();
+      return;
+    }
     if (this.state!.turn?.hasBought) { this.flash('本回合已购买 · 每回合限买 1 张'); return; }
     if (this.marketNeedsPromotion(this.state!)) {
       this.mobilePanel = 'market';
@@ -718,15 +1061,185 @@ class App {
       this.onMarketClick(defId);
       return;
     }
+    if (this.selectedActionCard()?.def.ability === 'take_free') {
+      this.onMarketClick(defId);
+      return;
+    }
     this.promoteMarket(defId);
   }
 
   private canSelectMarketPreview(defId: string): boolean {
-    if (!this.isMyTurn() || !this.state || this.state.turn?.hasBought) return false;
+    if (!this.isMyTurn() || !this.state) return false;
     const pile = this.state.market.find((m) => m.defId === defId);
     if (!pile || pile.count <= 0) return false;
+    if (this.selectedActionCard()?.def.ability === 'take_free') return true;
+    if (this.state.turn?.hasBought) return false;
     if (pile.onBoard) return !this.marketNeedsPromotion(this.state);
     return this.marketNeedsPromotion(this.state);
+  }
+
+  private selectedActionCards(): Array<{ id: string; defId: string; def: ReturnType<typeof getDef> }> {
+    const hand = this.me?.hand ?? [];
+    return [...this.selected]
+      .map((id) => {
+        const card = hand.find((h) => h.id === id);
+        if (!card) return null;
+        const def = getDef(card.defId);
+        return def.kind === 'action' ? { id, defId: card.defId, def } : null;
+      })
+      .filter((x): x is { id: string; defId: string; def: ReturnType<typeof getDef> } => !!x);
+  }
+
+  private selectedActionCard(): { id: string; defId: string; def: ReturnType<typeof getDef> } | null {
+    const actions = this.selectedActionCards();
+    return actions.length === 1 ? actions[0] : null;
+  }
+
+  private selectedActionRemoveIds(actionCardId: string): string[] {
+    const handIds = new Set((this.me?.hand ?? []).map((c) => c.id));
+    return [...this.selected].filter((id) => id !== actionCardId && handIds.has(id));
+  }
+
+  private removeLimitForAbility(ability: string | undefined): number {
+    if (ability === 'draw1_remove1') return 1;
+    if (ability === 'draw2_remove2') return 2;
+    return 0;
+  }
+
+  private selectedActionUseLabel(compact = false): string {
+    const action = this.selectedActionCard();
+    if (!action) return compact ? '使用' : '使用行动牌';
+    switch (action.def.ability) {
+      case 'draw2':
+      case 'draw3':
+        return compact ? '摸牌' : `使用${action.def.name}`;
+      case 'draw1_remove1':
+      case 'draw2_remove2': {
+        const removeIds = this.selectedActionRemoveIds(action.id);
+        const limit = this.removeLimitForAbility(action.def.ability);
+        return compact ? `使用 ${removeIds.length}/${limit}` : `使用${action.def.name}（移除 ${removeIds.length}/${limit}）`;
+      }
+      case 'take_free':
+        return compact ? '免费拿' : (this.buyTargetDefId ? `免费获得${getDef(this.buyTargetDefId).name}` : '选择市场卡');
+      case 'native':
+        return compact ? '向导' : '使用原住民向导';
+      default:
+        return compact ? '使用' : `使用${action.def.name}`;
+    }
+  }
+
+  private handActionUseLabel(def: ReturnType<typeof getDef>): string {
+    switch (def.ability) {
+      case 'draw2':
+      case 'draw3':
+        return '摸牌';
+      case 'take_free':
+        return '免费拿';
+      case 'native':
+        return '向导';
+      default:
+        return '使用';
+    }
+  }
+
+  private canUseSelectedAction(): boolean {
+    const actions = this.selectedActionCards();
+    if (actions.length !== 1) return false;
+    const action = actions[0];
+    const removeIds = this.selectedActionRemoveIds(action.id);
+    switch (action.def.ability) {
+      case 'draw2':
+      case 'draw3':
+        return removeIds.length === 0;
+      case 'draw1_remove1':
+      case 'draw2_remove2':
+        return removeIds.length <= this.removeLimitForAbility(action.def.ability);
+      case 'take_free':
+        return !!this.buyTargetDefId;
+      case 'native':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private useActionCardFromHand(cardId: string): void {
+    if (!this.isMyTurn()) return;
+    const hand = this.me?.hand ?? [];
+    const card = hand.find((c) => c.id === cardId);
+    if (!card) return;
+    const def = getDef(card.defId);
+    if (def.kind !== 'action') return;
+
+    this.nativeActionCardId = null;
+    if (def.ability !== 'take_free') this.buyTargetDefId = null;
+
+    if (def.ability === 'draw2' || def.ability === 'draw3') {
+      this.selected = new Set([cardId]);
+    } else {
+      const handIds = new Set(hand.map((c) => c.id));
+      const selectedNonActions = [...this.selected].filter((id) => {
+        if (id === cardId || !handIds.has(id)) return false;
+        const selectedCard = hand.find((h) => h.id === id);
+        return selectedCard ? getDef(selectedCard.defId).kind !== 'action' : false;
+      });
+      this.selected = new Set([...selectedNonActions, cardId]);
+    }
+
+    this.useSelectedAction();
+  }
+
+  private useSelectedAction(): void {
+    const actions = this.selectedActionCards();
+    if (actions.length === 0) {
+      this.flash('先选择一张行动牌');
+      return;
+    }
+    if (actions.length > 1) {
+      this.flash('一次只能使用一张行动牌');
+      return;
+    }
+    const action = actions[0];
+    const removeCardIds = this.selectedActionRemoveIds(action.id);
+
+    switch (action.def.ability) {
+      case 'draw2':
+      case 'draw3':
+        if (removeCardIds.length > 0) {
+          this.flash('这张行动牌不需要选择其他手牌');
+          return;
+        }
+        this.act({ type: 'UseAbility', cardId: action.id });
+        return;
+      case 'draw1_remove1':
+      case 'draw2_remove2': {
+        const limit = this.removeLimitForAbility(action.def.ability);
+        if (removeCardIds.length > limit) {
+          this.flash(`最多移除 ${limit} 张手牌`);
+          return;
+        }
+        this.act({ type: 'UseAbility', cardId: action.id, removeCardIds });
+        return;
+      }
+      case 'take_free':
+        if (!this.buyTargetDefId) {
+          this.mobilePanel = 'market';
+          this.flash('先选择一张市场卡');
+          this.renderHud();
+          return;
+        }
+        this.act({ type: 'UseAbility', cardId: action.id, takeDefId: this.buyTargetDefId });
+        this.buyTargetDefId = null;
+        return;
+      case 'native':
+        this.nativeActionCardId = action.id;
+        this.hint = '点选一个相邻地形，使用原住民向导移动';
+        this.recomputeHighlights();
+        this.renderHud();
+        return;
+      default:
+        this.flash('这个行动牌能力尚未实现');
+    }
   }
 
   private promoteMarket(defId: string): void {
@@ -802,6 +1315,17 @@ class App {
           <button class="seg-btn ${this.viewMode === '3d' ? 'on' : ''}" data-v="3d">3D</button>
           <button class="seg-btn ${this.viewMode === '2d' ? 'on' : ''}" data-v="2d">2D</button>
         </div>
+      </div>
+      <div class="settings-group">
+        <span class="settings-label">AI 行动间隔</span>
+        <div class="settings-delay">
+          <input type="range" class="delay-range" min="0" max="10" step="0.5"
+                 value="${(((this.room?.aiDelayMs ?? 1000) / 1000)).toFixed(1)}"
+                 style="--fill:${(((this.room?.aiDelayMs ?? 1000) / 1000) / 10 * 100).toFixed(1)}%"
+                 ${this.room?.hostId === this.you ? '' : 'disabled'} />
+          <span class="delay-value">${(((this.room?.aiDelayMs ?? 1000) / 1000)).toFixed(1)}<i>s</i></span>
+        </div>
+        ${this.room?.hostId === this.you ? '' : '<span class="settings-hint">仅房主可调整</span>'}
       </div>`;
     menu.querySelector<HTMLButtonElement>('.settings-close')!.onclick = () => {
       this.settingsOpen = false;
@@ -810,6 +1334,22 @@ class App {
     menu.querySelectorAll<HTMLButtonElement>('.seg-btn').forEach((b) => {
       b.onclick = () => this.setViewMode(b.dataset.v as '3d' | '2d');
     });
+    const range = menu.querySelector<HTMLInputElement>('.delay-range');
+    const valueLabel = menu.querySelector<HTMLSpanElement>('.delay-value');
+    if (range) {
+      range.oninput = () => {
+        const secs = Number(range.value);
+        range.style.setProperty('--fill', `${(secs / 10) * 100}%`);
+        if (valueLabel) valueLabel.innerHTML = `${secs.toFixed(1)}<i>s</i>`;
+      };
+      range.onchange = () => {
+        if (this.room?.hostId !== this.you) return;
+        const ms = Math.round(Number(range.value) * 1000);
+        this.aiDelay = ms;
+        localStorage.setItem('eldorado.aiDelay', String(ms));
+        this.net.send({ type: 'setAiDelay', ms });
+      };
+    }
     if (s.phase === 'playing') {
       const exit = button('退出游戏', () => {
         this.settingsOpen = false;
@@ -964,7 +1504,6 @@ class App {
       select.className = 'preview-select-card';
       this.preview.appendChild(select);
     }
-    this.preview.style.display = 'block';
     const pr = this.preview.getBoundingClientRect();
     if (marketPreview) {
       const marketRect = document.querySelector<HTMLElement>('.market-panel.open')?.getBoundingClientRect();
@@ -984,6 +1523,7 @@ class App {
         this.preview.style.left = `${Math.max(8, Math.min(x, window.innerWidth - pr.width - 8))}px`;
         this.preview.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
       }
+      this.preview.classList.remove('hidden');
       return;
     }
     if (compactLandscape) {
@@ -991,21 +1531,23 @@ class App {
       const y = 48;
       this.preview.style.left = `${Math.max(8, x)}px`;
       this.preview.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
+      this.preview.classList.remove('hidden');
       return;
     }
 
-    // Dock every card preview (hand AND market) to the left edge, vertically
-    // centered, so it never covers the board.
+    // Dock every card preview (hand, market and action log) to the same left
+    // inspector position used by terrain hover details.
     let x = 14;
-    let y = window.innerHeight / 2 - pr.height / 2;
+    let y = 76;
     x = Math.max(10, Math.min(x, window.innerWidth - pr.width - 10));
     y = Math.max(10, Math.min(y, window.innerHeight - pr.height - 10));
     this.preview.style.left = `${x}px`;
     this.preview.style.top = `${y}px`;
+    this.preview.classList.remove('hidden');
   }
 
   private hidePreview(): void {
-    this.preview.style.display = 'none';
+    this.preview.classList.add('hidden');
     this.preview.classList.remove('actionable');
   }
 
@@ -1060,21 +1602,13 @@ class App {
     modal.classList.add('lobby-modal');
     modal.classList.add(this.room ? 'room-modal' : 'entry-modal');
     const artHtml = `
-      <div class="lobby-art">
-        <div class="lobby-art-copy">
-          <span>探险日志</span>
-          <b>黄金城之路</b>
-          <small>补给、路线与同伴都准备好后再出发。</small>
-        </div>
-      </div>`;
+      <div class="lobby-art"></div>`;
 
     if (!this.room) {
       modal.innerHTML = `
         ${artHtml}
         <div class="lobby-form">
-          <div class="lobby-kicker">联机探险</div>
           <h1>冲向黄金城</h1>
-          <p class="sub">选择队伍，穿过丛林、河流与村庄，抢先抵达黄金城。</p>
           <label>你的名字</label>
           <span class="game-field"><input id="name" value="${escapeHtml(this.nameValue)}" placeholder="玩家名" /></span>
           <label>房间码（加入已有房间）</label>
@@ -1089,8 +1623,10 @@ class App {
         this.nameValue = (e.target as HTMLInputElement).value;
         localStorage.setItem('eldorado.name', this.nameValue);
       };
-      modal.querySelector<HTMLButtonElement>('#create')!.onclick = () =>
+      modal.querySelector<HTMLButtonElement>('#create')!.onclick = () => {
         this.net.send({ type: 'createRoom', name: this.nameValue || '玩家' });
+        this.net.send({ type: 'setAiDelay', ms: this.aiDelay });
+      };
       modal.querySelector<HTMLButtonElement>('#join')!.onclick = () => {
         const code = modal.querySelector<HTMLInputElement>('#code')!.value.trim().toUpperCase();
         if (code) this.net.send({ type: 'joinRoom', code, name: this.nameValue || '玩家' });
@@ -1107,9 +1643,7 @@ class App {
       modal.innerHTML = `
         ${artHtml}
         <div class="lobby-form">
-          <div class="lobby-kicker">房间集结</div>
           <h1>房间 <span class="room-code">${this.room.code}</span></h1>
-          <p class="sub">把房间码发给朋友，或加入电脑玩家凑人数（2–4 人）</p>
           <div class="lobby-players">${players}</div>
           <div class="row">
             ${isHost ? '<button id="ai" class="secondary">+ 添加电脑</button>' : ''}
@@ -1145,6 +1679,53 @@ class App {
     const toFinish = (pos: Axial) => Math.min(...finishes.map((f) => distance(pos, f)));
     const ref = starts.length ? Math.max(...starts.map((st) => toFinish(st))) : 1;
     return Math.max(0, Math.min(1, 1 - toFinish(p.position) / Math.max(ref, 1)));
+  }
+
+  private renderActionLog(): void {
+    const panel = el('div', 'action-log panel');
+    panel.innerHTML = '<h3>行动日志</h3>';
+    const list = el('div', 'action-log-list');
+    if (this.actionLog.length > 0) {
+      for (const entry of this.actionLog.slice(-24)) {
+        const row = el('div', 'action-log-entry');
+        row.style.setProperty('--log-player', entry.playerColor);
+
+        const dot = document.createElement('span');
+        dot.className = 'action-log-dot';
+        row.appendChild(dot);
+
+        const body = el('div', 'action-log-body');
+        const player = el('div', 'action-log-player');
+        player.textContent = entry.playerName;
+        const text = el('div', 'action-log-text');
+        for (const segment of entry.segments) {
+          const node = document.createElement('span');
+          node.textContent = segment.text;
+          const classes: string[] = [];
+          if (segment.defId) {
+            classes.push('action-log-card');
+            this.attachPreview(node, segment.defId);
+          }
+          if (segment.coord || segment.blockadeId) {
+            classes.push('action-log-terrain');
+            node.addEventListener('mouseenter', () => {
+              if (segment.blockadeId) this.board.setInfoHoverBlockade(segment.blockadeId);
+              else if (segment.coord) this.board.setInfoHoverHex(segment.coord);
+            });
+            node.addEventListener('mouseleave', () => this.board.clearInfoHover());
+          }
+          if (classes.length) node.className = classes.join(' ');
+          text.appendChild(node);
+        }
+        body.appendChild(player);
+        body.appendChild(text);
+        row.appendChild(body);
+        list.appendChild(row);
+      }
+    }
+    panel.appendChild(list);
+    this.hud.appendChild(panel);
+    list.scrollTop = list.scrollHeight;
   }
 
   private renderHud(): void {
@@ -1197,7 +1778,11 @@ class App {
     // --- top-centre: players as cards ---
     this.playerCardEls.clear();
     const pcards = el('div', 'player-cards');
-    for (const p of s.players) {
+    const turnRank = new Map(s.turnOrder.map((id, i) => [id, i]));
+    const orderedPlayers = s.players
+      .slice()
+      .sort((a, b) => (turnRank.get(a.id) ?? Infinity) - (turnRank.get(b.id) ?? Infinity));
+    for (const p of orderedPlayers) {
       const active = p.id === s.turn?.playerId;
       const card = el('div', `pcard ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}`);
       card.style.setProperty('--pc', colorHex(p.color));
@@ -1226,6 +1811,7 @@ class App {
     const upcoming = s.market.filter((m) => !m.onBoard && m.count > 0);
     const needsPromotion = onBoard.length < 6 && upcoming.length > 0;
     const canPromote = myTurn && needsPromotion && !s.turn?.hasBought;
+    const freeTakeAction = this.selectedActionCard()?.def.ability === 'take_free';
     const shopCard = (pile: (typeof s.market)[number], locked: boolean): HTMLDivElement => {
       const def = getDef(pile.defId);
       const sub = def.kind === 'action' ? '行动牌' : def.power ? `力量 ${def.power}` : '';
@@ -1241,6 +1827,8 @@ class App {
         <span class="price"><span class="c">${def.cost}💰</span><span class="left">${left}</span></span>`;
       if (this.usesMarketPreviewFlow()) {
         card.onclick = () => this.previewMarketCard(pile.defId);
+      } else if (freeTakeAction && myTurn && pile.count > 0) {
+        card.onclick = () => this.onMarketClick(pile.defId);
       } else if (locked && canPromote) card.onclick = () => this.promoteMarket(pile.defId);
       else if (!locked && pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
       this.attachPreview(card, pile.defId);
@@ -1270,12 +1858,19 @@ class App {
       this.attachSheetDismiss(market);
     }
 
+    this.renderActionLog();
+
     // (draw/discard piles are built into the bottom dock, flanking the hand)
 
     // --- bottom dock: hand + actions ---
     const dock = el('div', 'dock');
     const me = this.me;
     const tray = el('div', 'hand-tray');
+    tray.addEventListener('wheel', (ev) => {
+      if (tray.scrollWidth <= tray.clientWidth || Math.abs(ev.deltaX) >= Math.abs(ev.deltaY)) return;
+      tray.scrollLeft += ev.deltaY;
+      ev.preventDefault();
+    }, { passive: false });
     if (me) {
       for (const c of me.hand) {
         const def = getDef(c.defId);
@@ -1284,6 +1879,17 @@ class App {
         card.innerHTML = `
           ${cardFace(def)}`;
         if (myTurn) card.onclick = () => this.onCardClick(c.id);
+        if (myTurn && s.phase === 'playing' && def.kind === 'action') {
+          const use = document.createElement('button');
+          use.type = 'button';
+          use.className = 'card-use-btn';
+          use.textContent = this.handActionUseLabel(def);
+          use.onclick = (ev) => {
+            ev.stopPropagation();
+            this.useActionCardFromHand(c.id);
+          };
+          card.appendChild(use);
+        }
         this.attachPreview(card, c.defId);
         this.handEls.set(c.id, card);
         tray.appendChild(card);
@@ -1309,6 +1915,12 @@ class App {
           buy.className = 'gold cmd-btn';
           buy.disabled = have < cost;
           actions.appendChild(buy);
+        }
+        if (this.selectedActionCards().length > 0 || this.nativeActionCardId) {
+          const use = button(this.nativeActionCardId ? (compact ? '选目标' : '选择向导目标') : this.selectedActionUseLabel(compact), () => this.useSelectedAction(), false);
+          use.className = 'gold cmd-btn';
+          use.disabled = !!this.nativeActionCardId || !this.canUseSelectedAction();
+          actions.appendChild(use);
         }
         const end = button(compact ? '结束' : '结束回合', () => this.act({ type: 'EndTurn' }), true);
         end.classList.add('cmd-btn');
@@ -1364,7 +1976,32 @@ class App {
     if (this.buyTargetDefId) {
       const cost = getDef(this.buyTargetDefId).cost;
       const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
+      if (this.selectedActionCard()?.def.ability === 'take_free') {
+        return `<b>发报机目标</b><span>${escapeHtml(getDef(this.buyTargetDefId).name)}</span>`;
+      }
       return `<b>购买 ${escapeHtml(getDef(this.buyTargetDefId).name)}</b><span>${have}/${cost} 金币</span>`;
+    }
+    if (this.nativeActionCardId) {
+      return '<b>原住民向导</b><span>点选一个相邻地形</span>';
+    }
+    const actionCards = this.selectedActionCards();
+    if (actionCards.length > 1) {
+      return '<b>行动牌</b><span>一次只能使用 1 张</span>';
+    }
+    if (actionCards.length === 1) {
+      const action = actionCards[0];
+      const removeIds = this.selectedActionRemoveIds(action.id);
+      const limit = this.removeLimitForAbility(action.def.ability);
+      if (limit > 0) {
+        return `<b>使用 ${escapeHtml(action.def.name)}</b><span>可移除 ${removeIds.length}/${limit} 张</span>`;
+      }
+      if (action.def.ability === 'take_free') {
+        return `<b>使用 ${escapeHtml(action.def.name)}</b><span>先选择市场卡</span>`;
+      }
+      if (action.def.ability === 'native') {
+        return `<b>使用 ${escapeHtml(action.def.name)}</b><span>点击使用后选地形</span>`;
+      }
+      return `<b>使用 ${escapeHtml(action.def.name)}</b><span>点击使用行动牌</span>`;
     }
     const mover = s.turn?.activeMover;
     if (mover) {
@@ -1413,13 +2050,55 @@ class App {
     this.hud.appendChild(overlay);
   }
 
+  private cancelTerrainHoverClear(): void {
+    clearTimeout(this.terrainHoverClearTimer);
+    this.terrainHoverClearTimer = undefined;
+  }
+
+  private scheduleTerrainHoverClear(): void {
+    this.cancelTerrainHoverClear();
+    this.terrainHoverClearTimer = setTimeout(() => {
+      this.terrainHoverClearTimer = undefined;
+      if (this.terrainPanelHovering) return;
+      this.hoveredTerrain = null;
+      this.hoveredBlockadeId = null;
+      this.board.clearInfoHover();
+      this.renderTerrainPanel();
+      if (!this.pinnedTerrain && !this.pinnedBlockadeId) this.refreshPinnedPreview();
+    }, 80);
+  }
+
+  private bindTerrainPanelHover(coord: Axial | null, blockadeId: string | null): void {
+    const enter = () => {
+      this.terrainPanelHovering = true;
+      this.cancelTerrainHoverClear();
+      if (blockadeId) this.board.setInfoHoverBlockade(blockadeId);
+      else if (coord) this.board.setInfoHoverHex(coord);
+    };
+    this.terrainPanel.onmouseenter = enter;
+    this.terrainPanel.onmouseleave = () => {
+      this.terrainPanelHovering = false;
+      this.board.clearInfoHover();
+      if (!this.pinnedTerrain && !this.pinnedBlockadeId) {
+        this.hoveredTerrain = null;
+        this.hoveredBlockadeId = null;
+        this.renderTerrainPanel();
+        this.refreshPinnedPreview();
+      }
+    };
+    if (this.terrainPanel.matches(':hover')) enter();
+  }
+
   private closeTerrainPanel(): void {
+    this.cancelTerrainHoverClear();
+    this.terrainPanelHovering = false;
     this.pinnedTerrain = null;
     this.hoveredTerrain = null;
     this.pinnedBlockadeId = null;
     this.hoveredBlockadeId = null;
     this.board.setInspectedHex(null);
     this.board.setInspectedBlockade(null);
+    this.board.clearInfoHover();
     this.renderTerrainPanel();
     this.refreshPinnedPreview();
   }
@@ -1437,10 +2116,15 @@ class App {
     const activeCoord = activeBlockade ? null : this.hoveredTerrain ?? this.pinnedTerrain;
     const hex = activeCoord ? this.hexAt(activeCoord) : undefined;
     if (!this.state || this.state.phase === 'lobby' || (!hex && !activeBlockade)) {
+      this.cancelTerrainHoverClear();
+      this.terrainPanelHovering = false;
+      this.terrainPanel.onmouseenter = null;
+      this.terrainPanel.onmouseleave = null;
       this.terrainPanel.classList.add('hidden');
       this.terrainPanel.innerHTML = '';
       if (!hex) this.board.setInspectedHex(null);
       if (!activeBlockade) this.board.setInspectedBlockade(null);
+      this.board.clearInfoHover();
       return;
     }
 
@@ -1472,6 +2156,7 @@ class App {
         </div>
         <div class="terrain-status">${escapeHtml(this.blockadeActionStatus(activeBlockade))}</div>`;
       this.terrainPanel.querySelector<HTMLButtonElement>('.terrain-close')!.onclick = () => this.closeTerrainPanel();
+      this.bindTerrainPanelHover(null, activeBlockade.id);
       return;
     }
     if (!hex) return;
@@ -1501,6 +2186,7 @@ class App {
       </div>
       <div class="terrain-status">${escapeHtml(status)}</div>`;
     this.terrainPanel.querySelector<HTMLButtonElement>('.terrain-close')!.onclick = () => this.closeTerrainPanel();
+    this.bindTerrainPanelHover({ q: hex.q, r: hex.r }, null);
   }
 
   private blockadeActionStatus(blockade: Blockade): string {
@@ -1522,7 +2208,15 @@ class App {
     }
 
     if (this.selected.size > 0) {
-      return `${requirementText} 已选 ${this.selected.size} 张手牌，点击这块地形会自动挑最省的一张打出移除（棋子留在原地），之后再走到对面。`;
+      const seamSym = blockadeMoveSymbol(blockade);
+      const hand = this.me?.hand ?? [];
+      const candidates = [...this.selected]
+        .filter((id) => hand.some((h) => h.id === id))
+        .map((id) => ({ id, defId: cardDefId(id, this.state!) }));
+      const pick = pickHandMover(seamSym, blockade.cost, candidates);
+      return pick
+        ? `${requirementText} 已选可用移动牌，点击这块地形会打出对应资源并移除障碍（棋子留在原地），之后再走到对面。`
+        : `${requirementText} 已选 ${this.selected.size} 张手牌，但没有满足这块连接地形要求的移动牌。`;
     }
 
     return `${requirementText} 选择匹配的移动牌后，可以点击这块连接地形移除障碍（棋子留在原地），之后再走到对面。`;
@@ -1567,12 +2261,22 @@ class App {
 // --- small DOM helpers ---
 
 function cardDefId(cardId: string, state: GameState): string {
+  return findCardDefId(cardId, state) ?? fallbackCardDefId(cardId);
+}
+
+function findCardDefId(cardId: string, state: GameState): string | null {
   for (const p of state.players) {
-    const c = [...p.hand, ...p.deck, ...p.discard].find((x) => x.id === cardId);
+    const c = [...p.hand, ...p.deck, ...p.discard, ...p.removed].find((x) => x.id === cardId);
     if (c) return c.defId;
   }
+  const turnCard = [...(state.turn?.inPlay ?? []), ...(state.turn?.removedThisTurn ?? [])].find((x) => x.id === cardId);
+  if (turnCard) return turnCard.defId;
+  return null;
+}
+
+function fallbackCardDefId(cardId: string): string {
   // ids look like "playerId:defId#n"
-  const m = cardId.match(/:([a-z_]+)#/);
+  const m = cardId.match(/:([^:#]+)#/);
   return m ? m[1] : cardId;
 }
 

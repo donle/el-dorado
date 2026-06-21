@@ -95,7 +95,7 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
     case 'BuyCard':
       return buyCard(state, playerId, action.defId, action.paymentCardIds, events);
     case 'RemoveBlockade':
-      return removeBlockade(state, playerId, action.blockadeId, action.cardIds ?? [], events);
+      return removeBlockade(state, playerId, action, events);
     case 'DiscardCards':
       return discardCards(state, playerId, action.cardIds, events);
     case 'UseAbility':
@@ -301,10 +301,10 @@ function clearSpace(
 function removeBlockade(
   state: GameState,
   playerId: string,
-  blockadeId: string,
-  cardIds: string[],
+  action: Extract<Action, { type: 'RemoveBlockade' }>,
   events: GameEvent[],
 ): void {
+  const { blockadeId, cardIds = [], cardId, symbol } = action;
   const p = player(state, playerId);
   const blockade = state.blockades.find((b) => b.id === blockadeId);
   if (!blockade) throw new RuleError('没有这个连接地形');
@@ -316,12 +316,18 @@ function removeBlockade(
   if (!beside) throw new RuleError('当前棋子不在这块连接地形旁边');
 
   if (blockadeRequiresDiscard(blockade)) {
+    if (cardId || symbol) throw new RuleError('这块连接地形需要弃牌移除');
     if (cardIds.length !== blockade.cost) {
       throw new RuleError(`需要正好选择 ${blockade.cost} 张牌`);
     }
     for (const id of cardIds) p.discard.push(takeFromHand(p, id));
     claimBlockade(p, blockade, events);
     return; // 留在原地，不动 activeMover
+  }
+
+  if (cardId || symbol) {
+    if (!cardId || !symbol) throw new RuleError('需要选择一张移动牌');
+    playMovementCard(state, playerId, cardId, symbol, events);
   }
 
   const sym = blockadeMoveSymbol(blockade);

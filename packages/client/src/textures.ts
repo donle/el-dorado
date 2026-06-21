@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Terrain } from '@eldorado/core';
 
 /**
- * Terrain textures for the hex top faces. Realistic PNGs are loaded from
+ * Terrain textures for the hex top faces. Realistic images are loaded from
  * public assets; the procedural canvas textures remain as a fallback while
  * images are loading or if an asset is missing.
  */
@@ -10,15 +10,15 @@ const cache = new Map<Terrain, THREE.Texture>();
 const loader = new THREE.TextureLoader();
 
 const TERRAIN_TEXTURE_URL: Record<Terrain, string> = {
-  green: '/textures/terrain-realistic/green.png',
-  blue: '/textures/terrain-realistic/blue.png',
-  yellow: '/textures/terrain-realistic/yellow.png',
-  rubble: '/textures/terrain-realistic/rubble.png',
-  basecamp: '/textures/terrain-realistic/basecamp.png',
-  mountain: '/textures/terrain-realistic/mountain.png',
-  start: '/textures/terrain-realistic/start.png',
-  finish: '/textures/terrain-realistic/finish.png',
-  eldorado: '/textures/terrain-realistic/eldorado.png',
+  green: '/textures/terrain-realistic/green.jpg',
+  blue: '/textures/terrain-realistic/blue.jpg',
+  yellow: '/textures/terrain-realistic/yellow.jpg',
+  rubble: '/textures/terrain-realistic/rubble.jpg',
+  basecamp: '/textures/terrain-realistic/basecamp.jpg',
+  mountain: '/textures/terrain-realistic/mountain.jpg',
+  start: '/textures/terrain-realistic/start.jpg',
+  finish: '/textures/terrain-realistic/finish.jpg',
+  eldorado: '/textures/terrain-realistic/eldorado.jpg',
 };
 
 function mulberry(seed: number) {

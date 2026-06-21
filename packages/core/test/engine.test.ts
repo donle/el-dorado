@@ -13,7 +13,17 @@ function game(players = 2): GameState {
     { id: 'p2', name: 'C', color: 'green' as const },
     { id: 'p3', name: 'D', color: 'yellow' as const },
   ].slice(0, players);
-  return createGame(seeds, 'corridor', 42);
+  const s = createGame(seeds, 'corridor', 42);
+  s.turnOrder = seeds.map((p) => p.id);
+  s.currentPlayerIdx = 0;
+  s.turn = {
+    playerId: s.turnOrder[0],
+    inPlay: [],
+    removedThisTurn: [],
+    hasBought: false,
+    hasDiscarded: false,
+  };
+  return s;
 }
 
 function giveHand(s: GameState, pid: string, defs: string[]): void {
@@ -118,10 +128,38 @@ describe('setup', () => {
     const s = game(2);
     expect(s.players[0].hand).toHaveLength(4);
     expect(s.players[0].deck).toHaveLength(4); // 8 - 4
-    const slot1 = s.hexes.find((h) => h.slot === 1 && h.terrain === 'start')!;
-    expect(s.players[0].position).toEqual({ q: slot1.q, r: slot1.r });
+    const orderedStarts = s.hexes
+      .filter((h) => h.terrain === 'start')
+      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+    const playerStarts = s.players.map((p) => {
+      const h = s.hexes.find((x) => x.q === p.position.q && x.r === p.position.r)!;
+      expect(h.terrain).toBe('start');
+      expect(h.occupant).toBe(p.id);
+      return key(h);
+    });
+    const again = game(2);
+    expect(again.players.map((p) => key(p.position))).toEqual(playerStarts);
+    expect(playerStarts).not.toEqual(orderedStarts.slice(0, 2).map((h) => key(h)));
     const startOccupied = s.hexes.filter((h) => h.terrain === 'start' && h.occupant);
     expect(startOccupied).toHaveLength(2);
+
+    const s4 = createGame(
+      [
+        { id: 'p0', name: 'A', color: 'red' as const },
+        { id: 'p1', name: 'B', color: 'blue' as const },
+        { id: 'p2', name: 'C', color: 'green' as const },
+        { id: 'p3', name: 'D', color: 'yellow' as const },
+      ],
+      'corridor',
+      42,
+    );
+    const occupiedBySlot = s4.hexes
+      .filter((h) => h.terrain === 'start' && h.occupant)
+      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+      .map((h) => h.occupant!);
+    expect(s4.turnOrder).toEqual(occupiedBySlot);
+    expect(s4.turn!.playerId).toBe(occupiedBySlot[0]);
+    expect(s4.turnOrder).not.toEqual(s4.players.map((p) => p.id));
   });
 });
 
@@ -320,6 +358,77 @@ describe('movement', () => {
     expect(state.blockades[0].claimedBy).toBe('p0');
     expect(state.players[0].claimedBlockades).toEqual([blockade.id]);
     expect(pos(state, 'p0')).toEqual(crossing.to);
+  });
+
+  it('can atomically play a movement card to remove a blockade', () => {
+    const s = createGame(
+      [
+        { id: 'p0', name: 'A', color: 'red' as const },
+        { id: 'p1', name: 'B', color: 'blue' as const },
+      ],
+      'classic',
+      11,
+    );
+    const blockade = s.blockades[0];
+    const symbol = blockadeSymbolForTest(blockade);
+    const cardDef = STRONG_CARD_BY_SYMBOL[symbol];
+    const crossing = seamCrossing(s, blockade, true)!;
+    placeAt(s, 'p0', crossing.from);
+    giveHand(s, 'p0', [cardDef]);
+
+    const cardId = `p0:${cardDef}#t0`;
+    const { state, result } = run(s, 'p0', {
+      type: 'RemoveBlockade',
+      blockadeId: blockade.id,
+      cardId,
+      symbol,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(state.players[0].hand.some((c) => c.id === cardId)).toBe(false);
+    expect(state.turn!.inPlay.some((c) => c.id === cardId)).toBe(true);
+    expect(state.turn!.activeMover).toEqual({
+      cardId,
+      symbol,
+      remaining: getDef(cardDef).power - blockade.cost,
+    });
+    expect(state.blockades.find((b) => b.id === blockade.id)!.claimedBy).toBe('p0');
+  });
+
+  it('does not consume a movement card when atomic blockade removal is invalid', () => {
+    const s = createGame(
+      [
+        { id: 'p0', name: 'A', color: 'red' as const },
+        { id: 'p1', name: 'B', color: 'blue' as const },
+      ],
+      'classic',
+      11,
+    );
+    const blockade = s.blockades[0];
+    const symbol = blockadeSymbolForTest(blockade);
+    const cardDef = STRONG_CARD_BY_SYMBOL[symbol];
+    const farHex = s.hexes.find(
+      (h) =>
+        h.terrain !== 'mountain' &&
+        !blockade.edges.some((e) => key(e.a) === key(h) || key(e.b) === key(h)),
+    )!;
+    placeAt(s, 'p0', farHex);
+    giveHand(s, 'p0', [cardDef]);
+
+    const cardId = `p0:${cardDef}#t0`;
+    const { state, result } = run(s, 'p0', {
+      type: 'RemoveBlockade',
+      blockadeId: blockade.id,
+      cardId,
+      symbol,
+    });
+
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error).toMatch(/旁边/);
+    expect(state.players[0].hand).toEqual([{ id: cardId, defId: cardDef }]);
+    expect(state.turn!.inPlay).toEqual([]);
+    expect(state.turn!.activeMover).toBeUndefined();
+    expect(state.blockades.find((b) => b.id === blockade.id)!.claimedBy).toBeUndefined();
   });
 
   it('requires the blockade resource before it is claimed', () => {

@@ -46,7 +46,7 @@ export function createGame(
   const hexByKey = new Map(hexes.map((h) => [key(h), h]));
   let rngState = seed;
 
-  const players: Player[] = seeds.map((s, i) => {
+  const playerBases: Array<Omit<Player, 'position'>> = seeds.map((s) => {
     // Build and shuffle the starting deck with player-unique ids (clean defId).
     let deck: Card[] = STARTING_DECK.flatMap((entry) =>
       Array.from({ length: entry.count }, (_, i) => ({
@@ -56,10 +56,6 @@ export function createGame(
     );
     [deck, rngState] = shuffle(deck, rngState);
     const hand = deck.splice(0, HAND_SIZE);
-
-    const start = map.startHexes[i];
-    const startHex = hexByKey.get(key(start));
-    if (startHex) startHex.occupant = s.id;
 
     return {
       id: s.id,
@@ -71,11 +67,22 @@ export function createGame(
       hand,
       discard: [],
       removed: [],
-      position: { q: start.q, r: start.r },
       finished: false,
       finishedAt: null,
       claimedBlockades: [],
       blockades: 0,
+    };
+  });
+  const [shuffledStarts, nextRngState] = shuffle(map.startHexes, rngState);
+  rngState = nextRngState;
+
+  const players: Player[] = playerBases.map((p, i) => {
+    const start = shuffledStarts[i];
+    const startHex = hexByKey.get(key(start));
+    if (startHex) startHex.occupant = p.id;
+    return {
+      ...p,
+      position: { q: start.q, r: start.r },
     };
   });
 
@@ -85,14 +92,19 @@ export function createGame(
     onBoard: STARTING_MARKET_SLOTS.includes(defId),
   }));
 
-  const firstPlayer = players[0];
+  const startRank = new Map(map.startHexes.map((c, i) => [key(c), i]));
+  const turnOrder = players
+    .slice()
+    .sort((a, b) => (startRank.get(key(a.position)) ?? Infinity) - (startRank.get(key(b.position)) ?? Infinity))
+    .map((p) => p.id);
+  const firstPlayer = players.find((p) => p.id === turnOrder[0]) ?? players[0];
   return {
     mapId,
     hexes,
     blockades,
     players,
     market,
-    turnOrder: players.map((p) => p.id),
+    turnOrder,
     currentPlayerIdx: 0,
     phase: 'playing',
     turnNumber: 1,

@@ -44,7 +44,6 @@ function titleSvg(name: string): string {
 function terrainSymbols(def: CardDef): MoveSymbol[] {
   if (def.kind === 'joker') return ['machete', 'paddle', 'coin'];
   if (def.symbol) return [def.symbol];
-  if (def.ability === 'native') return ['machete', 'paddle', 'coin'];
   return [];
 }
 
@@ -58,13 +57,13 @@ function terrainIcon(symbol: MoveSymbol, y: number, svgId: string): string {
 }
 
 function terrainStrip(def: CardDef, svgId: string): string {
+  if (def.ability === 'native') return nativeBadge();
   return terrainSymbols(def)
     .map((symbol, i) => terrainIcon(symbol, 44 + i * 34, svgId))
     .join('');
 }
 
 function movementAmount(def: CardDef): number {
-  if (def.ability === 'native') return 1;
   return def.power;
 }
 
@@ -98,6 +97,10 @@ function singleUseBadge(def: CardDef, svgId: string): string {
     <circle cx="20" cy="20" r="16" fill="#b32a43" opacity="0.16"/>
     <circle cx="20" cy="20" r="18.5" fill="none" stroke="rgba(0,0,0,0.42)" stroke-width="2.4"/>
   </g>`;
+}
+
+function nativeBadge(): string {
+  return `<image x="7" y="41" width="46" height="46" href="/card-icons/native-move.png" preserveAspectRatio="xMidYMid meet" aria-label="无视地形移动 1 格"/>`;
 }
 
 function artHref(def: CardDef): string {

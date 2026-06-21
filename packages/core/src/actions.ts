@@ -7,7 +7,7 @@ export type Action =
   | { type: 'ClearSpace'; to: Axial; cardIds: string[] }
   | { type: 'PromoteMarket'; defId: string }
   | { type: 'BuyCard'; defId: string; paymentCardIds: string[] }
-  | { type: 'RemoveBlockade'; blockadeId: string; cardIds?: string[] }
+  | { type: 'RemoveBlockade'; blockadeId: string; cardIds?: string[]; cardId?: string; symbol?: MoveSymbol }
   | { type: 'DiscardCards'; cardIds: string[] }
   | {
       type: 'UseAbility';

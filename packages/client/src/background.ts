@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Axial, Hex } from '@eldorado/core';
 
 const GROUND_Y = -0.08;
-const GROUND_TEXTURE_URL = '/textures/golden-city-ground.png';
+const GROUND_TEXTURE_URL = '/textures/golden-city-ground.jpg';
 
 interface WorldPoint {
   x: number;
