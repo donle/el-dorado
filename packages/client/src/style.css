@@ -183,7 +183,7 @@ body.mobile-portrait #bootloader {
   border-radius: 2px; background: linear-gradient(180deg, var(--gold), var(--bronze)); }
 
 /* ---------- Top bar ---------- */
-.topbar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+.topbar { position: absolute; top: 2px; left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 14px;
   max-width: 96vw; border-top: 2px solid rgba(255,209,102,0.28); z-index: 42; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 15px; flex: 0 0 auto; white-space: nowrap; }
@@ -861,7 +861,7 @@ body.mobile-device .action-log { display: none; }
 
 /* ============ Mobile / touch layout ============ */
 @media (max-width: 760px) {
-  .topbar { top: 8px; gap: 7px; padding: 6px 8px; font-size: 13px; max-width: 98vw; }
+  .topbar { top: 2px; gap: 7px; padding: 6px 8px; font-size: 13px; max-width: 98vw; }
   .brand span:not(.code):not(.logo) { display: none; } /* hide the long title */
   .hint-inline { display: none; }
   .turn-banner { font-size: 12px; padding: 5px 12px; }
@@ -1097,7 +1097,7 @@ body.mobile-device .action-log { display: none; }
 
 /* Short / landscape phones: shrink the hand so it doesn't eat the board. */
 @media (max-height: 500px) and (orientation: landscape) {
-  .topbar { top: 4px; }
+  .topbar { top: 1px; }
   .mobile-toolbar { top: 4px; }
   .dock { padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
   .hand-tray { padding: 12px 8px 6px; gap: 6px; }
@@ -1222,6 +1222,7 @@ body.mobile-device .action-log { display: none; }
     font-size: 11px;
   }
   body.mobile-device .topbar {
+    top: calc(2px + env(safe-area-inset-top));
     max-width: calc(100vw - 116px - env(safe-area-inset-left) - env(safe-area-inset-right));
     gap: 8px;
     padding: 5px 8px;
