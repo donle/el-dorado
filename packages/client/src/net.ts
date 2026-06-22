@@ -1,13 +1,21 @@
 import type { ClientMessage, ServerMessage } from '@eldorado/core';
 
-/** Thin typed WebSocket client with auto-reconnect-on-demand. */
+/** Thin typed WebSocket client with automatic reconnect and message queueing. */
 export class Net {
   private ws: WebSocket | null = null;
   private queue: ClientMessage[] = [];
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
   onMessage: (msg: ServerMessage) => void = () => {};
   onOpen: () => void = () => {};
+  onClose: () => void = () => {};
 
   connect(): void {
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     const url =
       import.meta.env.DEV
         ? `ws://${location.hostname}:8787`
@@ -15,9 +23,10 @@ export class Net {
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
+      this.reconnectAttempt = 0;
+      this.onOpen();
       this.queue.forEach((m) => ws.send(JSON.stringify(m)));
       this.queue = [];
-      this.onOpen();
     };
     ws.onmessage = (ev) => {
       try {
@@ -27,7 +36,10 @@ export class Net {
       }
     };
     ws.onclose = () => {
+      if (this.ws !== ws) return;
       this.ws = null;
+      this.onClose();
+      this.scheduleReconnect();
     };
   }
 
@@ -38,5 +50,15 @@ export class Net {
       this.queue.push(msg);
       if (!this.ws) this.connect();
     }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
+    const delay = Math.min(5000, 300 * 2 ** this.reconnectAttempt);
+    this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, 5);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 }

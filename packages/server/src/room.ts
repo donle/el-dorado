@@ -2,6 +2,7 @@ import {
   createGame,
   applyAction,
   planTurn,
+  getMap,
   type GameState,
   type PlayerColor,
   type RoomView,
@@ -32,6 +33,7 @@ export class Room {
   hostId = '';
   mapId = 'classic';
   aiDelayMs = 1000;
+  closed = false;
   private aiRunning = false;
   private sleep: (ms: number) => Promise<void>;
   phase: 'lobby' | 'playing' | 'finished' = 'lobby';
@@ -85,9 +87,10 @@ export class Room {
     return m ?? null;
   }
 
-  disconnect(playerId: string): boolean {
+  disconnect(playerId: string, send?: Send): boolean {
     const m = this.members.find((x) => x.id === playerId);
     if (!m) return false;
+    if (send && m.send !== send) return false;
     m.send = null;
     if (this.phase === 'playing' && !m.isAI && !m.offline) {
       m.isAI = true;
@@ -108,6 +111,12 @@ export class Room {
     this.aiDelayMs = Math.max(0, Math.min(10000, Math.round(ms)));
   }
 
+  setMap(mapId: string): void {
+    if (this.phase !== 'lobby') throw new Error('游戏已经开始');
+    getMap(mapId); // validate before mutating room state
+    this.mapId = mapId;
+  }
+
   view(): RoomView {
     return {
       code: this.code,
@@ -126,7 +135,7 @@ export class Room {
     };
   }
 
-  start(mapId = 'classic', seed = Date.now() & 0xffff): void {
+  start(mapId = this.mapId, seed = Date.now() & 0xffff): void {
     if (this.members.length < 2) throw new Error('至少需要 2 名玩家');
     this.mapId = mapId;
     const seeds: PlayerSeed[] = this.members.map((m) => ({
@@ -149,6 +158,13 @@ export class Room {
 
   broadcast(msg: ServerMessage): void {
     for (const m of this.members) m.send?.(msg);
+  }
+
+  broadcastClosed(message: string, excludePlayerId?: string): void {
+    this.closed = true;
+    for (const m of this.members) {
+      if (m.id !== excludePlayerId) m.send?.({ type: 'roomClosed', message });
+    }
   }
 
   broadcastRoom(): void {

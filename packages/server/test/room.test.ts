@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Room } from '../src/room.js';
-import { planTurn } from '@eldorado/core';
+import { planTurn, type ServerMessage } from '@eldorado/core';
 
 describe('Room', () => {
   it('assigns distinct colors and a host', () => {
@@ -80,6 +80,27 @@ describe('Room', () => {
     expect(room.view().players.find((p) => p.id === a.id)?.offline).toBe(true);
   });
 
+  it('ignores a stale disconnect after the player has reconnected', () => {
+    const room = new Room('TEST');
+    const oldSend = () => {};
+    const newSend = () => {};
+    const a = room.addHuman('Alice', oldSend);
+    room.addHuman('Bob', () => {});
+    room.start('classic', 1);
+
+    room.reconnect(a.id, newSend);
+    const changed = room.disconnect(a.id, oldSend);
+    const member = room.member(a.id)!;
+    const player = room.game!.players.find((p) => p.id === a.id)!;
+
+    expect(changed).toBe(false);
+    expect(member.isAI).toBe(false);
+    expect(member.offline).toBe(false);
+    expect(player.isAI).toBe(false);
+    expect(player.offline).toBe(false);
+    expect(room.view().players.find((p) => p.id === a.id)?.connected).toBe(true);
+  });
+
   it('returns host control to a connected human instead of keeping an AI host', () => {
     const room = new Room('TEST');
     const host = room.addHuman('Host', () => {});
@@ -116,5 +137,50 @@ describe('Room', () => {
 
     room.setAiDelay(host.id, -50); // clamp min
     expect(room.view().aiDelayMs).toBe(0);
+  });
+
+  it('changes the lobby map and starts with the selected map', () => {
+    const room = new Room('TEST');
+    room.addHuman('Host', () => {});
+    room.addHuman('Other', () => {});
+
+    room.setMap('official-home-stretch');
+
+    expect(room.view().mapId).toBe('official-home-stretch');
+    room.start(undefined, 1);
+    expect(room.game!.mapId).toBe('official-home-stretch');
+  });
+
+  it('rejects invalid map ids without changing the selected map', () => {
+    const room = new Room('TEST');
+    room.addHuman('Host', () => {});
+    room.addHuman('Other', () => {});
+
+    expect(() => room.setMap('missing-map')).toThrow('未知地图');
+    expect(room.view().mapId).toBe('classic');
+  });
+
+  it('does not allow changing the map after the game starts', () => {
+    const room = new Room('TEST');
+    room.addHuman('Host', () => {});
+    room.addHuman('Other', () => {});
+    room.start('classic', 1);
+
+    expect(() => room.setMap('official-home-stretch')).toThrow('游戏已经开始');
+    expect(room.view().mapId).toBe('classic');
+  });
+
+  it('broadcasts room closure to remaining players only', () => {
+    const hostMessages: ServerMessage[] = [];
+    const guestMessages: ServerMessage[] = [];
+    const room = new Room('TEST');
+    const host = room.addHuman('Host', (m) => hostMessages.push(m));
+    room.addHuman('Guest', (m) => guestMessages.push(m));
+
+    room.broadcastClosed('房主已退出，房间已解散', host.id);
+
+    expect(room.closed).toBe(true);
+    expect(hostMessages.some((m) => m.type === 'roomClosed')).toBe(false);
+    expect(guestMessages).toContainEqual({ type: 'roomClosed', message: '房主已退出，房间已解散' });
   });
 });

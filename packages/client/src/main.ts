@@ -60,6 +60,7 @@ const KIND_GLYPH: Record<string, string> = {
 };
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
+const START_COUNTDOWN_MS = 5000;
 
 function safeMapId(id: string | null): string {
   return id && MAP_OPTION_IDS.has(id) ? id : DEFAULT_MAP_ID;
@@ -142,8 +143,12 @@ class App {
   /** True from "start game" until the first board state arrives (freezes lobby). */
   private starting = false;
   private startingTimer: ReturnType<typeof setTimeout> | undefined;
+  private startingTickTimer: ReturnType<typeof setInterval> | undefined;
+  private startingCountdownDone = false;
+  private startingCountdownEndsAt = 0;
   /** Whether the in-game settings dropdown is open. */
   private settingsOpen = false;
+  private systemDialog: HTMLElement | null = null;
 
   private hud = document.getElementById('hud') as HTMLDivElement;
   private lobby = document.getElementById('lobby') as HTMLDivElement;
@@ -179,14 +184,9 @@ class App {
     this.board.onBlockadeHover = (id) => this.onBlockadeHover(id);
     this.board.onBlockadeClick = (id) => this.onBlockadeClick(id);
     this.net.onMessage = (m) => this.onMessage(m);
+    this.net.onOpen = () => this.rejoinSavedSession();
     this.net.connect();
     this.renderLobby();
-
-    const saved = sessionStorage.getItem('eldorado.session');
-    if (saved) {
-      const { code, playerId } = JSON.parse(saved);
-      this.net.send({ type: 'rejoin', code, playerId });
-    }
   }
 
   private setupMobileLayoutClasses(): void {
@@ -228,9 +228,12 @@ class App {
         sessionStorage.setItem('eldorado.session', JSON.stringify({ code: m.code, playerId: m.playerId }));
         break;
       case 'room':
+        const previousRoomPhase = this.room?.phase ?? null;
         this.room = m.room;
+        this.selectedMapId = safeMapId(m.room.mapId);
+        if (m.room.hostId === this.you) localStorage.setItem('eldorado.mapId', this.selectedMapId);
         if (m.room.phase === 'lobby') {
-          this.endStarting();
+          this.endStarting(false);
           this.state = null;
           this.resetActionLog();
           this.resetSelection();
@@ -238,9 +241,8 @@ class App {
           this.board.setBlockadeHighlights([]);
           this.renderLobby();
           this.renderHud();
-        } else if (m.room.phase === 'playing' && !this.state) {
-          // Game is launching but board state hasn't arrived on this client yet
-          // (we're behind the host, or just reconnected) — freeze the lobby.
+        } else if (m.room.phase === 'playing' && !this.state && previousRoomPhase === 'lobby') {
+          // Game launch transition for everyone who was already in the lobby.
           this.beginStarting();
         }
         break;
@@ -264,18 +266,20 @@ class App {
         this.appendActionLog(m.events ?? [], m.state, previousState);
         this.state = m.state;
         this.syncSelectionToState();
-        this.lobby.classList.add('hidden');
-        this.endStarting();
-        this.board.setSelfPlayerId(this.you);
-        this.board.render(m.state);
-        this.renderHud();
-        this.recomputeHighlights();
-        this.renderTerrainPanel();
+        if (this.starting) {
+          this.lobby.classList.remove('hidden');
+          if (this.startingCountdownDone) this.endStarting(true);
+          break;
+        }
+        this.enterGameView();
         for (const e of buys) this.animateBuy(e.playerId, e.defId, sources.get(`${e.defId}|${e.playerId}`));
         break;
       }
+      case 'roomClosed':
+        this.onRoomClosed(m.message);
+        break;
       case 'error':
-        this.endStarting(); // a failed startGame must release the frozen lobby
+        this.endStarting(false); // a failed startGame must release the frozen lobby
         this.error = m.message;
         this.renderLobby();
         this.renderHud();
@@ -290,6 +294,17 @@ class App {
 
   private act(action: Action): void {
     this.net.send({ type: 'action', action });
+  }
+
+  private rejoinSavedSession(): void {
+    const saved = sessionStorage.getItem('eldorado.session');
+    if (!saved) return;
+    try {
+      const { code, playerId } = JSON.parse(saved) as { code?: string; playerId?: string };
+      if (code && playerId) this.net.send({ type: 'rejoin', code, playerId });
+    } catch {
+      sessionStorage.removeItem('eldorado.session');
+    }
   }
 
   // --- helpers ---
@@ -328,6 +343,12 @@ class App {
 
   private leaveRoom(): void {
     if (this.room || this.you) this.net.send({ type: 'leaveRoom' });
+    this.clearRoomState();
+    this.renderLobby();
+    this.renderHud();
+  }
+
+  private clearRoomState(): void {
     sessionStorage.removeItem('eldorado.session');
     this.you = null;
     this.room = null;
@@ -341,12 +362,38 @@ class App {
     this.board.setInspectedHex(null);
     this.board.setInspectedBlockade(null);
     this.closeTerrainPanel();
-    this.renderLobby();
-    this.renderHud();
   }
 
   private returnToLobby(): void {
     this.net.send({ type: 'returnToLobby' });
+  }
+
+  private onRoomClosed(message: string): void {
+    this.endStarting(false);
+    this.clearRoomState();
+    this.renderLobby();
+    this.renderHud();
+    this.showSystemDialog('房间已解散', message);
+  }
+
+  private showSystemDialog(title: string, message: string): void {
+    this.systemDialog?.remove();
+    const scrim = el('div', 'system-dialog-scrim');
+    scrim.innerHTML = `
+      <div class="system-dialog panel" role="dialog" aria-modal="true" aria-labelledby="system-dialog-title">
+        <div class="system-dialog-mark" aria-hidden="true"></div>
+        <h2 id="system-dialog-title">${escapeHtml(title)}</h2>
+        <p>${escapeHtml(message)}</p>
+        <button type="button" class="gold">确认</button>
+      </div>`;
+    scrim.querySelector<HTMLButtonElement>('button')!.onclick = () => {
+      scrim.remove();
+      if (this.systemDialog === scrim) this.systemDialog = null;
+      this.renderLobby();
+      this.renderHud();
+    };
+    document.body.appendChild(scrim);
+    this.systemDialog = scrim;
   }
 
   private resetActionLog(): void {
@@ -1668,44 +1715,86 @@ class App {
 
   // --- rendering: lobby ---
 
-  /**
-   * Freeze the current lobby screen in place and lay a game-style "正在开始"
-   * crest over it. Not a separate layer — it dims/blurs the existing lobby modal
-   * (via the `launching` class) and appends the crest inside #lobby, so the same
-   * screen the player is looking at simply locks until board state arrives.
-   */
+  /** Freeze the lobby under a 5-second launch countdown before revealing the board. */
   private beginStarting(): void {
-    if (this.starting || this.state) return;
+    if (this.starting) return;
     this.starting = true;
+    this.startingCountdownDone = false;
+    this.startingCountdownEndsAt = performance.now() + START_COUNTDOWN_MS;
     this.lobby.classList.remove('hidden');
     this.lobby.classList.add('launching');
     if (!this.lobby.querySelector('.lobby-launch')) {
       const crest = el('div', 'lobby-launch');
       crest.innerHTML = `
         <div class="lobby-launch-crest">
-          <div class="lobby-launch-ring"><span>🧭</span></div>
-          <div class="lobby-launch-title">正在开始</div>
-          <div class="lobby-launch-copy">正在集结探险队，进入黄金城之路…</div>
+          <div class="lobby-launch-kicker">路线锁定</div>
+          <div class="lobby-launch-ring"><span class="countdown-number" data-countdown="5">5</span></div>
+          <div class="lobby-launch-title">探险即将开始</div>
+          <div class="lobby-launch-copy" data-starting-copy>确认装备，校准指南针...</div>
+          <div class="lobby-launch-track"><i></i></div>
         </div>`;
       this.lobby.appendChild(crest);
     }
-    // Safety: never strand the player on a frozen lobby if state never arrives.
     clearTimeout(this.startingTimer);
-    this.startingTimer = setTimeout(() => this.endStarting(), 8000);
+    clearInterval(this.startingTickTimer);
+    this.updateStartingCountdown();
+    this.startingTickTimer = setInterval(() => this.updateStartingCountdown(), 250);
+    this.startingTimer = setTimeout(() => this.completeStartingCountdown(), START_COUNTDOWN_MS);
   }
 
-  private endStarting(): void {
+  private updateStartingCountdown(): void {
+    if (!this.starting) return;
+    const node = this.lobby.querySelector<HTMLElement>('[data-countdown]');
+    if (!node) return;
+    const seconds = Math.max(0, Math.ceil((this.startingCountdownEndsAt - performance.now()) / 1000));
+    const next = String(seconds);
+    if (node.textContent === next) return;
+    node.textContent = next;
+    node.dataset.countdown = next;
+    node.classList.remove('tick');
+    void node.offsetWidth;
+    node.classList.add('tick');
+  }
+
+  private completeStartingCountdown(): void {
+    if (!this.starting) return;
+    this.startingCountdownDone = true;
+    clearInterval(this.startingTickTimer);
+    this.updateStartingCountdown();
+    if (this.state?.phase === 'playing') {
+      this.endStarting(true);
+      return;
+    }
+    const copy = this.lobby.querySelector<HTMLElement>('[data-starting-copy]');
+    if (copy) copy.textContent = '正在同步棋盘...';
+  }
+
+  private endStarting(enterGame: boolean): void {
     if (!this.starting && !this.lobby.classList.contains('launching')) return;
     this.starting = false;
+    this.startingCountdownDone = false;
     clearTimeout(this.startingTimer);
+    clearInterval(this.startingTickTimer);
     this.lobby.classList.remove('launching');
     this.lobby.querySelector('.lobby-launch')?.remove();
+    if (enterGame) this.enterGameView();
+  }
+
+  private enterGameView(): void {
+    if (!this.state || this.state.phase === 'lobby') return;
+    this.lobby.classList.add('hidden');
+    this.board.setSelfPlayerId(this.you);
+    this.board.render(this.state);
+    this.renderHud();
+    this.recomputeHighlights();
+    this.renderTerrainPanel();
   }
 
   private renderLobby(): void {
-    const inLobby = !this.state || this.state.phase !== 'playing';
+    const inLobby = this.starting || !this.state || this.state.phase !== 'playing';
     this.lobby.classList.toggle('hidden', !inLobby && !!this.state);
     this.renderTerrainPanel();
+    if (this.starting) return;
     if (this.room && this.room.phase !== 'lobby') {
       this.lobby.classList.add('hidden');
       return;
@@ -1740,6 +1829,7 @@ class App {
       };
       modal.querySelector<HTMLButtonElement>('#create')!.onclick = () => {
         this.net.send({ type: 'createRoom', name: this.nameValue || '玩家' });
+        this.net.send({ type: 'setMap', mapId: this.selectedMapId });
         this.net.send({ type: 'setAiDelay', ms: this.aiDelay });
       };
       modal.querySelector<HTMLButtonElement>('#join')!.onclick = () => {
@@ -1755,14 +1845,10 @@ class App {
             )}${p.isAI ? ' 🤖' : ''}${p.offline ? ' · 离线' : ''}${p.id === this.room!.hostId ? ' 👑' : ''}</div>`,
         )
         .join('');
-      const selectedMap = MAP_OPTIONS.find((map) => map.id === this.selectedMapId) ?? MAP_OPTIONS[0];
-      modal.innerHTML = `
-        ${artHtml}
-        <div class="lobby-form">
-          <h1>房间 <span class="room-code">${this.room.code}</span></h1>
-          ${
-            isHost
-              ? `<label for="map-select">地图</label>
+      const selectedMapId = isHost ? this.selectedMapId : safeMapId(this.room.mapId || this.selectedMapId);
+      const selectedMap = MAP_OPTIONS.find((map) => map.id === selectedMapId) ?? MAP_OPTIONS[0];
+      const mapControl = isHost
+        ? `<label for="map-select">地图</label>
                 <div class="map-picker" id="map-picker">
                   <button id="map-select" class="map-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
                     <span class="map-trigger-mark" aria-hidden="true"></span>
@@ -1772,20 +1858,31 @@ class App {
                   <div class="map-menu" role="listbox" aria-label="选择地图">
                     ${MAP_OPTIONS.map(
                       (map) =>
-                        `<button type="button" class="map-option ${map.id === this.selectedMapId ? 'selected' : ''}" data-map-id="${escapeHtml(
+                        `<button type="button" class="map-option ${map.id === selectedMapId ? 'selected' : ''}" data-map-id="${escapeHtml(
                           map.id,
-                        )}" role="option" aria-selected="${map.id === this.selectedMapId ? 'true' : 'false'}">
+                        )}" role="option" aria-selected="${map.id === selectedMapId ? 'true' : 'false'}">
                           <span class="map-option-mark" aria-hidden="true"></span>
                           <span class="map-option-name">${escapeHtml(map.name)}</span>
-                          ${map.id === this.selectedMapId ? '<b>当前</b>' : ''}
+                          ${map.id === selectedMapId ? '<b>当前</b>' : ''}
                         </button>`,
                     ).join('')}
                   </div>
                 </div>`
-              : ''
-          }
+        : `<label>地图</label>
+                <div class="map-picker map-picker-static">
+                  <div class="map-trigger map-readout" role="status" aria-live="polite">
+                    <span class="map-trigger-mark" aria-hidden="true"></span>
+                    <span class="map-trigger-name">${escapeHtml(selectedMap.name)}</span>
+                  </div>
+                </div>`;
+      modal.innerHTML = `
+        ${artHtml}
+        <div class="lobby-form">
+          <h1>房间 <span class="room-code">${this.room.code}</span></h1>
+          ${mapControl}
           <div class="lobby-players">${players}</div>
-          <div class="row">
+          <div class="row room-actions">
+            <button id="leave-room" class="secondary room-leave" type="button">退出房间</button>
             ${isHost ? '<button id="ai" class="secondary">+ 添加电脑</button>' : ''}
             ${isHost ? `<button id="start" ${this.room.players.length < 2 ? 'disabled' : ''}>开始游戏</button>` : '<div class="sub">等待房主开始…</div>'}
           </div>
@@ -1810,6 +1907,7 @@ class App {
               e.stopPropagation();
               this.selectedMapId = safeMapId(option.dataset.mapId ?? null);
               localStorage.setItem('eldorado.mapId', this.selectedMapId);
+              this.net.send({ type: 'setMap', mapId: this.selectedMapId });
               this.renderLobby();
             };
           }
@@ -1824,6 +1922,7 @@ class App {
             this.net.send({ type: 'startGame', mapId: this.selectedMapId });
           };
       }
+      modal.querySelector<HTMLButtonElement>('#leave-room')!.onclick = () => this.leaveRoom();
     }
     this.lobby.appendChild(modal);
   }

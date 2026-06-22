@@ -27,6 +27,7 @@ export type ClientMessage =
   | { type: 'rejoin'; code: string; playerId: string }
   | { type: 'addAI' }
   | { type: 'removePlayer'; playerId: string }
+  | { type: 'setMap'; mapId: string }
   | { type: 'startGame'; mapId?: string }
   | { type: 'leaveRoom' }
   | { type: 'returnToLobby' }
@@ -37,4 +38,5 @@ export type ServerMessage =
   | { type: 'joined'; code: string; playerId: string }
   | { type: 'room'; room: RoomView }
   | { type: 'state'; state: GameState; events?: GameEvent[] }
+  | { type: 'roomClosed'; message: string }
   | { type: 'error'; message: string };

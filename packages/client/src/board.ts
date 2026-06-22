@@ -20,6 +20,8 @@ const MAX_PIXEL_RATIO = 1.25;
 const SELF_MARKER_FRAME_MS = 1000 / 12;
 const HIDDEN_TAB_FRAME_MS = 1000;
 const TOP_DOWN_POLAR = 0.001;
+const START_CONTINENT_DISTANCE_SCALE = 1.22;
+const START_CAMERA_ANIMATION_MS = 1300;
 const TERMINAL_HEIGHT = 0.68;
 const COST_LABEL_GEO = new THREE.PlaneGeometry(0.92, 0.92).rotateX(-Math.PI / 2);
 const COST_LABEL_SIZE = 160;
@@ -128,6 +130,15 @@ interface PawnState {
   selfMarker: THREE.Group;
 }
 
+interface CameraAnimation {
+  startedAt: number;
+  durationMs: number;
+  fromPosition: THREE.Vector3;
+  toPosition: THREE.Vector3;
+  fromTarget: THREE.Vector3;
+  toTarget: THREE.Vector3;
+}
+
 function terrainHeight(t: Terrain, cost: number): number {
   if (t === 'eldorado') return TERMINAL_HEIGHT;
   if (t === 'mountain') return 0.52;
@@ -137,6 +148,11 @@ function terrainHeight(t: Terrain, cost: number): number {
 
 function pawnLandingHeight(hex: Hex, terrainTop: number): number {
   return hex.terrain === 'mountain' ? terrainTop + MOUNTAIN_PAWN_LANDING_LIFT : terrainTop;
+}
+
+function cameraIntroEase(t: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  return 0.5 - Math.cos(x * Math.PI) * 0.5;
 }
 
 function visualTerrain(t: Terrain): Terrain {
@@ -188,6 +204,7 @@ export class Board {
   private viewMode: '3d' | '2d' = '3d';
   private selfPlayerId: string | null = null;
   private lastFit: { cx: number; cz: number; dist: number } | null = null;
+  private cameraAnimation: CameraAnimation | null = null;
   // Persistent pawns so movement can tween instead of snapping.
   private pawns = new Map<string, PawnState>();
   private pawnGlowTextureCache: THREE.CanvasTexture | null = null;
@@ -393,13 +410,14 @@ export class Board {
     const dt = this.lastFrameTime > 0 ? Math.min((time - this.lastFrameTime) / 1000, 1 / 15) : 1 / 60;
     this.lastFrameTime = time;
     const moving = this.stepPawns(dt);
+    const cameraMoving = this.stepCameraAnimation(time);
     const animatingSelfMarker = this.animateSelfMarkers(time);
     const animatingPawnGlow = this.animatePawnTurnGlows(time);
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
     this.renderer.clearDepth();
     this.renderer.render(this.overlayScene, this.camera);
-    if (moving) this.requestFrame();
+    if (moving || cameraMoving) this.requestFrame();
     else if (animatingSelfMarker || animatingPawnGlow) this.requestFrame(document.hidden ? HIDDEN_TAB_FRAME_MS : SELF_MARKER_FRAME_MS);
   }
 
@@ -415,6 +433,25 @@ export class Board {
       }
     }
     return moving;
+  }
+
+  private stepCameraAnimation(time: number): boolean {
+    const anim = this.cameraAnimation;
+    if (!anim) return false;
+    const raw = Math.min(1, Math.max(0, (time - anim.startedAt) / anim.durationMs));
+    const eased = cameraIntroEase(raw);
+    this.camera.position.lerpVectors(anim.fromPosition, anim.toPosition, eased);
+    this.controls.target.lerpVectors(anim.fromTarget, anim.toTarget, eased);
+    this.controls.update();
+    this.camera.updateMatrixWorld(true);
+    if (raw >= 1) {
+      this.camera.position.copy(anim.toPosition);
+      this.controls.target.copy(anim.toTarget);
+      this.controls.update();
+      this.cameraAnimation = null;
+      return false;
+    }
+    return true;
   }
 
   private animateSelfMarkers(time: number): boolean {
@@ -691,7 +728,7 @@ export class Board {
 
     this.applyHighlights();
     this.applyInspectionHighlights();
-    if (first) this.fitCamera(terminalVisibility.hexes);
+    if (first) this.fitInitialCamera(state, terminalVisibility.hexes);
     this.requestFrame();
   }
 
@@ -1257,7 +1294,8 @@ export class Board {
     return label;
   }
 
-  private fitCamera(hexes: Hex[]): void {
+  private cameraFitFor(hexes: Hex[]): { cx: number; cz: number; dist: number } | null {
+    if (hexes.length === 0) return null;
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const hex of hexes) {
       const { x, z } = this.worldXZ(hex);
@@ -1268,26 +1306,125 @@ export class Board {
     const cz = (minZ + maxZ) / 2;
     const radius = Math.max(maxX - minX, maxZ - minZ) / 2 + 2;
     const dist = (radius / Math.tan((this.camera.fov * Math.PI) / 360)) * 1.1;
-    this.lastFit = { cx, cz, dist };
-    this.applyCameraPose(cx, cz, dist);
+    return { cx, cz, dist };
   }
 
-  private applyCameraPose(cx: number, cz: number, dist: number): void {
-    this.controls.maxDistance = dist * 1.8;
-    this.controls.target.set(cx, 0, cz);
+  private fitCamera(hexes: Hex[], options: { topDown?: boolean; distanceScale?: number; maxDistance?: number } = {}): void {
+    const fit = this.cameraFitFor(hexes);
+    if (!fit) return;
+    const { cx, cz } = fit;
+    const dist = fit.dist * (options.distanceScale ?? 1);
+    this.lastFit = { cx, cz, dist };
+    this.applyCameraPose(cx, cz, dist, options);
+  }
+
+  private fitInitialCamera(state: GameState, visibleHexes: Hex[]): void {
+    const fullFit = this.cameraFitFor(visibleHexes);
+    const startCount = visibleHexes.filter((hex) => hex.terrain === 'start').length;
+    const startContinent = this.startContinentHexes(state, visibleHexes);
+    if (fullFit && startContinent.length >= startCount && startContinent.length > 0) {
+      const targetFit = this.cameraFitFor(startContinent);
+      if (!targetFit) return this.fitCamera(visibleHexes);
+      const targetDist = targetFit.dist * START_CONTINENT_DISTANCE_SCALE;
+      this.applyCameraPose(fullFit.cx, fullFit.cz, fullFit.dist, { maxDistance: fullFit.dist * 1.8 });
+      this.lastFit = { cx: targetFit.cx, cz: targetFit.cz, dist: targetDist };
+      this.animateCameraTo(targetFit.cx, targetFit.cz, targetDist, {
+        topDown: true,
+        maxDistance: fullFit.dist * 1.8,
+      });
+      return;
+    }
+    this.fitCamera(visibleHexes);
+  }
+
+  private startContinentHexes(state: GameState, visibleHexes: Hex[]): Hex[] {
+    const byKey = new Map(visibleHexes.map((hex) => [hexKey(hex), hex]));
+    const starts = visibleHexes
+      .filter((hex) => hex.terrain === 'start')
+      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+      .map(hexKey);
+    if (starts.length === 0) return [];
+
+    const blocked = new Set<string>();
+    for (const blockade of state.blockades ?? []) {
+      const edges = blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
+      for (const edge of edges) {
+        blocked.add(axialEdgeKey(edge.a, edge.b));
+        blocked.add(axialEdgeKey(edge.b, edge.a));
+      }
+    }
+
+    const seen = new Set<string>(starts);
+    const queue = [...starts];
+    while (queue.length) {
+      const cur = byKey.get(queue.shift()!)!;
+      for (const next of neighbors(cur)) {
+        const nextKey = hexKey(next);
+        if (!byKey.has(nextKey) || seen.has(nextKey)) continue;
+        if (blocked.has(axialEdgeKey(cur, next))) continue;
+        seen.add(nextKey);
+        queue.push(nextKey);
+      }
+    }
+    return [...seen].map((key) => byKey.get(key)!);
+  }
+
+  private applyCameraPose(
+    cx: number,
+    cz: number,
+    dist: number,
+    options: { topDown?: boolean; maxDistance?: number } = {},
+  ): void {
+    this.controls.maxDistance = options.maxDistance ?? dist * 1.8;
+    const pose = this.cameraPose(cx, cz, dist, options);
+    this.controls.target.copy(pose.target);
     this.controls.enableRotate = this.viewMode === '3d';
     if (this.viewMode === '2d') {
       this.controls.minPolarAngle = TOP_DOWN_POLAR;
       this.controls.maxPolarAngle = TOP_DOWN_POLAR;
-      this.camera.position.set(cx, dist * 1.05, cz + dist * TOP_DOWN_POLAR);
     } else {
       this.controls.minPolarAngle = 0.15; // keep a 2.5D tilt — never fully top-down
       this.controls.maxPolarAngle = 1.05; // and never too flat
-      // Tilted 2.5D vantage: above and toward +z.
-      this.camera.position.set(cx, dist * 0.82, cz + dist * 0.62);
     }
+    this.camera.position.copy(pose.position);
     this.controls.update();
     this.camera.updateMatrixWorld(true);
+  }
+
+  private cameraPose(
+    cx: number,
+    cz: number,
+    dist: number,
+    options: { topDown?: boolean } = {},
+  ): { target: THREE.Vector3; position: THREE.Vector3 } {
+    const target = new THREE.Vector3(cx, 0, cz);
+    if (this.viewMode === '2d') {
+      return { target, position: new THREE.Vector3(cx, dist * 1.05, cz + dist * TOP_DOWN_POLAR) };
+    }
+    if (options.topDown) {
+      return { target, position: new THREE.Vector3(cx, dist * 0.99, cz + dist * 0.16) };
+    }
+    // Tilted 2.5D vantage: above and toward +z.
+    return { target, position: new THREE.Vector3(cx, dist * 0.82, cz + dist * 0.62) };
+  }
+
+  private animateCameraTo(
+    cx: number,
+    cz: number,
+    dist: number,
+    options: { topDown?: boolean; maxDistance?: number } = {},
+  ): void {
+    this.controls.maxDistance = options.maxDistance ?? dist * 1.8;
+    const pose = this.cameraPose(cx, cz, dist, options);
+    this.cameraAnimation = {
+      startedAt: performance.now(),
+      durationMs: START_CAMERA_ANIMATION_MS,
+      fromPosition: this.camera.position.clone(),
+      toPosition: pose.position,
+      fromTarget: this.controls.target.clone(),
+      toTarget: pose.target,
+    };
+    this.requestFrame();
   }
 
   private buildHoverMarker(): void {
@@ -1496,6 +1633,10 @@ function keyToAxial(key: string): Axial {
 
 function hexKey(c: Axial): string {
   return `${c.q},${c.r}`;
+}
+
+function axialEdgeKey(a: Axial, b: Axial): string {
+  return `${hexKey(a)}>${hexKey(b)}`;
 }
 
 function costIconForHex(hex: Hex): CostIcon | null {

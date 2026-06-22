@@ -3,6 +3,7 @@ import type { ClientMessage, ServerMessage } from '@eldorado/core';
 import { Room, RoomManager, type Send } from './room.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
+const HEARTBEAT_INTERVAL_MS = Number(process.env.WS_HEARTBEAT_INTERVAL_MS ?? 30000);
 const manager = new RoomManager();
 
 interface Session {
@@ -10,15 +11,43 @@ interface Session {
   playerId: string | null;
 }
 
+interface AliveWebSocket extends WebSocket {
+  isAlive: boolean;
+}
+
 const wss = new WebSocketServer({ port: PORT });
 console.log(`[el-dorado] server listening on ws://localhost:${PORT}`);
 
-wss.on('connection', (ws: WebSocket) => {
+const heartbeat = setInterval(() => {
+  for (const client of wss.clients) {
+    const ws = client as AliveWebSocket;
+    if (!ws.isAlive) {
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    try {
+      ws.ping();
+    } catch {
+      ws.terminate();
+    }
+  }
+}, HEARTBEAT_INTERVAL_MS);
+heartbeat.unref?.();
+wss.on('close', () => clearInterval(heartbeat));
+
+wss.on('connection', (raw: WebSocket) => {
+  const ws = raw as AliveWebSocket;
+  ws.isAlive = true;
   const session: Session = { room: null, playerId: null };
   const send: Send = (msg: ServerMessage) => {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   };
   const err = (message: string) => send({ type: 'error', message });
+
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
 
   ws.on('message', (data) => {
     let msg: ClientMessage;
@@ -35,11 +64,13 @@ wss.on('connection', (ws: WebSocket) => {
   });
 
   ws.on('close', () => {
-    if (session.room && session.playerId) {
-      session.room.disconnect(session.playerId);
-      session.room.broadcastRoom();
-      session.room.broadcastState();
-      void session.room.runAITurns();
+    if (session.room && session.playerId && !session.room.closed) {
+      const changed = session.room.disconnect(session.playerId, send);
+      if (changed) {
+        session.room.broadcastRoom();
+        session.room.broadcastState();
+        void session.room.runAITurns();
+      }
     }
   });
 });
@@ -89,16 +120,31 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
       session.room!.broadcastRoom();
       return;
     }
+    case 'setMap': {
+      requireHost(session);
+      session.room!.setMap(msg.mapId);
+      session.room!.broadcastRoom();
+      return;
+    }
     case 'leaveRoom': {
       if (!session.room || !session.playerId) return;
       const room = session.room;
       const playerId = session.playerId;
       if (room.phase === 'playing') {
-        room.disconnect(playerId);
-        room.broadcastRoom();
-        room.broadcastState();
-        void room.runAITurns();
+        const changed = room.disconnect(playerId, send);
+        if (changed) {
+          room.broadcastRoom();
+          room.broadcastState();
+          void room.runAITurns();
+        }
       } else {
+        if (playerId === room.hostId) {
+          room.broadcastClosed('房主已退出，房间已解散', playerId);
+          manager.dispose(room.code);
+          session.room = null;
+          session.playerId = null;
+          return;
+        }
         room.remove(playerId);
         room.broadcastRoom();
         if (room.members.length === 0) manager.dispose(room.code);
@@ -116,7 +162,7 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
     case 'startGame': {
       requireHost(session);
       const room = session.room!;
-      room.start(msg.mapId ?? 'classic');
+      room.start(msg.mapId ?? room.mapId);
       room.broadcastRoom();
       room.broadcastState();
       void room.runAITurns(); // in case the first player is an AI
