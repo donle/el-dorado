@@ -1,0 +1,142 @@
+[
+  {
+    "id": "official-first",
+    "name": "官方：第一局",
+    "plates": [
+      { "id": "b", "ref": "official-b", "rotation": 2 },
+      { "id": "c", "ref": "official-c" },
+      { "id": "n", "ref": "official-n" },
+      { "id": "i", "ref": "official-i" },
+      { "id": "k", "ref": "official-k", "role": "end", "finishEdge": "up", "finishAnchor": { "q": 3, "r": -3 } }
+    ],
+    "finishEntranceTerrain": "blue",
+    "connections": [
+      { "from": "b", "edge": "right-up", "to": "c", "blockade": { "type": "machete", "cost": 1 } },
+      { "from": "c", "edge": "right-down", "to": "n", "blockade": { "type": "paddle", "cost": 1 } },
+      { "from": "n", "edge": "right-down", "to": "i", "blockade": { "type": "coin", "cost": 1 } },
+      { "from": "i", "edge": "right-up", "to": "k", "blockade": { "type": "discard", "cost": 1 } }
+    ]
+  },
+  {
+    "id": "official-hills-of-gold",
+    "name": "官方：金色丘陵",
+    "plates": [
+      { "id": "b", "ref": "official-b", "rotation": 1 },
+      { "id": "c", "ref": "official-c" },
+      { "id": "g", "ref": "official-g" },
+      { "id": "k", "ref": "official-k", "rotation": 1 },
+      { "id": "j", "ref": "official-j", "rotation": 1 },
+      { "id": "n", "ref": "official-n", "rotation": 1, "role": "end" }
+    ],
+    "finishEntranceTerrain": "green",
+    "connections": [
+      { "from": "b", "edge": "up", "to": "c", "blockade": { "type": "machete", "cost": 1 } },
+      { "from": "c", "edge": "up", "to": "g", "blockade": { "type": "coin", "cost": 1 } },
+      { "from": "g", "edge": "right-up", "to": "k", "blockade": { "type": "paddle", "cost": 1 } },
+      { "from": "k", "edge": "right-down", "to": "j", "blockade": { "type": "discard", "cost": 1 } },
+      { "from": "j", "edge": "right-up", "to": "n", "blockade": { "type": "machete", "cost": 2 } }
+    ]
+  },
+  {
+    "id": "official-home-stretch",
+    "name": "官方：最后冲刺",
+    "plates": [
+      { "id": "b", "ref": "official-b" },
+      { "id": "j", "ref": "official-j", "rotation": 4 },
+      { "id": "q", "ref": "official-q", "rotation": 3 },
+      { "id": "k", "ref": "official-k", "rotation": 5 },
+      { "id": "m", "ref": "official-m", "rotation": 3 },
+      { "id": "c", "ref": "official-c", "rotation": 5, "role": "end" }
+    ],
+    "finishEntranceTerrain": "green",
+    "connections": [
+      { "from": "b", "edge": "left-up", "to": "j", "blockade": { "type": "paddle", "cost": 1 } },
+      { "from": "j", "edge": "up", "offset": { "q": 3, "r": -5 }, "to": "q", "blockade": { "type": "discard", "cost": 1 } },
+      { "from": "q", "edge": "up", "offset": { "q": 2, "r": -5 }, "to": "k", "blockade": { "type": "machete", "cost": 1 } },
+      { "from": "k", "edge": "up", "to": "m", "blockade": { "type": "coin", "cost": 1 } },
+      { "from": "m", "edge": "up", "to": "c", "blockade": { "type": "paddle", "cost": 2 } }
+    ]
+  },
+  {
+    "id": "official-winding-paths",
+    "name": "官方：蜿蜒小径",
+    "plates": [
+      { "id": "b", "ref": "official-b", "rotation": 1 },
+      { "id": "i", "ref": "official-i", "rotation": 3 },
+      { "id": "f", "ref": "official-f", "rotation": 3 },
+      { "id": "c", "ref": "official-c" },
+      { "id": "g", "ref": "official-g", "rotation": 1 },
+      { "id": "n", "ref": "official-n", "rotation": 4, "role": "end", "finishAnchor": { "q": 3, "r": -3 } }
+    ],
+    "finishEntranceTerrain": "blue",
+    "connections": [
+      { "from": "b", "edge": "up", "to": "i", "blockade": { "type": "coin", "cost": 1 } },
+      { "from": "i", "edge": "right-up", "to": "f", "blockade": { "type": "machete", "cost": 1 } },
+      { "from": "f", "edge": "right-down", "alignment": "alternate", "to": "g", "blockade": { "type": "discard", "cost": 1 } },
+      { "from": "c", "edge": "down", "to": "g", "blockade": { "type": "coin", "cost": 2 } },
+      { "from": "c", "edge": "right-up", "to": "n", "blockade": { "type": "paddle", "cost": 1 } }
+    ]
+  },
+  {
+    "id": "official-serpentine",
+    "name": "官方：蛇形路线",
+    "plates": [
+      { "id": "a", "ref": "official-a", "rotation": 1 },
+      { "id": "c", "ref": "official-c", "rotation": 4 },
+      { "id": "e", "ref": "official-e", "rotation": 1 },
+      { "id": "g", "ref": "official-g", "rotation": 3 },
+      { "id": "j", "ref": "official-j", "rotation": 3 },
+      { "id": "m", "ref": "official-m", "rotation": 5, "role": "end", "finishAnchor": { "q": 0, "r": 3 } }
+    ],
+    "finishEntranceTerrain": "blue",
+    "connections": [
+      { "from": "a", "edge": "right-down", "to": "c", "blockade": { "type": "machete", "cost": 1 } },
+      { "from": "c", "edge": "right-up", "to": "e", "blockade": { "type": "paddle", "cost": 1 } },
+      { "from": "e", "edge": "left-up", "offset": { "q": -2, "r": -5 }, "to": "g", "blockade": { "type": "coin", "cost": 1 } },
+      { "from": "g", "edge": "right-up", "alignment": "alternate", "to": "j", "blockade": { "type": "discard", "cost": 2 } },
+      { "from": "j", "edge": "right-down", "to": "m", "blockade": { "type": "machete", "cost": 2 } }
+    ]
+  },
+  {
+    "id": "official-witchs-cauldron",
+    "name": "官方：女巫坩埚",
+    "plates": [
+      { "id": "a", "ref": "official-a" },
+      { "id": "l", "ref": "official-l", "rotation": 5 },
+      { "id": "g", "ref": "official-g", "rotation": 4 },
+      { "id": "d", "ref": "official-d", "rotation": 4 },
+      { "id": "m", "ref": "official-m" },
+      { "id": "i", "ref": "official-i", "rotation": 5, "role": "end", "finishAnchor": { "q": -3, "r": 0 } }
+    ],
+    "finishEntranceTerrain": "blue",
+    "connections": [
+      { "from": "a", "edge": "right-up", "to": "l", "blockade": { "type": "coin", "cost": 1 } },
+      { "from": "l", "edge": "right-up", "to": "g", "blockade": { "type": "machete", "cost": 1 } },
+      { "from": "g", "edge": "right-down", "to": "d", "blockade": { "type": "paddle", "cost": 2 } },
+      { "from": "d", "edge": "down", "to": "m", "blockade": { "type": "discard", "cost": 2 } },
+      { "from": "m", "edge": "left-down", "to": "i", "blockade": { "type": "coin", "cost": 2 } }
+    ]
+  },
+  {
+    "id": "official-swamplands",
+    "name": "官方：沼泽地",
+    "plates": [
+      { "id": "a", "ref": "official-a" },
+      { "id": "r", "ref": "official-r", "rotation": 1 },
+      { "id": "d", "ref": "official-d", "rotation": 2 },
+      { "id": "h", "ref": "official-h", "rotation": 2 },
+      { "id": "e", "ref": "official-e", "rotation": 1 },
+      { "id": "o", "ref": "official-o", "rotation": 4 },
+      { "id": "k", "ref": "official-k", "role": "end", "finishAnchor": { "q": -3, "r": 3 } }
+    ],
+    "finishEntranceTerrain": "blue",
+    "connections": [
+      { "from": "a", "edge": "right-up", "offset": { "q": 5, "r": -3 }, "to": "r", "blockade": { "type": "discard", "cost": 1 } },
+      { "from": "r", "edge": "right-down", "offset": { "q": 5, "r": -2 }, "to": "d", "blockade": { "type": "coin", "cost": 1 } },
+      { "from": "d", "edge": "right-down", "to": "h", "blockade": { "type": "paddle", "cost": 1 } },
+      { "from": "h", "edge": "right-down", "alignment": "alternate", "to": "e", "blockade": { "type": "machete", "cost": 2 } },
+      { "from": "e", "edge": "left-down", "offset": { "q": -5, "r": 5 }, "to": "o", "blockade": { "type": "discard", "cost": 2 } },
+      { "from": "o", "edge": "left-down", "offset": { "q": -5, "r": 2 }, "to": "k", "blockade": { "type": "coin", "cost": 2 } }
+    ]
+  }
+]

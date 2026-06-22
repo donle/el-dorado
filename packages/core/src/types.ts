@@ -70,10 +70,12 @@ export interface Hex {
   /** Power/count required to enter (1–4). 0 for start/mountain. */
   cost: number;
   /**
-   * Required movement symbol to enter (used by the El Dorado entrance,
-   * which demands `coin`/gold power). Undefined = wildcard (any symbol).
+   * Required movement symbol to enter. Undefined = use the terrain's default
+   * symbol, or wildcard for special legacy terrain.
    */
   reqSymbol?: MoveSymbol;
+  /** True for the three terrain entrance hexes adjacent to El Dorado. */
+  finishEntrance?: boolean;
   /** Player id occupying this hex, if any. */
   occupant?: string;
   /** Index of a start hex (1–4) or finish hex, for setup/ordering. */

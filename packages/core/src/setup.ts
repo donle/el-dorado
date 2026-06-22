@@ -73,7 +73,8 @@ export function createGame(
       blockades: 0,
     };
   });
-  const [shuffledStarts, nextRngState] = shuffle(map.startHexes, rngState);
+  const eligibleStarts = map.startHexes.slice(0, seeds.length);
+  const [shuffledStarts, nextRngState] = shuffle(eligibleStarts, rngState);
   rngState = nextRngState;
 
   const players: Player[] = playerBases.map((p, i) => {

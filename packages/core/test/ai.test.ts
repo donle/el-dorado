@@ -41,7 +41,7 @@ describe('AI', () => {
         { id: 'a', name: 'A', color: 'red' },
         { id: 'b', name: 'B', color: 'blue' },
       ],
-      'classic',
+      'corridor',
       3,
     );
     const a = s.players.find((p) => p.id === 'a')!;
@@ -51,6 +51,26 @@ describe('AI', () => {
     expect(end).toBeDefined();
     // With an empty hand there is nothing to discard, but the action must still end the turn.
     expect(plan[plan.length - 1].type).toBe('EndTurn');
+  });
+
+  it('uses native as a terrain-ignoring movement action', () => {
+    let s = createGame(
+      [
+        { id: 'a', name: 'A', color: 'red' },
+        { id: 'b', name: 'B', color: 'blue' },
+      ],
+      'corridor',
+      3,
+    );
+    const a = s.players.find((p) => p.id === 'a')!;
+    a.hand = [{ id: 'a:native#t0', defId: 'native' }];
+    a.deck = [];
+    a.discard = [];
+
+    const nativeMove = planTurn(s, 'a').find((x) => x.type === 'UseAbility' && x.cardId === 'a:native#t0');
+
+    expect(nativeMove).toBeDefined();
+    expect(nativeMove).toMatchObject({ type: 'UseAbility', cardId: 'a:native#t0' });
   });
 
   it('emits RemoveBlockade before StepTo when crossing an unclaimed symbol seam', () => {

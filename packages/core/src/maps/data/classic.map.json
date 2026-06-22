@@ -8,6 +8,7 @@
     { "id": "village", "ref": "village-a" },
     { "id": "end", "ref": "end-a", "role": "end" }
   ],
+  "finishEntranceTerrain": "blue",
   "connections": [
     { "from": "start", "edge": "up", "to": "jungle", "blockade": { "type": "machete", "cost": 1 } },
     { "from": "jungle", "edge": "right-up", "to": "river", "blockade": { "type": "paddle", "cost": 1 } },

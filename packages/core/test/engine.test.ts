@@ -133,20 +133,35 @@ describe('setup', () => {
     const s = game(2);
     expect(s.players[0].hand).toHaveLength(4);
     expect(s.players[0].deck).toHaveLength(4); // 8 - 4
-    const orderedStarts = s.hexes
-      .filter((h) => h.terrain === 'start')
-      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
     const playerStarts = s.players.map((p) => {
       const h = s.hexes.find((x) => x.q === p.position.q && x.r === p.position.r)!;
       expect(h.terrain).toBe('start');
       expect(h.occupant).toBe(p.id);
       return key(h);
     });
+    const playerStartSlots = s.players.map((p) => {
+      const h = s.hexes.find((x) => x.q === p.position.q && x.r === p.position.r)!;
+      return h.slot;
+    });
     const again = game(2);
     expect(again.players.map((p) => key(p.position))).toEqual(playerStarts);
-    expect(playerStarts).not.toEqual(orderedStarts.slice(0, 2).map((h) => key(h)));
+    expect(playerStartSlots.slice().sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([1, 2]);
     const startOccupied = s.hexes.filter((h) => h.terrain === 'start' && h.occupant);
     expect(startOccupied).toHaveLength(2);
+
+    const twoPlayerSeeds = [
+      { id: 'p0', name: 'A', color: 'red' as const },
+      { id: 'p1', name: 'B', color: 'blue' as const },
+    ];
+    const assignments = new Set<string>();
+    for (let seed = 1; seed <= 20; seed++) {
+      const seeded = createGame(twoPlayerSeeds, 'corridor', seed);
+      const slots = seeded.players.map((p) => seeded.hexes.find((x) => x.q === p.position.q && x.r === p.position.r)!.slot);
+      expect(slots.slice().sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([1, 2]);
+      assignments.add(slots.join(','));
+    }
+    expect(assignments).toContain('1,2');
+    expect(assignments).toContain('2,1');
 
     const s4 = createGame(
       [
@@ -225,6 +240,23 @@ describe('movement', () => {
     expect((result as { error: string }).error).toMatch(/山地/);
   });
 
+  it('native can enter a mountain while ignoring terrain requirements', () => {
+    const s = game();
+    placeAt(s, 'p0', { q: 10, r: 0 }); // blue3 next to mountain (10,1)
+    giveHand(s, 'p0', ['native']);
+
+    const { state, result } = run(
+      s,
+      'p0',
+      { type: 'UseAbility', cardId: 'p0:native#t0', nativeTo: { q: 10, r: 1 } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(pos(state, 'p0')).toEqual({ q: 10, r: 1 });
+    expect(result.events).toContainEqual({ type: 'ability', playerId: 'p0', cardId: 'p0:native#t0' });
+  });
+
   it('cannot enter El Dorado before reaching an entrance', () => {
     const s = createGame(
       [
@@ -240,15 +272,16 @@ describe('movement', () => {
     const target = city[0];
     const stand = neighbors(target).find((n) => {
       const h = s.hexes.find((x) => x.q === n.q && x.r === n.r);
-      return h?.terrain !== 'finish';
+      return !h || (h.terrain !== 'eldorado' && h.terrain !== 'finish' && !h.finishEntrance);
     })!;
 
-    placeAt(s, 'p0', stand);
-    giveHand(s, 'p0', ['pioneer']);
+    const pid = s.turn!.playerId;
+    placeAt(s, pid, stand);
+    giveHand(s, pid, ['pioneer']);
     const { result } = run(
       s,
-      'p0',
-      { type: 'PlayMovementCard', cardId: 'p0:pioneer#t0', symbol: 'machete' },
+      pid,
+      { type: 'PlayMovementCard', cardId: `${pid}:pioneer#t0`, symbol: 'machete' },
       { type: 'StepTo', to: { q: target.q, r: target.r } },
     );
     expect(result.ok).toBe(false);
@@ -798,7 +831,37 @@ describe('buying', () => {
     expect(sameTurnPromote.result.ok).toBe(false);
   });
 
-  it('requires the next player to promote a reserve pile before buying', () => {
+  it('allows the next player to buy an on-board pile while the market has a vacancy', () => {
+    const s = game();
+    s.market.find((m) => m.defId === 'photographer')!.count = 1;
+    giveHand(s, 'p0', ['traveller', 'traveller']);
+
+    let r = run(
+      s,
+      'p0',
+      {
+        type: 'BuyCard',
+        defId: 'photographer',
+        paymentCardIds: ['p0:traveller#t0', 'p0:traveller#t1'],
+      },
+      { type: 'EndTurn' },
+    );
+    expect(r.result.ok).toBe(true);
+    expect(r.state.turn!.playerId).toBe('p1');
+    giveHand(r.state, 'p1', ['millionaire']);
+
+    r = run(r.state, 'p1', {
+      type: 'BuyCard',
+      defId: 'scout',
+      paymentCardIds: ['p1:millionaire#t0'],
+    });
+    expect(r.result.ok).toBe(true);
+    expect(r.result.events).not.toContainEqual({ type: 'marketPromoted', playerId: 'p1', defId: 'scout' });
+    expect(r.state.players[1].discard.some((c) => c.defId === 'scout')).toBe(true);
+    expect(r.state.market.find((m) => m.defId === 'pioneer')!.onBoard).toBe(false);
+  });
+
+  it('allows buying a reserve pile directly when the market has a vacancy', () => {
     const s = game();
     s.market.find((m) => m.defId === 'photographer')!.count = 1;
     giveHand(s, 'p0', ['traveller', 'traveller']);
@@ -817,25 +880,16 @@ describe('buying', () => {
     expect(r.state.turn!.playerId).toBe('p1');
     giveHand(r.state, 'p1', ['millionaire', 'millionaire']);
 
-    const blockedBuy = run(r.state, 'p1', {
-      type: 'BuyCard',
-      defId: 'scout',
-      paymentCardIds: ['p1:millionaire#t0'],
-    });
-    expect(blockedBuy.result.ok).toBe(false);
-
-    r = run(r.state, 'p1', { type: 'PromoteMarket', defId: 'pioneer' });
-    expect(r.result.ok).toBe(true);
-    expect(r.result.events).toContainEqual({ type: 'marketPromoted', playerId: 'p1', defId: 'pioneer' });
-    expect(r.state.market.find((m) => m.defId === 'pioneer')!.onBoard).toBe(true);
-    expect(r.state.turn!.hasBought).toBe(false);
-
     r = run(r.state, 'p1', {
       type: 'BuyCard',
       defId: 'pioneer',
       paymentCardIds: ['p1:millionaire#t0', 'p1:millionaire#t1'],
     });
     expect(r.result.ok).toBe(true);
+    expect(r.result.events).toContainEqual({ type: 'marketPromoted', playerId: 'p1', defId: 'pioneer' });
+    expect(r.state.market.find((m) => m.defId === 'pioneer')!.onBoard).toBe(true);
+    expect(r.state.market.find((m) => m.defId === 'pioneer')!.count).toBe(2);
+    expect(r.state.turn!.hasBought).toBe(true);
     expect(r.state.players[1].discard.some((c) => c.defId === 'pioneer')).toBe(true);
   });
 
@@ -872,28 +926,36 @@ describe('winning', () => {
       7,
     );
     const entrance = s.hexes.find(
-      (h) => h.terrain === 'finish' && s.hexes.some((c) => c.terrain === 'eldorado' && isAdjacent(h, c)),
+      (h) =>
+        h.finishEntrance === true &&
+        h.terrain === 'blue' &&
+        s.hexes.some((c) => c.terrain === 'eldorado' && isAdjacent(h, c)),
     )!;
     const city = s.hexes.find((h) => h.terrain === 'eldorado' && isAdjacent(h, entrance))!;
     const stand = neighbors(entrance)
       .map((n) => s.hexes.find((h) => h.q === n.q && h.r === n.r))
-      .find((h): h is Hex => !!h && h.terrain !== 'finish' && h.terrain !== 'eldorado' && h.terrain !== 'mountain')!;
+      .find(
+        (h): h is Hex =>
+          !!h && h.terrain !== 'finish' && !h.finishEntrance && h.terrain !== 'eldorado' && h.terrain !== 'mountain',
+      )!;
 
-    placeAt(s, 'p0', { q: stand.q, r: stand.r });
-    giveHand(s, 'p0', ['journalist']);
+    const pid = s.turn!.playerId;
+    const playerIndex = s.players.findIndex((p) => p.id === pid);
+    placeAt(s, pid, { q: stand.q, r: stand.r });
+    giveHand(s, pid, ['sailor']);
     let r = run(
       s,
-      'p0',
-      { type: 'PlayMovementCard', cardId: 'p0:journalist#t0', symbol: 'coin' },
+      pid,
+      { type: 'PlayMovementCard', cardId: `${pid}:sailor#t0`, symbol: 'paddle' },
       { type: 'StepTo', to: { q: entrance.q, r: entrance.r } },
     );
     expect(r.result.ok).toBe(true);
-    expect(r.state.players[0].finished).toBe(false);
+    expect(r.state.players[playerIndex].finished).toBe(false);
 
     r.state.turn!.activeMover = undefined;
-    r = run(r.state, 'p0', { type: 'StepTo', to: { q: city.q, r: city.r } });
+    r = run(r.state, pid, { type: 'StepTo', to: { q: city.q, r: city.r } });
     expect(r.result.ok).toBe(true);
-    expect(r.state.players[0].finished).toBe(true);
+    expect(r.state.players[playerIndex].finished).toBe(true);
     expect(r.state.finalTurnsRemaining).toBe(1);
   });
 
@@ -907,17 +969,19 @@ describe('winning', () => {
       7,
     );
     const entrance = s.hexes.find(
-      (h) => h.terrain === 'finish' && s.hexes.some((c) => c.terrain === 'eldorado' && isAdjacent(h, c)),
+      (h) => h.finishEntrance === true && s.hexes.some((c) => c.terrain === 'eldorado' && isAdjacent(h, c)),
     )!;
     const city = s.hexes.find((h) => h.terrain === 'eldorado' && isAdjacent(h, entrance))!;
 
-    placeAt(s, 'p0', { q: entrance.q, r: entrance.r });
-    giveHand(s, 'p0', []);
+    const pid = s.turn!.playerId;
+    const playerIndex = s.players.findIndex((p) => p.id === pid);
+    placeAt(s, pid, { q: entrance.q, r: entrance.r });
+    giveHand(s, pid, []);
     s.turn!.activeMover = undefined;
 
-    const r = run(s, 'p0', { type: 'StepTo', to: { q: city.q, r: city.r } });
+    const r = run(s, pid, { type: 'StepTo', to: { q: city.q, r: city.r } });
     expect(r.result.ok).toBe(true);
-    expect(r.state.players[0].finished).toBe(true);
+    expect(r.state.players[playerIndex].finished).toBe(true);
   });
 
   it('reaching El Dorado finishes the game after the final round', () => {

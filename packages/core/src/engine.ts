@@ -204,16 +204,25 @@ function moveTo(state: GameState, p: Player, to: Hex, events: GameEvent[]): void
   }
 }
 
+function isFinishEntrance(hex: Hex | undefined): boolean {
+  return !!hex && (hex.finishEntrance === true || hex.terrain === 'finish');
+}
+
 function finalTurnsAfter(state: GameState, playerId: string): number {
   const idx = state.turnOrder.indexOf(playerId);
   if (idx === -1) return 0;
   return state.turnOrder.slice(idx + 1).filter((id) => !player(state, id).finished).length;
 }
 
-function assertEnterable(state: GameState, p: Player, to: Hex): void {
-  if (to.terrain === 'mountain') throw new RuleError('不能进入山地');
+function assertEnterable(
+  state: GameState,
+  p: Player,
+  to: Hex,
+  opts: { allowMountain?: boolean } = {},
+): void {
+  if (to.terrain === 'mountain' && !opts.allowMountain) throw new RuleError('不能进入山地');
   const from = hexAt(state, p.position);
-  if (to.terrain === 'eldorado' && from?.terrain !== 'finish') {
+  if (to.terrain === 'eldorado' && !isFinishEntrance(from)) {
     throw new RuleError('必须先进入黄金城入口，才能进入黄金城');
   }
   if (to.occupant && to.occupant !== p.id) throw new RuleError('该地格已被占用');
@@ -238,6 +247,9 @@ function stepTo(state: GameState, playerId: string, to: Axial, events: GameEvent
     destDeduct = 0;
   } else if (hex.terrain === 'finish') {
     destRequired = hex.reqSymbol ?? null;
+    destDeduct = Math.max(hex.cost, 1);
+  } else if (hex.reqSymbol) {
+    destRequired = hex.reqSymbol;
     destDeduct = Math.max(hex.cost, 1);
   } else if (hex.terrain === 'start') {
     destRequired = null;
@@ -390,11 +402,10 @@ function buyCard(
 
   const pile = state.market.find((m) => m.defId === defId);
   if (!pile || pile.count <= 0) throw new RuleError('这张牌当前无法购买');
-  if (hasMarketVacancy(state)) {
-    throw new RuleError('请先从候补市场选择一类卡牌补位');
-  }
   if (!pile.onBoard) {
-    throw new RuleError('这张牌还没有进入市场');
+    if (!hasMarketVacancy(state)) throw new RuleError('这张牌还没有进入市场');
+    pile.onBoard = true;
+    events.push({ type: 'marketPromoted', playerId, defId });
   }
 
   const cost = getDef(defId).cost;
@@ -543,7 +554,7 @@ function useAbility(
       if (!action.nativeTo) throw new RuleError('没有选择目标地格');
       const hex = hexAt(state, action.nativeTo);
       if (!hex) throw new RuleError('没有这个地格');
-      assertEnterable(state, p, hex); // ignores terrain cost/symbol, but not mountain/occupied
+      assertEnterable(state, p, hex, { allowMountain: true }); // ignores terrain cost/symbol, but not occupancy/route gates
       const blockade = blockadeBetween(state, p.position, hex);
       if (blockade && !blockade.claimedBy) {
         throw new RuleError(`需要${blockadeRequirementLabel(blockade)}才能通过连接地形`);

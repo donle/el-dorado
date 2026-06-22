@@ -1,0 +1,223 @@
+{
+  "official-a": {
+    "id": "official-a",
+    "theme": "official-start",
+    "rows": [
+      "g1 C1 g1 g1",
+      "b1 MM g1 g1 y1",
+      "g1 MM y1 g1 g1 g1",
+      "g1 y1 g1 b1 g1 y1 g1",
+      "g1 g1 y1 g1 b1 g1",
+      "g1 g1 g1 g1 g1",
+      "S1 S2 S3 S4"
+    ]
+  },
+  "official-b": {
+    "id": "official-b",
+    "theme": "official-start",
+    "rows": [
+      "g1 b1 C1 b1",
+      "g1 g1 y1 MM g1",
+      "g1 y1 g1 g1 g1 g1",
+      "b1 g1 y1 g1 y1 g1 g1",
+      "g1 g1 b1 g1 g1 g1",
+      "g1 g1 g1 g1 g1",
+      "S4 S3 S2 S1"
+    ]
+  },
+  "official-c": {
+    "id": "official-c",
+    "theme": "official-river",
+    "rows": [
+      "g1 g1 R1 R1",
+      "g1 y1 R1 b1 b1",
+      "b1 b1 y1 y1 R1 b1",
+      "b1 y1 R1 MM b1 R1 R1",
+      "y1 R1 b1 b1 y1 y1",
+      "y1 R1 g1 y1 b1",
+      "g1 g1 b1 b1"
+    ]
+  },
+  "official-d": {
+    "id": "official-d",
+    "theme": "official-river",
+    "rows": [
+      "g3 g1 MM b4",
+      "g1 g1 y3 y1 MM",
+      "g1 b1 g1 MM y3 g1",
+      "g3 b1 b2 MM g1 g1 g3",
+      "g1 b1 b1 b3 b1 g1",
+      "g1 b1 b1 b1 g1",
+      "g1 g1 g1 g2"
+    ]
+  },
+  "official-e": {
+    "id": "official-e",
+    "theme": "official-jungle",
+    "rows": [
+      "C1 y1 y1 y1",
+      "g1 g2 g1 MM y1",
+      "R1 g1 MM b1 b1 g1",
+      "g1 g3 g3 b1 g1 g3 R1",
+      "g1 R1 R2 R1 MM g1",
+      "R1 MM g2 b3 g1",
+      "MM R1 R1 g1"
+    ]
+  },
+  "official-f": {
+    "id": "official-f",
+    "theme": "official-mixed",
+    "rows": [
+      "g1 MM MM b1",
+      "g3 g1 MM b1 b1",
+      "R1 g1 b3 b4 b1 R1",
+      "R1 y1 y2 MM g3 g1 R1",
+      "R1 y1 R1 g1 g1 R1",
+      "g1 g4 g1 b2 b2",
+      "C1 g1 R1 C1"
+    ]
+  },
+  "official-g": {
+    "id": "official-g",
+    "theme": "official-gold",
+    "rows": [
+      "g1 g1 g1 g1",
+      "g1 g2 y1 MM g1",
+      "y1 y2 y2 R1 y1 g1",
+      "MM MM y4 y4 y1 g3 C1",
+      "y1 y2 y2 R1 y1 g1",
+      "g1 g2 y1 MM g1",
+      "g1 g1 g1 g1"
+    ]
+  },
+  "official-h": {
+    "id": "official-h",
+    "theme": "official-swamp",
+    "rows": [
+      "b1 b2 b2 b2",
+      "y1 b1 b1 b1 b2",
+      "y2 y2 y1 y1 b1 b2",
+      "y4 MM y2 y1 y1 g1 g1",
+      "y2 y2 y1 y1 g1 g2",
+      "y1 g1 g1 g1 g3",
+      "g1 g2 g2 g2"
+    ]
+  },
+  "official-i": {
+    "id": "official-i",
+    "theme": "official-mountain",
+    "rows": [
+      "g1 g1 g1 g1",
+      "y1 g1 MM g1 g1",
+      "y1 y2 g1 MM g2 g1",
+      "y1 y2 g1 C1 MM MM MM",
+      "y2 R2 MM g1 g2 g1",
+      "b3 b1 b1 g1 g1",
+      "b2 b2 b1 g1"
+    ]
+  },
+  "official-j": {
+    "id": "official-j",
+    "theme": "official-mixed",
+    "rows": [
+      "b1 b1 b1 b1",
+      "b1 MM b2 b1 R2",
+      "b1 b2 g1 g3 R2 R1",
+      "y1 y1 g2 C1 g1 R2 R1",
+      "y1 y2 g1 g1 R2 R1",
+      "y1 y2 y2 MM R1",
+      "y1 y1 y1 R2"
+    ]
+  },
+  "official-k": {
+    "id": "official-k",
+    "theme": "official-jungle",
+    "rows": [
+      "C1 g3 g2 g1",
+      "g1 g1 b4 g1 g2",
+      "g1 g2 g1 g3 g1 g2",
+      "g3 g1 g3 g1 g3 g1 g2",
+      "g2 g1 g3 g1 g2 g1",
+      "g3 g1 y4 g1 g1",
+      "g1 g2 g1 C1"
+    ]
+  },
+  "official-l": {
+    "id": "official-l",
+    "theme": "official-jungle",
+    "rows": [
+      "b1 C1 C1 g4",
+      "g1 b1 b1 g4 g1",
+      "g3 g1 g1 g3 g1 g2",
+      "g2 g1 MM g1 MM g1 g2",
+      "g1 g2 g2 g1 g2 g1",
+      "y2 C1 y1 g1 g1",
+      "g2 g2 g1 MM"
+    ]
+  },
+  "official-m": {
+    "id": "official-m",
+    "theme": "official-mountain",
+    "rows": [
+      "g1 g1 g1 C1",
+      "g1 y4 MM MM b4",
+      "g1 y2 g1 g1 b1 MM",
+      "MM g1 g1 R1 g1 g1 MM",
+      "MM MM MM MM R2 g1",
+      "g1 g1 g1 R2 g1",
+      "b1 b1 g1 g1"
+    ]
+  },
+  "official-n": {
+    "id": "official-n",
+    "theme": "official-river",
+    "rows": [
+      "g1 g1 g1 g1",
+      "y1 g1 g2 g1 b1",
+      "y1 y2 g1 b1 b1 b1",
+      "b1 b1 y4 y4 y2 y1 y1",
+      "b1 b1 b1 g1 y2 y1",
+      "g1 g1 g3 g1 g1",
+      "g1 g1 g1 g1"
+    ]
+  },
+  "official-o": {
+    "id": "official-o",
+    "theme": "official-strip",
+    "rows": [
+      "-- -- -- --",
+      "-- -- -- -- --",
+      "-- y2 y1 R1 g3 R2",
+      "-- y1 MM b4 MM MM R1",
+      "-- y1 b1 g2 g1 R1",
+      "-- -- -- -- --",
+      "-- -- -- --"
+    ]
+  },
+  "official-q": {
+    "id": "official-q",
+    "theme": "official-strip",
+    "rows": [
+      "-- -- -- --",
+      "-- -- -- -- --",
+      "-- R1 y1 y1 b1 g4",
+      "-- g2 R1 g1 y4 b1 g1",
+      "-- g1 R2 g1 g1 b2",
+      "-- -- -- -- --",
+      "-- -- -- --"
+    ]
+  },
+  "official-r": {
+    "id": "official-r",
+    "theme": "official-strip",
+    "rows": [
+      "-- -- -- --",
+      "-- -- -- -- --",
+      "-- g1 g1 MM y1 y1",
+      "-- g1 g4 MM y1 C1 y1",
+      "-- g1 g1 MM y1 y1",
+      "-- -- -- -- --",
+      "-- -- -- --"
+    ]
+  }
+}

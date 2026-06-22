@@ -14,6 +14,8 @@ export type TileEdge =
   | 'up'
   | 'down';
 
+export type TileEdgeAlignment = 'default' | 'alternate';
+
 /** Canonical edge order (matches the 6 hexagonal neighbour directions). */
 export const TILE_EDGES: readonly TileEdge[] = [
   'right-up',
@@ -34,6 +36,16 @@ export const EDGE_OFFSET: Record<TileEdge, Axial> = {
   up: { q: 4, r: -7 },
 };
 
+/** Alternate full-edge alignment, shifted by one zigzag phase along the seam. */
+export const ALTERNATE_EDGE_OFFSET: Record<TileEdge, Axial> = {
+  'right-up': { q: 7, r: -4 },
+  'right-down': { q: 4, r: 3 },
+  down: { q: -3, r: 7 },
+  'left-down': { q: -7, r: 4 },
+  'left-up': { q: -4, r: -3 },
+  up: { q: 3, r: -7 },
+};
+
 /** The edge of the neighbour that faces back (B attaches to A here). */
 export const OPPOSITE_EDGE: Record<TileEdge, TileEdge> = {
   'right-up': 'left-down',
@@ -47,9 +59,15 @@ export const OPPOSITE_EDGE: Record<TileEdge, TileEdge> = {
 /** Low-level offsets in canonical order. */
 export const TILE_NEIGHBOR_OFFSETS: Axial[] = TILE_EDGES.map((e) => EDGE_OFFSET[e]);
 
+export function edgeOffset(edge: TileEdge, alignment: TileEdgeAlignment = 'default'): Axial {
+  if (alignment === 'default') return EDGE_OFFSET[edge];
+  if (alignment === 'alternate') return ALTERNATE_EDGE_OFFSET[edge];
+  throw new Error(`未知板块边缘错位：${alignment}`);
+}
+
 /** The centre of the tile reached by crossing `edge` from `center`. */
-export function neighborCenter(center: Axial, edge: TileEdge): Axial {
-  const o = EDGE_OFFSET[edge];
+export function neighborCenter(center: Axial, edge: TileEdge, alignment: TileEdgeAlignment = 'default'): Axial {
+  const o = edgeOffset(edge, alignment);
   return { q: center.q + o.q, r: center.r + o.r };
 }
 

@@ -47,6 +47,23 @@ describe('assemble: placement + materialize', () => {
     expect(placed.find((p) => p.instanceId === 'p1')!.center).toEqual({ q: 7, r: -3 });
   });
 
+  it('can place a neighbour on the alternate zigzag phase of the same edge', () => {
+    const placed = placePlates(
+      {
+        id: 'alternate-edge',
+        name: '错位边',
+        plates: [
+          { id: 'p0', ref: 'a' },
+          { id: 'p1', ref: 'b' },
+        ],
+        connections: [{ from: 'p0', edge: 'right-down', alignment: 'alternate', to: 'p1' }],
+      },
+      LIB,
+    );
+    expect(placed.find((p) => p.instanceId === 'p0')!.center).toEqual({ q: 0, r: 0 });
+    expect(placed.find((p) => p.instanceId === 'p1')!.center).toEqual({ q: 4, r: 3 });
+  });
+
   it('two edge-joined plates do not overlap (74 cells)', () => {
     const m = assembleMap(TWO, LIB);
     expect(m.hexes).toHaveLength(74);
@@ -79,6 +96,38 @@ describe('assemble: placement + materialize', () => {
       { q: -3, r: 2 },
       { q: -3, r: 3 },
     ]);
+  });
+
+  it('rotates plate terrain and start slots in 60-degree steps', () => {
+    const startPlate: PlateDef = {
+      id: 's',
+      theme: 'start',
+      rows: [
+        'g1 g1 g1 g1',
+        'g1 g1 g1 g1 g1',
+        'g1 g1 g1 g1 g1 g1',
+        'S1 g1 g1 g1 g1 g1 g1',
+        'S2 g1 g1 g1 g1 g1',
+        'S3 g1 g1 g1 g1',
+        'S4 g1 g1 g1',
+      ],
+    };
+    const m = assembleMap(
+      { id: 'rotated', name: '旋转', plates: [{ id: 'p', ref: 's', rotation: 1 }], connections: [] },
+      { s: startPlate },
+    );
+    expect(m.startHexes).toEqual([
+      { q: 0, r: -3 },
+      { q: -1, r: -2 },
+      { q: -2, r: -1 },
+      { q: -3, r: 0 },
+    ]);
+  });
+
+  it('rejects an invalid plate rotation', () => {
+    expect(() =>
+      assembleMap({ id: 'bad-rotation', name: 'bad', plates: [{ id: 'p', ref: 'a', rotation: 6 }], connections: [] }, LIB),
+    ).toThrow(/旋转值/);
   });
 
   it('rejects an unknown plate ref', () => {
@@ -217,19 +266,45 @@ describe('assemble: El Dorado terminal on role:end', () => {
     connections: [{ from: 'p0', edge: 'up', to: 'end' }],
   };
 
-  it('adds three coin-gated entrances touching a 3-hex golden city', () => {
+  it('adds three terrain entrances touching a 3-hex golden city', () => {
     const m = assembleMap(def, LIB3);
-    const entrances = m.hexes.filter((h) => h.terrain === 'finish');
+    const entrances = m.finishHexes.map((f) => m.hexes.find((h) => h.q === f.q && h.r === f.r)!);
     const city = m.hexes.filter((h) => h.terrain === 'eldorado');
     expect(entrances).toHaveLength(3);
     expect(city).toHaveLength(3);
     expect(m.finishHexes).toHaveLength(3);
+    expect(entrances.map((e) => e.terrain)).toEqual(['blue', 'blue', 'blue']);
     const cityKeys = new Set(city.map((h) => `${h.q},${h.r}`));
     for (const e of entrances) {
-      expect(e.reqSymbol).toBe('coin');
-      expect(e.cost).toBeGreaterThan(0);
+      expect(e.finishEntrance).toBe(true);
+      expect(e.reqSymbol).toBeUndefined();
+      expect(e.cost).toBe(1);
+      expect(e.terrain).not.toBe('finish');
       expect(neighbors(e).some((n) => cityKeys.has(`${n.q},${n.r}`))).toBe(true);
     }
+  });
+
+  it('uses the configured El Dorado entrance terrain for all three entrances', () => {
+    const m = assembleMap({ ...def, finishEntranceTerrain: 'rubble' }, LIB3);
+    const entrances = m.finishHexes.map((f) => m.hexes.find((h) => h.q === f.q && h.r === f.r)!);
+    expect(entrances.map((e) => e.terrain)).toEqual(['rubble', 'rubble', 'rubble']);
+    expect(entrances.map((e) => e.cost)).toEqual([1, 1, 1]);
+  });
+
+  it('accepts legacy El Dorado entrance arrays only when all three entries match', () => {
+    const m = assembleMap({ ...def, finishEntrances: ['green', 'green', 'green'] }, LIB3);
+    const entrances = m.finishHexes.map((f) => m.hexes.find((h) => h.q === f.q && h.r === f.r)!);
+    expect(entrances.map((e) => e.terrain)).toEqual(['green', 'green', 'green']);
+  });
+
+  it('rejects invalid El Dorado entrance definitions', () => {
+    expect(() => assembleMap({ ...def, finishEntrances: ['green', 'blue'] as never }, LIB3)).toThrow(/正好 3 格/);
+    expect(() =>
+      assembleMap({ ...def, finishEntrances: ['green', 'blue', 'green'] as never }, LIB3),
+    ).toThrow(/相同地形/);
+    expect(() =>
+      assembleMap({ ...def, finishEntranceTerrain: 'basecamp' as never }, LIB3),
+    ).toThrow(/不支持/);
   });
 
   it('does nothing when no plate has role:end', () => {

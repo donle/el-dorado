@@ -42,6 +42,7 @@ const ACTIVE_PAWN_RAY_GEO = new THREE.PlaneGeometry(0.44, 1.08);
 const ACTIVE_PAWN_FLAME_GEO = new THREE.ConeGeometry(0.16, 0.74, 5, 1, true);
 const SELF_ARROW_BASE_Y = 2.02;
 const SELF_ARROW_BOB = 0.14;
+const MOUNTAIN_PAWN_LANDING_LIFT = 0.9;
 const PICK_MATERIAL = new THREE.MeshBasicMaterial({
   transparent: true,
   opacity: 0,
@@ -134,6 +135,10 @@ function terrainHeight(t: Terrain, cost: number): number {
   return 0.3 + cost * 0.12;
 }
 
+function pawnLandingHeight(hex: Hex, terrainTop: number): number {
+  return hex.terrain === 'mountain' ? terrainTop + MOUNTAIN_PAWN_LANDING_LIFT : terrainTop;
+}
+
 function visualTerrain(t: Terrain): Terrain {
   return t === 'finish' ? 'yellow' : t;
 }
@@ -154,6 +159,7 @@ export class Board {
   private hexMeshes = new Map<string, THREE.Mesh>();
   private hexPickables: THREE.Mesh[] = [];
   private hexTops = new Map<string, { y: number }>();
+  private pawnLandings = new Map<string, { y: number }>();
   private blockadePickables: THREE.Mesh[] = [];
   private blockadeSurfaces = new Map<string, BlockadeSurface>();
   private highlights = new Set<string>();
@@ -610,6 +616,7 @@ export class Board {
     this.hexMeshes.clear();
     this.hexPickables = [];
     this.hexTops.clear();
+    this.pawnLandings.clear();
     this.blockadePickables = [];
     this.blockadeSurfaces.clear();
     const placed: Placed[] = [];
@@ -634,6 +641,7 @@ export class Board {
       this.hexMeshes.set(k, mesh);
       this.hexPickables.push(mesh);
       this.hexTops.set(k, { y: h });
+      this.pawnLandings.set(k, { y: pawnLandingHeight(hex, h) });
       const p = { hex, x, z, top: h };
       if (isTerminal) terminal.push(p);
       else if (hex.terrain !== 'finish') placed.push(p);
@@ -656,7 +664,7 @@ export class Board {
     for (const pl of state.players) {
       present.add(pl.id);
       const { x, z } = this.worldXZ(pl.position);
-      const y = this.hexTops.get(`${pl.position.q},${pl.position.r}`)?.y ?? 0.3;
+      const y = this.pawnLandings.get(`${pl.position.q},${pl.position.r}`)?.y ?? 0.3;
       let pawn = this.pawns.get(pl.id);
       if (!pawn) {
         const group = this.makePawn(PLAYER_COLOR[pl.color] ?? 0xffffff, x, y, z);
@@ -1491,10 +1499,11 @@ function hexKey(c: Axial): string {
 }
 
 function costIconForHex(hex: Hex): CostIcon | null {
+  if (hex.reqSymbol) return hex.reqSymbol;
   if (hex.terrain === 'green') return 'machete';
   if (hex.terrain === 'blue') return 'paddle';
   if (hex.terrain === 'yellow') return 'coin';
-  if (hex.terrain === 'finish') return hex.reqSymbol ?? 'coin';
+  if (hex.terrain === 'finish') return 'coin';
   if (hex.terrain === 'rubble') return 'discard';
   if (hex.terrain === 'basecamp') return 'remove';
   return null;
@@ -1580,7 +1589,7 @@ interface TerminalVisibility {
 }
 
 function visibleTerminalHexes(hexes: Hex[]): TerminalVisibility {
-  const finishKeys = new Set(hexes.filter((hex) => hex.terrain === 'finish').map(hexKey));
+  const finishKeys = new Set(hexes.filter((hex) => hex.finishEntrance || hex.terrain === 'finish').map(hexKey));
   const hasEldorado = hexes.some((hex) => hex.terrain === 'eldorado');
   if (!hasEldorado) return { hexes, terminalKeys: new Set() };
 

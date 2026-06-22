@@ -31,9 +31,14 @@ function blockadeRequiresDiscard(blockade: Blockade): boolean {
   return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
 }
 
-/** Symbol a hex demands to enter (El Dorado entrances may require coin). */
+function isFinishEntrance(h: Hex): boolean {
+  return h.finishEntrance === true || h.terrain === 'finish';
+}
+
+/** Symbol a hex demands to enter. */
 function requiredFor(h: Hex): MoveSymbol | null {
   if (h.terrain === 'finish') return h.reqSymbol ?? null;
+  if (h.reqSymbol) return h.reqSymbol;
   return terrainSymbol(h.terrain);
 }
 
@@ -64,7 +69,34 @@ function blockadeBetween(state: GameState, from: Axial, to: Axial): Blockade | u
   return state.blockades.find((b) => crossesBlockadeEdge(b, from, to));
 }
 
+function hexAt(state: GameState, c: Axial): Hex | undefined {
+  return state.hexes.find((h) => h.q === c.q && h.r === c.r);
+}
+
+function isAdjacentCoord(a: Axial, b: Axial): boolean {
+  return neighbors(a).some((n) => sameCoord(n, b));
+}
+
+function canUseNativeBetween(
+  state: GameState,
+  p: Player,
+  from: Axial,
+  to: Hex,
+  openedBlockades: Set<string>,
+): boolean {
+  if (!isAdjacentCoord(from, to)) return false;
+  if (to.occupant && to.occupant !== p.id) return false;
+  const fromHex = hexAt(state, from);
+  if (to.terrain === 'eldorado' && !isFinishEntrance(fromHex ?? to)) return false;
+  const blockade = blockadeBetween(state, from, to);
+  return !blockade || !!blockade.claimedBy || openedBlockades.has(blockade.id);
+}
+
 type Capability = Record<MoveSymbol, number>;
+
+function isNativeCard(defId: string): boolean {
+  return getDef(defId).ability === 'native';
+}
 
 /** Best single-card power the player can field for each symbol (jokers count for all). */
 function capability(p: Player): Capability {
@@ -79,9 +111,10 @@ function capability(p: Player): Capability {
 }
 
 /** Whether the player could enter `h` at all given a capability + owned-card count. */
-function canTraverse(h: Hex, p: Player, cap: Capability, owned: number): boolean {
-  if (h.terrain === 'mountain') return false;
+function canTraverse(h: Hex, p: Player, cap: Capability, owned: number, hasNative: boolean): boolean {
   if (h.occupant && h.occupant !== p.id) return false;
+  if (hasNative) return true;
+  if (h.terrain === 'mountain') return false;
   if (h.terrain === 'eldorado') return true;
   if (h.terrain === 'rubble' || h.terrain === 'basecamp') return owned >= h.cost;
   if (h.terrain === 'green') return cap.machete >= h.cost;
@@ -134,7 +167,7 @@ export function pathToFinish(
       const hex = byKey.get(k);
       if (!hex || blocked(hex) || visited.has(k)) continue;
       if (!edgePassable(curHex, hex)) continue;
-      if (hex.terrain === 'eldorado' && curHex.terrain !== 'finish') continue;
+      if (hex.terrain === 'eldorado' && !isFinishEntrance(curHex)) continue;
       const blockade = blockadeBetween(state, curHex, hex);
       // First crossing of a symbol seam pays the seam AND the destination
       // terrain; a discard seam pays only its discard; an open/absent seam pays
@@ -175,6 +208,7 @@ function declareSymbol(defId: string, required: MoveSymbol | null): MoveSymbol |
 interface Need {
   symbol: MoveSymbol | null;
   cost: number;
+  ability?: 'native';
 }
 
 const MARKET_SLOTS = 6;
@@ -185,6 +219,7 @@ function marketNeedsPromotion(state: GameState): boolean {
 }
 
 function matchesNeed(defId: string, need: Need): boolean {
+  if (need.ability === 'native') return isNativeCard(defId);
   const d = getDef(defId);
   const syms = movableSymbols(d.defId);
   const ok = need.symbol === null ? syms.length > 0 : syms.includes(need.symbol);
@@ -235,13 +270,27 @@ export function planTurn(state: GameState, playerId: string): Action[] {
 
   const cap = capability(p);
   const owned = p.deck.length + p.hand.length + p.discard.length;
+  const nativeOwned = [...p.deck, ...p.hand, ...p.discard].some((c) => isNativeCard(c.defId));
+  const openedBlockades = new Set<string>();
+  let plannedPosition: Axial = { ...p.position };
+  const tryUseNative = (hex: Hex): boolean => {
+    const native = available().find((c) => isNativeCard(c.defId));
+    if (!native || !canUseNativeBetween(state, p, plannedPosition, hex, openedBlockades)) return false;
+    used.add(native.id);
+    actions.push({ type: 'UseAbility', cardId: native.id, nativeTo: { q: hex.q, r: hex.r } });
+    mover = null;
+    moved = true;
+    plannedPosition = { q: hex.q, r: hex.r };
+    return true;
+  };
   // Only commit to a route the current deck can actually traverse.
   const edgeCanTraverse = (from: Hex, to: Hex) => {
     const blockade = blockadeBetween(state, from, to);
     if (!blockade || blockade.claimedBy) return true;
-    if (blockadeRequiresDiscard(blockade)) return owned >= blockade.cost;
+    if (blockadeRequiresDiscard(blockade)) return owned >= blockade.cost && (to.terrain !== 'mountain' || nativeOwned);
     const symbol = blockadeMoveSymbol(blockade);
     if (!symbol) return false;
+    if (nativeOwned) return cap[symbol] >= blockade.cost;
     // One mover, one symbol: it must clear the seam AND enter the destination,
     // so the destination terrain must accept the seam symbol, with power enough
     // for both costs combined.
@@ -249,8 +298,7 @@ export function planTurn(state: GameState, playerId: string): Action[] {
     if (destReq !== null && destReq !== symbol) return false;
     return cap[symbol] >= blockade.cost + stepPathCost(to);
   };
-  const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned), edgeCanTraverse);
-  let plannedPosition: Axial = { ...p.position };
+  const path = pathToFinish(state, p, (h) => canTraverse(h, p, cap, owned, nativeOwned), edgeCanTraverse);
   for (const hex of path) {
     const blockade = blockadeBetween(state, plannedPosition, hex);
     const isClear = hex.terrain === 'rubble' || hex.terrain === 'basecamp';
@@ -264,9 +312,13 @@ export function planTurn(state: GameState, playerId: string): Action[] {
         actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id, cardIds: pick.map((c) => c.id) });
       } else {
         const seamSym = blockadeMoveSymbol(blockade)!;
-        // Need one mover of seamSym with enough power for seam.cost + far terrain.
         const destDeduct = hex.terrain === 'eldorado' ? 0 : requiredFor(hex) === null ? 1 : enterCost(hex);
-        const need = blockade.cost + destDeduct;
+        const openedAfterThis = new Set(openedBlockades);
+        openedAfterThis.add(blockade.id);
+        const canNativeAfterSeam =
+          available().some((c) => isNativeCard(c.defId)) &&
+          canUseNativeBetween(state, p, plannedPosition, hex, openedAfterThis);
+        const need = blockade.cost + (canNativeAfterSeam ? 0 : destDeduct);
         if (mover && mover.symbol === seamSym && mover.remaining >= need) {
           actions.push({ type: 'RemoveBlockade', blockadeId: blockade.id });
           mover.remaining -= blockade.cost;
@@ -282,11 +334,18 @@ export function planTurn(state: GameState, playerId: string): Action[] {
         }
       }
       moved = true;
+      openedBlockades.add(blockade.id);
       // blockade now open in-plan: fall through to step onto `hex` by terrain.
+    }
+
+    if (hex.terrain === 'mountain') {
+      if (tryUseNative(hex)) continue;
+      break;
     }
 
     // 2) Clear a rubble/basecamp DESTINATION HEX (unchanged: enter+clear).
     if (isClear) {
+      if (tryUseNative(hex)) continue;
       const cost = hex.cost;
       const pick = available().slice().sort((a, b) => getDef(a.defId).power - getDef(b.defId).power).slice(0, cost);
       if (pick.length < cost) break;
@@ -318,7 +377,10 @@ export function planTurn(state: GameState, playerId: string): Action[] {
       .map((c) => ({ c, sym: declareSymbol(c.defId, required), pow: getDef(c.defId).power }))
       .filter((x) => x.sym !== null && x.pow >= deduct)
       .sort((a, b) => a.pow - b.pow);
-    if (candidates.length === 0) break;
+    if (candidates.length === 0) {
+      if (tryUseNative(hex)) continue;
+      break;
+    }
     const chosen = candidates[0];
     used.add(chosen.c.id);
     actions.push({ type: 'PlayMovementCard', cardId: chosen.c.id, symbol: chosen.sym! });
@@ -355,8 +417,10 @@ export function planTurn(state: GameState, playerId: string): Action[] {
         }
       }
     }
-    if (!canTraverse(h, p, cap, owned)) {
-      gap = { symbol: requiredFor(h), cost: enterCost(h) };
+    if (!canTraverse(h, p, cap, owned, nativeOwned)) {
+      gap = h.terrain === 'mountain'
+        ? { symbol: null, cost: getDef('native').cost, ability: 'native' }
+        : { symbol: requiredFor(h), cost: enterCost(h) };
       break;
     }
     gapPosition = { q: h.q, r: h.r };

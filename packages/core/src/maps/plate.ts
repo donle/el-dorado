@@ -1,6 +1,7 @@
 /**
- * 板块解析器：把 7 行六边形 token 解析成 37 个本地蜂巢。
+ * 板块解析器：把 7 行六边形 token 解析成本地蜂巢。
  * 行宽固定 4·5·6·7·6·5·4；axial r = row−3，中心 (0,0)。
+ * 16 格连接板块使用 "--" 保留坐标位，但不生成地格。
  */
 import type { Axial, Terrain } from '../types.js';
 
@@ -71,6 +72,7 @@ export function parsePlate(def: PlateDef): ParsedPlate {
       throw new Error(`板块 ${def.id} 第 ${row + 1} 行应有 ${want} 格，实为 ${tokens.length}`);
     }
     tokens.forEach((tok, col) => {
+      if (tok === '--') return;
       const spec = cellFromToken(tok, def.id);
       const cell: PlateCell = { local: localFromRowCol(row, col), terrain: spec.terrain, cost: spec.cost };
       if (spec.slot !== undefined) cell.slot = spec.slot;

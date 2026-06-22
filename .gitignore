@@ -8,3 +8,4 @@ dist/
 eldorado-*.png
 docs/
 output/
+tmp/

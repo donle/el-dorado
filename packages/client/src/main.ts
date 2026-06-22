@@ -11,6 +11,7 @@ import {
   isAdjacent,
   distance,
   pickHandMover,
+  MAP_OPTIONS,
   type GameState,
   type RoomView,
   type ServerMessage,
@@ -57,6 +58,12 @@ const KIND_GLYPH: Record<string, string> = {
   joker: '🃏',
   action: '✨',
 };
+const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
+const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
+
+function safeMapId(id: string | null): string {
+  return id && MAP_OPTION_IDS.has(id) ? id : DEFAULT_MAP_ID;
+}
 
 function terrainSymbol(t: Terrain): MoveSymbol | null {
   if (t === 'green') return 'machete';
@@ -73,9 +80,14 @@ function blockadeRequiresDiscard(blockade: Blockade): boolean {
   return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
 }
 
-/** Symbol a hex demands to enter (the El Dorado gate may require coin). */
+function isFinishEntrance(hex: Hex | null | undefined): boolean {
+  return !!hex && (hex.finishEntrance === true || hex.terrain === 'finish');
+}
+
+/** Symbol a hex demands to enter. */
 function requiredFor(hex: Hex): MoveSymbol | null {
   if (hex.terrain === 'finish') return hex.reqSymbol ?? null;
+  if (hex.reqSymbol) return hex.reqSymbol;
   return terrainSymbol(hex.terrain);
 }
 
@@ -118,6 +130,7 @@ class App {
   clearBlockadeId: string | null = null;
   removeAfterDrawLimit = 0;
   viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
+  selectedMapId = safeMapId(localStorage.getItem('eldorado.mapId'));
   /** Host's preferred per-action AI delay in ms (default 1s), persisted locally. */
   aiDelay = Number(localStorage.getItem('eldorado.aiDelay')) || 1000;
   hint = '';
@@ -714,7 +727,7 @@ class App {
     if (!me || !isAdjacent(me.position, hex)) return false;
     if (hex.terrain === 'mountain') return false;
     const current = this.hexAt(me.position);
-    if (hex.terrain === 'eldorado' && current?.terrain !== 'finish') return false;
+    if (hex.terrain === 'eldorado' && !isFinishEntrance(current)) return false;
     if (hex.occupant && hex.occupant !== me.id) return false;
     if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') return false;
     const requirement = this.movementRequirement(hex);
@@ -731,7 +744,7 @@ class App {
     if (!me || hex.terrain !== 'eldorado') return false;
     if (!isAdjacent(me.position, hex)) return false;
     const current = this.hexAt(me.position);
-    if (current?.terrain !== 'finish') return false;
+    if (!isFinishEntrance(current)) return false;
     if (hex.occupant && hex.occupant !== me.id) return false;
     const blockade = this.blockadeBetween(me.position, hex);
     return !blockade || !!blockade.claimedBy;
@@ -741,8 +754,7 @@ class App {
     const me = this.me;
     if (!me) return false;
     if (!isAdjacent(me.position, hex)) return false;
-    if (hex.terrain === 'mountain') return false;
-    if (hex.terrain === 'eldorado' && this.hexAt(me.position)?.terrain !== 'finish') return false;
+    if (hex.terrain === 'eldorado' && !isFinishEntrance(this.hexAt(me.position))) return false;
     if (hex.occupant && hex.occupant !== me.id) return false;
     const blockade = this.blockadeBetween(me.position, hex);
     return !blockade || !!blockade.claimedBy;
@@ -1048,6 +1060,11 @@ class App {
       return;
     }
     this.marketPreviewDefId = null;
+    const pile = this.state?.market.find((m) => m.defId === defId);
+    if (!pile || pile.count <= 0) {
+      this.flash('这张牌当前无法选择');
+      return;
+    }
     if (this.selectedActionCard()?.def.ability === 'take_free') {
       this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
       this.hint = this.buyTargetDefId ? '点击「免费获得」使用发报机' : '';
@@ -1056,10 +1073,8 @@ class App {
       return;
     }
     if (this.state!.turn?.hasBought) { this.flash('本回合已购买 · 每回合限买 1 张'); return; }
-    if (this.marketNeedsPromotion(this.state!)) {
-      this.mobilePanel = 'market';
-      this.flash('先从候补市场选择 1 类补位');
-      this.renderHud();
+    if (!pile.onBoard && !this.marketNeedsPromotion(this.state!)) {
+      this.flash('这张牌还没有进入市场');
       return;
     }
     this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
@@ -1100,7 +1115,7 @@ class App {
       this.onMarketClick(defId);
       return;
     }
-    this.promoteMarket(defId);
+    this.onMarketClick(defId);
   }
 
   private canSelectMarketPreview(defId: string): boolean {
@@ -1109,7 +1124,7 @@ class App {
     if (!pile || pile.count <= 0) return false;
     if (this.selectedActionCard()?.def.ability === 'take_free') return true;
     if (this.state.turn?.hasBought) return false;
-    if (pile.onBoard) return !this.marketNeedsPromotion(this.state);
+    if (pile.onBoard) return true;
     return this.marketNeedsPromotion(this.state);
   }
 
@@ -1310,10 +1325,6 @@ class App {
     if (!this.buyTargetDefId) return;
     if (this.mode === 'remove') {
       this.flash('请先处理要移除的手牌');
-      return;
-    }
-    if (this.state && this.marketNeedsPromotion(this.state)) {
-      this.flash('请先从候补市场选择 1 类补位');
       return;
     }
     this.act({ type: 'BuyCard', defId: this.buyTargetDefId, paymentCardIds: [...this.selected] });
@@ -1702,10 +1713,35 @@ class App {
             )}${p.isAI ? ' 🤖' : ''}${p.offline ? ' · 离线' : ''}${p.id === this.room!.hostId ? ' 👑' : ''}</div>`,
         )
         .join('');
+      const selectedMap = MAP_OPTIONS.find((map) => map.id === this.selectedMapId) ?? MAP_OPTIONS[0];
       modal.innerHTML = `
         ${artHtml}
         <div class="lobby-form">
           <h1>房间 <span class="room-code">${this.room.code}</span></h1>
+          ${
+            isHost
+              ? `<label for="map-select">地图</label>
+                <div class="map-picker" id="map-picker">
+                  <button id="map-select" class="map-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+                    <span class="map-trigger-mark" aria-hidden="true"></span>
+                    <span class="map-trigger-name">${escapeHtml(selectedMap.name)}</span>
+                    <i aria-hidden="true"></i>
+                  </button>
+                  <div class="map-menu" role="listbox" aria-label="选择地图">
+                    ${MAP_OPTIONS.map(
+                      (map) =>
+                        `<button type="button" class="map-option ${map.id === this.selectedMapId ? 'selected' : ''}" data-map-id="${escapeHtml(
+                          map.id,
+                        )}" role="option" aria-selected="${map.id === this.selectedMapId ? 'true' : 'false'}">
+                          <span class="map-option-mark" aria-hidden="true"></span>
+                          <span class="map-option-name">${escapeHtml(map.name)}</span>
+                          ${map.id === this.selectedMapId ? '<b>当前</b>' : ''}
+                        </button>`,
+                    ).join('')}
+                  </div>
+                </div>`
+              : ''
+          }
           <div class="lobby-players">${players}</div>
           <div class="row">
             ${isHost ? '<button id="ai" class="secondary">+ 添加电脑</button>' : ''}
@@ -1715,11 +1751,35 @@ class App {
         </div>`;
       if (isHost) {
         modal.querySelector<HTMLButtonElement>('#ai')!.onclick = () => this.net.send({ type: 'addAI' });
+        const mapPicker = modal.querySelector<HTMLElement>('#map-picker');
+        const mapTrigger = modal.querySelector<HTMLButtonElement>('#map-select');
+        if (mapPicker && mapTrigger) {
+          const setOpen = (open: boolean) => {
+            mapPicker.classList.toggle('open', open);
+            modal.classList.toggle('map-menu-open', open);
+            mapTrigger.setAttribute('aria-expanded', String(open));
+          };
+          mapTrigger.onclick = (e) => {
+            e.stopPropagation();
+            setOpen(!mapPicker.classList.contains('open'));
+          };
+          for (const option of modal.querySelectorAll<HTMLButtonElement>('.map-option')) {
+            option.onclick = (e) => {
+              e.stopPropagation();
+              this.selectedMapId = safeMapId(option.dataset.mapId ?? null);
+              localStorage.setItem('eldorado.mapId', this.selectedMapId);
+              this.renderLobby();
+            };
+          }
+          modal.addEventListener('click', (e) => {
+            if (!mapPicker.contains(e.target as Node)) setOpen(false);
+          });
+        }
         const startBtn = modal.querySelector<HTMLButtonElement>('#start');
         if (startBtn)
           startBtn.onclick = () => {
             this.beginStarting(); // optimistic freeze covers the server round-trip
-            this.net.send({ type: 'startGame' });
+            this.net.send({ type: 'startGame', mapId: this.selectedMapId });
           };
       }
     }
@@ -1735,7 +1795,7 @@ class App {
     if (p.finished) return 1;
     const finishes = s.hexes.some((h) => h.terrain === 'eldorado')
       ? s.hexes.filter((h) => h.terrain === 'eldorado')
-      : s.hexes.filter((h) => h.terrain === 'finish');
+      : s.hexes.filter((h) => isFinishEntrance(h));
     const starts = s.hexes.filter((h) => h.terrain === 'start');
     if (!finishes.length) return 0;
     const toFinish = (pos: Axial) => Math.min(...finishes.map((f) => distance(pos, f)));
@@ -1878,7 +1938,7 @@ class App {
       const def = getDef(pile.defId);
       const sub = def.kind === 'action' ? '行动牌' : def.power ? `力量 ${def.power}` : '';
       const cls = locked ? (canPromote ? 'promotable' : 'upcoming') : pile.count === 0 ? 'sold' : '';
-      const left = locked ? (canPromote ? '补位' : '候补') : `×${pile.count}`;
+      const left = locked ? (canPromote ? '可买' : '候补') : `×${pile.count}`;
       const card = el(
         'div',
         `shop-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${this.marketPreviewDefId === pile.defId ? 'previewing' : ''} ${cls}`,
@@ -1891,7 +1951,7 @@ class App {
         card.onclick = () => this.previewMarketCard(pile.defId);
       } else if (freeTakeAction && myTurn && pile.count > 0) {
         card.onclick = () => this.onMarketClick(pile.defId);
-      } else if (locked && canPromote) card.onclick = () => this.promoteMarket(pile.defId);
+      } else if (locked && canPromote) card.onclick = () => this.onMarketClick(pile.defId);
       else if (!locked && pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
       this.attachPreview(card, pile.defId);
       this.shopEls.set(pile.defId, card);
@@ -1899,13 +1959,13 @@ class App {
     };
     const bought = myTurn && !!s.turn?.hasBought;
     const marketTitle = needsPromotion
-      ? canPromote ? '选择候补补位' : '待下一位补位'
+      ? canPromote ? '在售有空位' : '候补市场'
       : bought ? '本回合已购买' : '在售';
     market.innerHTML = `<h3>市场 · ${marketTitle}</h3>`;
     for (const pile of onBoard) market.appendChild(shopCard(pile, false));
     if (upcoming.length) {
       const sub = el('h3', '');
-      sub.textContent = `${canPromote ? '可补位' : '候补市场'} · ${upcoming.length}`;
+      sub.textContent = `${canPromote ? '候补可买' : '候补市场'} · ${upcoming.length}`;
       sub.style.marginTop = '14px';
       market.appendChild(sub);
       for (const pile of upcoming) market.appendChild(shopCard(pile, true));
@@ -2085,7 +2145,7 @@ class App {
     }
     if (this.selected.size > 0) return `<b>已选手牌</b><span>${this.selected.size} 张可用于行动</span>`;
     if (myTurn && !s.turn?.hasBought && this.marketNeedsPromotion(s)) {
-      return '<b>市场补位</b><span>从候补市场选择 1 类</span>';
+      return '<b>市场有空位</b><span>可买在售牌，或选择候补牌</span>';
     }
     return '<b>你的回合</b><span>选择手牌或目标地形</span>';
   }
@@ -2305,10 +2365,15 @@ class App {
     if (!me) return '没有找到你的棋子。';
     if (this.mode === 'clear') return '你正在清除地形，点击手牌支付费用。点击地形只会固定说明。';
     if (this.mode === 'remove') return '正在处理行动牌摸牌后的移除选择，完成后才能继续执行地形行动。';
+    if (this.nativeActionCardId) {
+      return this.canUseNativeOn(hex)
+        ? '原住民向导可以无视此格地形需求，点击即可移动到这里。'
+        : '原住民向导只能移动到可到达、未被其他玩家占用的相邻格；未移除的连接地形仍会阻挡。';
+    }
     if (hex.terrain === 'mountain') return '山地不可进入，只能绕行。';
     if (!isAdjacent(me.position, hex)) return '此格不与当前棋子相邻，暂时不能行动。';
     const current = this.hexAt(me.position);
-    if (hex.terrain === 'eldorado' && current?.terrain !== 'finish') return '必须先进入相邻的黄金城入口，才能进入黄金城。';
+    if (hex.terrain === 'eldorado' && !isFinishEntrance(current)) return '必须先进入相邻的黄金城入口，才能进入黄金城。';
     if (hex.occupant && hex.occupant !== me.id) return '此格已有其他玩家，当前不能进入。';
     if (this.canStepToEldorado(hex)) return '点击即可进入黄金城，无需出牌。';
     if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') {
@@ -2407,7 +2472,7 @@ const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
     name: '山地',
     icon: '⛰',
     description: '陡峭岩脊和高地阻隔路线，是地图上的天然屏障。',
-    rule: '山地不可进入，也不能被清除，只能绕行。',
+    rule: '普通移动不能进入山地；原住民向导可以无视地形移动到相邻山地。',
   },
   start: {
     name: '起点营地',
@@ -2430,6 +2495,15 @@ const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
 };
 
 function terrainInfo(hex: Hex): TerrainInfo {
+  if (hex.finishEntrance && hex.terrain !== 'finish') {
+    const base = TERRAIN_INFO[hex.terrain];
+    return {
+      ...base,
+      name: `${base.name}入口`,
+      description: `${base.description} 这里也是黄金城前的入口格。`,
+      rule: `${terrainCostText(hex)}。先进入此入口，再从入口踏上黄金城主体，才算抵达终点。`,
+    };
+  }
   if (hex.terrain !== 'finish') return TERRAIN_INFO[hex.terrain];
   const symbol = hex.reqSymbol ? `${SYMBOL_GLYPH[hex.reqSymbol]}${SYMBOL_LABEL[hex.reqSymbol]}` : '任意移动力';
   return {
@@ -2458,7 +2532,7 @@ function blockadeInfo(blockade: Blockade): TerrainInfo {
 }
 
 function terrainCostText(hex: Hex): string {
-  if (hex.terrain === 'mountain') return '不可进入';
+  if (hex.terrain === 'mountain') return '普通移动不可进入';
   if (hex.terrain === 'eldorado') return '无需出牌';
   if (hex.terrain === 'rubble') return `清除费用 ${hex.cost} 张手牌`;
   if (hex.terrain === 'basecamp') return `移除费用 ${hex.cost} 张手牌`;
@@ -2495,7 +2569,7 @@ function cardDescription(defId: string): string {
       case 'take_free':
         return '免费获得市场上任意一张牌，置入弃牌堆。';
       case 'native':
-        return '将棋子移动到相邻 1 格，无视该格地形需求（可直接拆除路障）。';
+        return '将棋子移动到相邻 1 格，无视该格地形需求（包括山地；未移除的连接地形仍会阻挡）。';
       default:
         return '行动牌。';
     }

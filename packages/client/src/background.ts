@@ -180,7 +180,7 @@ export class BoardBackground {
       minZ = Math.min(minZ, p.z);
       maxZ = Math.max(maxZ, p.z);
       if (hex.terrain === 'start') starts.push(p);
-      if (hex.terrain === 'finish') finishes.push(p);
+      if (hex.finishEntrance || hex.terrain === 'finish') finishes.push(p);
     }
 
     if (!Number.isFinite(minX)) return null;
