@@ -1,6 +1,5 @@
 import './style.css';
 import { Net } from './net.js';
-import { Board } from './board.js';
 import { cardFace } from './cardFaces.js';
 import {
   getDef,
@@ -24,11 +23,34 @@ import {
   type GameEvent,
 } from '@eldorado/core';
 
+const SERVICE_WORKER_READY_TIMEOUT_MS = 45000;
+type BoardConstructor = typeof import('./board.js').Board;
+type BoardInstance = InstanceType<BoardConstructor>;
+
+const TERRAIN_ASSET_URLS = [
+  '/textures/terrain-realistic/green.jpg',
+  '/textures/terrain-realistic/blue.jpg',
+  '/textures/terrain-realistic/yellow.jpg',
+  '/textures/terrain-realistic/rubble.jpg',
+  '/textures/terrain-realistic/basecamp.jpg',
+  '/textures/terrain-realistic/mountain.jpg',
+  '/textures/terrain-realistic/start.jpg',
+  '/textures/terrain-realistic/finish.jpg',
+  '/textures/terrain-realistic/eldorado.jpg',
+];
+
+const PWA_ICON_ASSET_URLS = [
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-512-maskable.png',
+];
+
 const BOOT_ASSET_URLS = [
   '/ui/loading-table.jpg',
   '/ui/lobby-hero.jpg',
   '/ui/lobby-props.jpg',
   '/textures/golden-city-ground.jpg',
+  ...TERRAIN_ASSET_URLS,
   '/cards/card-back.jpg',
   '/card-icons/machete.jpg',
   '/card-icons/paddle.jpg',
@@ -37,6 +59,7 @@ const BOOT_ASSET_URLS = [
   '/card-icons/remove.jpg',
   '/card-icons/single_use.jpg',
   '/card-icons/native-move.png',
+  ...PWA_ICON_ASSET_URLS,
   ...Object.keys(CARD_DEFS).map((id) => `/cards/${id}.jpg`),
 ];
 
@@ -116,7 +139,7 @@ type ActionLogEntry = {
 
 class App {
   net = new Net();
-  board: Board;
+  board: BoardInstance;
   you: string | null = null;
   room: RoomView | null = null;
   state: GameState | null = null;
@@ -171,12 +194,12 @@ class App {
   private actionLogSeq = 0;
   private knownCardDefs = new Map<string, string>();
 
-  constructor() {
+  constructor(BoardClass: BoardConstructor) {
     this.setupMobileLayoutClasses();
     document.body.appendChild(this.preview);
     document.body.appendChild(this.terrainPanel);
-    this.board = new Board(document.getElementById('board') as HTMLCanvasElement);
-    (window as unknown as { __board: Board }).__board = this.board;
+    this.board = new BoardClass(document.getElementById('board') as HTMLCanvasElement);
+    (window as unknown as { __board: BoardInstance }).__board = this.board;
     (window as unknown as { __app: App }).__app = this;
     this.board.setViewMode(this.viewMode);
     this.board.onHexHover = (c) => this.onHexHover(c);
@@ -2778,9 +2801,14 @@ function escapeHtml(s: string): string {
 }
 
 async function preloadBootAssets(): Promise<void> {
+  setBootProgress(2, '缓存离线资源');
+  const swStatus = await waitForServiceWorkerPrecache();
   const unique = [...new Set(BOOT_ASSET_URLS)];
   const total = unique.length;
-  setBootProgress(3, '准备资源');
+  const waitedForSw = swStatus !== 'skipped';
+  const imageStart = waitedForSw ? 36 : 8;
+  const imageRange = waitedForSw ? 56 : 84;
+  setBootProgress(imageStart, swStatus === 'ready' ? '离线资源已缓存' : '装载本地资源');
   let done = 0;
   await Promise.all(
     unique.map((url) =>
@@ -2788,7 +2816,7 @@ async function preloadBootAssets(): Promise<void> {
         .catch(() => undefined)
         .finally(() => {
           done += 1;
-          setBootProgress(5 + Math.round((done / total) * 90), done < total ? '装载图像' : '整理界面');
+          setBootProgress(imageStart + Math.round((done / total) * imageRange), done < total ? '装载图像' : '整理界面');
         }),
     ),
   );
@@ -2797,10 +2825,55 @@ async function preloadBootAssets(): Promise<void> {
 function preloadImage(url: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve();
+    img.decoding = 'async';
+    img.onload = () => {
+      if (img.decode) void img.decode().catch(() => undefined).finally(() => resolve());
+      else resolve();
+    };
     img.onerror = () => reject(new Error(url));
     img.src = url;
   });
+}
+
+async function waitForServiceWorkerPrecache(): Promise<'ready' | 'timeout' | 'skipped'> {
+  if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return 'skipped';
+  const startedAt = performance.now();
+  const timer = window.setInterval(() => {
+    const elapsed = performance.now() - startedAt;
+    const ratio = Math.min(1, elapsed / SERVICE_WORKER_READY_TIMEOUT_MS);
+    const eased = 1 - Math.pow(1 - ratio, 3);
+    setBootProgress(2 + Math.round(eased * 33), '缓存离线资源');
+  }, 250);
+  const ready = await withTimeout(
+    navigator.serviceWorker.ready.then(() => true).catch(() => false),
+    SERVICE_WORKER_READY_TIMEOUT_MS,
+    false,
+  );
+  window.clearInterval(timer);
+  return ready ? 'ready' : 'timeout';
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(fallback), ms);
+    void promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        window.clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
+async function preloadGameEngine(): Promise<BoardConstructor> {
+  setBootProgress(94, '装载3D引擎');
+  const mod = await import('./board.js');
+  setBootProgress(98, '初始化界面');
+  return mod.Board;
 }
 
 function setBootProgress(value: number, text: string): void {
@@ -2823,7 +2896,8 @@ function hideBootloader(): void {
 
 async function start(): Promise<void> {
   await preloadBootAssets();
-  new App();
+  const BoardClass = await preloadGameEngine();
+  new App(BoardClass);
   requestAnimationFrame(() => hideBootloader());
 }
 
