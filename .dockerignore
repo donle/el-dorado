@@ -1,0 +1,29 @@
+# git metadata (clone 会带 .git 进 build context，省掉几百 MB)
+.git
+
+# 依赖与构建产物
+node_modules
+**/node_modules
+dist
+**/dist
+
+# 体积大且不需要进镜像的目录
+docs
+**/docs
+
+# 环境变量与日志
+.env
+.env.*
+!.env.example
+*.log
+
+# CI / 本地一键部署脚本（构建用不到）
+.github
+scripts
+
+# 杂项
+coverage
+**/coverage
+playwright-report
+test-results
+.DS_Store
