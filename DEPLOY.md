@@ -323,14 +323,9 @@ chmod +x /usr/local/bin/caddy
 
 systemd unit 文件参考：https://github.com/caddyserver/caddy/tree/master/dist/init/linux-systemd
 
-### 7.4 pnpm 11 + Docker build 的注意事项
+### 7.4 pnpm 版本选择
 
-`package.json` 里有 `"packageManager": "pnpm@11.5.0"`，pnpm 在 Docker 内可能触发自举导致 EPERM。**Dockerfile 已用 `corepack prepare pnpm@11.5.0 --activate` 显式激活**，避开自举。如果还报错，参考：
-
-```dockerfile
-RUN pnpm install --no-lockfile --filter @eldorado/client... \
-    --config.strict-dep-builds=false --ignore-scripts 2>&1 | tail -20
-```
+实测 pnpm 11.x 在 CentOS 7 + Docker 内 `ERR_SQLITE_ERROR: disk I/O error`（better-sqlite3 native binding 不兼容）。Dockerfile 改用 pnpm 10.14.0，跟 double-jump 同款。同时去掉了根 `package.json` 的 `packageManager` 字段（pnpm 自举的另一个坑，参考 DEPLOY.md §7.5(b)）。
 
 ### 7.5 el-dorado 根 `package.json` 名字是 `el-dorando`（typo）
 

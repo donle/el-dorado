@@ -9,7 +9,7 @@
 
 # ---------- Stage 1: build client ----------
 FROM node:22-alpine AS client-build
-RUN corepack enable && corepack prepare pnpm@11.5.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 WORKDIR /build
 
 # 京东云 2GB 内存 + 容器内可用更少。vite build 时 Node 默认 1.5GB heap 会 OOM，
@@ -39,7 +39,7 @@ RUN pnpm --filter @eldorado/client run build
 
 # ---------- Stage 2: server deps ----------
 FROM node:22-alpine AS server-deps
-RUN corepack enable && corepack prepare pnpm@11.5.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 WORKDIR /build
 
 ENV NODE_OPTIONS=--max-old-space-size=1024
