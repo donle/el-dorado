@@ -657,6 +657,66 @@ button:disabled::after { display: none; }
   background: rgba(255,255,255,0.035); border: 1px solid rgba(246,214,145,0.1); border-radius: 8px;
 }
 body.mobile-device .action-log { display: none; }
+.mobile-log-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 26;
+  display: grid;
+  place-items: center;
+  padding: calc(18px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-right))
+    calc(18px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
+  pointer-events: auto;
+  background: rgba(3, 7, 7, 0.32);
+  animation: scrim-in 0.16s ease both;
+}
+body.mobile-device .action-log.mobile-log-dialog {
+  display: block;
+  position: relative;
+  left: auto;
+  right: auto;
+  top: auto;
+  bottom: auto;
+  width: min(420px, calc(100vw - 28px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  max-height: min(58vh, 430px);
+  padding: 14px 12px 12px;
+  border-radius: 12px;
+  z-index: 27;
+}
+body.mobile-device .mobile-log-dialog h3 {
+  margin-right: 38px;
+}
+body.mobile-device .mobile-log-dialog .action-log-list {
+  height: auto;
+  max-height: min(44vh, 320px);
+  padding-right: 2px;
+}
+.mobile-log-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 7px;
+  font-size: 13px;
+}
+body.mobile-device #bootloader::before,
+body.mobile-device #lobby::before {
+  animation: none;
+  will-change: auto;
+  opacity: 0.5;
+}
+body.mobile-device .panel,
+body.mobile-device .card-preview,
+body.mobile-device .terrain-panel,
+body.mobile-device .settings-panel,
+body.mobile-device .modal {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 
 .toast { position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
   background: #9f3d31; color: #fff; padding: 8px 18px; border-radius: 8px; font-size: 13px;
@@ -1169,7 +1229,24 @@ body.mobile-device .action-log { display: none; }
     z-index: 30; padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
   }
   .players-panel.open, .market-panel.open { transform: translateY(0); }
-  .market-panel { overflow-y: auto; }
+  /* The market drawer is the only thing between the board and the hand
+     strip when it's open — the action-bar gets hidden so the hand area is
+     left completely unobstructed (the user's requirement: "手牌不可被覆盖").
+     Buy/promote confirm/cancel lives inside the drawer as a sticky footer
+     (rendered by main.ts), so the user can still confirm without the
+     action-bar. The drawer ends above the hand area
+     (dock height ~145px on mobile portrait + 10px gap). */
+  .market-panel {
+    overflow-y: auto;
+    bottom: calc(155px + env(safe-area-inset-bottom));
+    max-height: calc(100vh - 170px - env(safe-area-inset-bottom));
+    transform: translateY(calc(100% + 170px + env(safe-area-inset-bottom)));
+  }
+  .market-panel.open { transform: translateY(0); }
+  /* Hide the action-bar while the drawer is open on mobile — it would
+     otherwise sit between the drawer and the hand cards and steal vertical
+     space the user wants for the hand strip. */
+  .market-panel.open ~ .action-bar { display: none; }
 
   /* Toggle bar, top-right under the status bar. */
   .mobile-toolbar { display: flex; gap: 8px; position: absolute; top: 54px; right: 8px; z-index: 31; }
@@ -1222,13 +1299,106 @@ body.mobile-device .action-log { display: none; }
       inset 0 -1px 0 rgba(0,0,0,0.12);
   }
 
-  /* Smaller hover/pinned preview so it doesn't swamp the screen. */
-  .card-preview { width: 200px; padding: 12px; }
-  .card-preview .cp-art { width: 132px; height: 184px; }
+  /* ---------- Mobile card preview (compact, no big art) ----------
+     The preview is only used for hand-card hover-pinning and the long-press
+     "see details" affordance on market cards. The buy/promote flow runs
+     through the drawer footer, so the floating preview is hidden while a
+     buy target is selected. */
+  .card-preview { width: 168px; padding: 8px 10px 10px;
+                  z-index: 32; }
+  .card-preview .cp-art { display: none; }   /* save ~200px height */
+  .card-preview .cp-title { font-size: 13px; }
+  .card-preview .cp-type  { font-size: 10px; margin-bottom: 6px; }
+  .card-preview .cp-desc  { font-size: 11.5px; line-height: 1.4; }
+  .card-preview .cp-foot  { margin-top: 8px; padding-top: 6px; font-size: 11.5px; }
+  .card-preview .cp-cost b { font-size: 14px; }
+  .preview-select-card { min-height: 36px; font-size: 12.5px; margin-top: 8px; }
 
+  /* The selected/target shop card in the drawer needs a stronger pulse so the
+     user can see at a glance which row the action-bar is referring to. */
+  .market-panel.open .shop-card.target {
+    border-color: var(--gold);
+    background: rgba(255,209,102,0.16);
+    box-shadow:
+      0 0 0 1px rgba(255,209,102,0.55),
+      0 0 18px rgba(255,209,102,0.32);
+  }
+  .market-panel.open .shop-card.target .price .left {
+    color: var(--gold); font-weight: 800;
+  }
+  .market-detail {
+    grid-column: 1 / -1;
+    margin: 1px 0 8px;
+    padding: 9px 10px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(69,213,193,0.24);
+    background:
+      linear-gradient(180deg, rgba(69,213,193,0.12), rgba(255,255,255,0.035));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.07);
+  }
+  .market-detail-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; min-width: 0;
+  }
+  .market-detail-head b {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--gold); font-size: 12.5px;
+  }
+  .market-detail-head span {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--muted); font-size: 10.5px;
+  }
+  .market-detail-desc {
+    margin-top: 5px;
+    color: var(--ink);
+    font-size: 11.5px;
+    line-height: 1.42;
+  }
+
+  /* In-drawer footer: shows buy/promote info + cancel + confirm while the
+     user is mid-buy. Sticks to the bottom of the drawer (which scrolls
+     independently of the page), so the confirm pair stays in reach without
+     covering the hand cards below the drawer. */
+  .market-panel .drawer-footer {
+    position: sticky;
+    bottom: -16px;
+    margin: 14px -14px -16px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    background:
+      linear-gradient(180deg, rgba(20,24,16,0.55), rgba(14,18,12,0.94));
+    border-top: 1px solid rgba(255,209,102,0.34);
+    box-shadow: 0 -8px 22px rgba(0,0,0,0.45);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .market-panel .drawer-footer-info {
+    min-width: 0; overflow: hidden;
+    display: flex; flex-direction: column; gap: 2px;
+    font-size: 12px; color: var(--ink);
+  }
+  .market-panel .drawer-footer-info b,
+  .market-panel .drawer-footer-info span {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .market-panel .drawer-footer-info b { color: var(--gold); font-weight: 800; }
+  .market-panel .drawer-footer-info span { color: var(--gold); }
+  .market-panel .drawer-footer-cancel {
+    min-height: 36px; padding: 6px 12px; font-size: 12.5px;
+    letter-spacing: 0;
+  }
+  .market-panel .drawer-footer-confirm {
+    min-height: 36px; padding: 6px 14px; font-size: 12.5px;
+    letter-spacing: 0;
+  }
+
+  /* Keep terrain details clear of the market drawer and hand stack. */
   .terrain-panel {
-    left: 8px; right: 8px; top: auto; bottom: calc(208px + env(safe-area-inset-bottom));
-    width: auto; max-height: 38vh; padding: 12px; border-radius: 12px;
+    left: 8px; right: 8px; top: auto; bottom: calc(340px + env(safe-area-inset-bottom));
+    width: auto; max-height: 30vh; padding: 12px; border-radius: 12px;
   }
   .action-log { display: none; }
   .terrain-head { grid-template-columns: 36px 1fr 28px; }
@@ -1648,24 +1818,29 @@ body.mobile-device .action-log { display: none; }
   }
   body.mobile-device .market-panel {
     position: fixed;
-    top: calc(52px + env(safe-area-inset-top));
-    right: calc(6px + env(safe-area-inset-right));
-    bottom: calc(6px + env(safe-area-inset-bottom));
-    left: auto;
-    width: clamp(238px, 34vw, 302px);
-    max-height: none;
-    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
-    border-radius: 10px;
-    transform: translateX(calc(100% + 14px));
+    top: auto;
+    right: calc(8px + env(safe-area-inset-right));
+    bottom: calc(112px + env(safe-area-inset-bottom));
+    left: calc(8px + env(safe-area-inset-left));
+    width: auto;
+    max-height: min(58vh, calc(100vh - 172px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+    padding: 11px 10px 0;
+    border-radius: 12px 12px 0 0;
+    transform: translateY(calc(100% + 132px + env(safe-area-inset-bottom)));
     transition: transform 0.22s ease;
     z-index: 30;
     overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    gap: 5px 7px;
   }
   body.mobile-device .market-panel.open {
-    transform: translateX(0);
+    transform: translateY(0);
   }
   body.mobile-device .market-panel h3 {
-    margin-bottom: 7px;
+    grid-column: 1 / -1;
+    margin: 1px 0 3px;
     font-size: 11px;
   }
   body.mobile-device .shop-card {
@@ -1673,7 +1848,7 @@ body.mobile-device .action-log { display: none; }
     grid-template-columns: 26px 1fr auto;
     gap: 7px;
     padding: 5px 8px;
-    margin-bottom: 5px;
+    margin-bottom: 0;
   }
   body.mobile-device .shop-card .ic {
     width: 26px;
@@ -1688,6 +1863,38 @@ body.mobile-device .action-log { display: none; }
   }
   body.mobile-device .shop-card .price .c {
     font-size: 12px;
+  }
+  body.mobile-device .market-panel .drawer-footer {
+    grid-column: 1 / -1;
+    bottom: 0;
+    margin: 6px -10px 0;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 7px;
+  }
+  body.mobile-device .market-panel .drawer-footer-info {
+    font-size: 11px;
+  }
+  body.mobile-device .market-detail {
+    margin: 0 0 5px;
+    padding: 7px 8px 8px;
+  }
+  body.mobile-device .market-detail-head b {
+    font-size: 11.5px;
+  }
+  body.mobile-device .market-detail-head span {
+    font-size: 9.5px;
+  }
+  body.mobile-device .market-detail-desc {
+    margin-top: 4px;
+    font-size: 10.5px;
+    line-height: 1.35;
+  }
+  body.mobile-device .market-panel .drawer-footer-cancel,
+  body.mobile-device .market-panel .drawer-footer-confirm {
+    min-height: 32px;
+    padding: 5px 10px;
+    font-size: 11px;
   }
   body.mobile-device .action-bar {
     left: calc(8px + env(safe-area-inset-left));
@@ -1723,9 +1930,13 @@ body.mobile-device .action-log { display: none; }
     border-radius: 4px;
   }
   body.mobile-device .card-preview {
-    z-index: 42;
+    z-index: 72;
     width: 164px;
     padding: 7px;
+  }
+  body.mobile-device .card-preview.from-log,
+  body.mobile-device .terrain-panel.from-log {
+    z-index: 78;
   }
   body.mobile-device .card-preview .cp-art {
     width: 76px;
@@ -1756,6 +1967,66 @@ body.mobile-device .action-log { display: none; }
     margin-top: 6px;
     padding: 4px 8px;
     font-size: 10.5px;
+  }
+  body.mobile-device .terrain-panel {
+    left: calc(8px + env(safe-area-inset-left));
+    right: auto;
+    top: calc(52px + env(safe-area-inset-top));
+    bottom: auto;
+    width: 164px;
+    max-height: calc(100vh - 160px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+    padding: 7px;
+    border-radius: 10px;
+    z-index: 72;
+  }
+  body.mobile-device .terrain-head {
+    grid-template-columns: 30px minmax(0, 1fr) 24px;
+    gap: 7px;
+  }
+  body.mobile-device .terrain-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    font-size: 16px;
+  }
+  body.mobile-device .terrain-kicker {
+    font-size: 8.5px;
+    letter-spacing: 0;
+  }
+  body.mobile-device .terrain-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12.5px;
+  }
+  body.mobile-device .terrain-close {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    font-size: 11px;
+  }
+  body.mobile-device .terrain-desc,
+  body.mobile-device .terrain-meta {
+    display: none;
+  }
+  body.mobile-device .terrain-rule {
+    margin-top: 7px;
+    padding: 7px 8px;
+    border-radius: 7px;
+    font-size: 10.5px;
+    line-height: 1.35;
+  }
+  body.mobile-device .terrain-rule b {
+    margin-bottom: 2px;
+    font-size: 10px;
+  }
+  body.mobile-device .terrain-status {
+    margin-top: 7px;
+    padding-left: 8px;
+    border-left-width: 2px;
+    font-size: 10.5px;
+    line-height: 1.35;
   }
   body.mobile-device .dock {
     gap: 6px;
@@ -2023,19 +2294,33 @@ body.mobile-device .action-log { display: none; }
   }
   body.mobile-device.mobile-portrait .terrain-panel {
     left: calc(8px + env(safe-area-inset-left));
-    right: calc(8px + env(safe-area-inset-right));
-    top: auto;
-    bottom: calc(180px + env(safe-area-inset-bottom));
-    width: auto;
-    max-height: min(30vh, 230px);
-    padding: 10px;
+    right: auto;
+    top: calc(174px + env(safe-area-inset-top));
+    bottom: auto;
+    width: min(188px, calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    max-height: calc(100vh - 358px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    padding: 8px;
     border-radius: 10px;
+  }
+  body.mobile-device.mobile-portrait .market-panel {
+    left: calc(7px + env(safe-area-inset-left));
+    right: calc(7px + env(safe-area-inset-right));
+    bottom: calc(116px + env(safe-area-inset-bottom));
+    max-height: min(62vh, calc(100vh - 214px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+    transform: translateY(calc(100% + 136px + env(safe-area-inset-bottom)));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  body.mobile-device.mobile-portrait .market-panel.open {
+    transform: translateY(0);
+  }
+  body.mobile-device.mobile-portrait .market-panel .drawer-footer {
+    grid-template-columns: minmax(0, 1fr) minmax(76px, auto) minmax(92px, auto);
   }
   body.mobile-device.mobile-portrait .card-preview:not(.hidden) {
     left: calc(8px + env(safe-area-inset-left)) !important;
-    top: calc(142px + env(safe-area-inset-top)) !important;
+    top: calc(174px + env(safe-area-inset-top)) !important;
     width: min(188px, calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right)));
-    max-height: calc(100vh - 326px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(100vh - 358px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
     overflow-y: auto;
     padding: 8px;
   }
@@ -2051,10 +2336,119 @@ body.mobile-device .action-log { display: none; }
     font-size: 10.5px;
     line-height: 1.32;
   }
-  body.mobile-device.mobile-portrait .market-panel,
   body.mobile-device.mobile-portrait .players-panel {
     max-height: 64vh;
   }
+}
+
+/* Turn intro: a short full-screen cue when control passes to the local player. */
+.turn-intro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(8px, 1.8vw, 14px);
+  overflow: hidden;
+  pointer-events: none;
+  background: rgba(3, 7, 7, 0.18);
+  animation: turn-intro-mask 1.9s ease both;
+}
+.turn-intro-panel {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  width: min(680px, calc(100vw - 38px));
+  aspect-ratio: 3 / 2;
+  padding: clamp(24px, 5vw, 42px);
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(255,209,102,0.3);
+  background:
+    linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.28)),
+    url('/ui/turn-intro-tomb.jpg') center / cover no-repeat;
+  box-shadow:
+    0 18px 54px rgba(0,0,0,0.42),
+    0 0 0 1px rgba(69,213,193,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+  animation: turn-intro-panel 1.9s cubic-bezier(.2,.9,.14,1) both;
+}
+.turn-intro-panel::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  z-index: -1;
+  border-radius: 20px;
+  background:
+    conic-gradient(from 0deg, transparent 0 12%, rgba(255,209,102,0.72) 16%, transparent 23% 52%, rgba(69,213,193,0.5) 57%, transparent 64% 100%);
+  filter: blur(6px);
+  opacity: 0;
+  animation: turn-intro-ring 1.9s ease both;
+}
+.turn-intro-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse at center, rgba(0,0,0,0.08) 0 24%, rgba(0,0,0,0.18) 54%, rgba(0,0,0,0.48) 100%),
+    linear-gradient(180deg, rgba(0,0,0,0.28), transparent 34%, rgba(0,0,0,0.42));
+}
+.turn-intro-mark {
+  position: relative;
+  z-index: 1;
+  width: min(280px, 62vw);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,209,102,0.78), transparent);
+  box-shadow: 0 0 16px rgba(255,209,102,0.32);
+  animation: turn-intro-line 1.9s ease both;
+}
+.turn-intro-title {
+  position: relative;
+  z-index: 1;
+  color: var(--gold);
+  font-size: clamp(36px, 8vw, 76px);
+  line-height: .96;
+  font-weight: 900;
+  letter-spacing: 0;
+  white-space: nowrap;
+  text-shadow:
+    0 3px 16px rgba(0,0,0,0.78),
+    0 0 22px rgba(255,209,102,0.32);
+}
+.turn-intro-sub {
+  position: relative;
+  z-index: 1;
+  color: rgba(255,245,202,0.84);
+  font-size: clamp(12px, 2.2vw, 16px);
+  font-weight: 700;
+  letter-spacing: 3px;
+  white-space: nowrap;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.72);
+}
+@keyframes turn-intro-mask {
+  0% { opacity: 0; }
+  12%, 78% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes turn-intro-panel {
+  0% { opacity: 0; transform: translateY(10px) scale(.985); }
+  16%, 76% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-6px) scale(.99); }
+}
+@keyframes turn-intro-ring {
+  0% { opacity: 0; transform: rotate(-30deg) scale(.98); }
+  18% { opacity: .82; }
+  72% { opacity: .56; }
+  100% { opacity: 0; transform: rotate(190deg) scale(1.02); }
+}
+@keyframes turn-intro-line {
+  0% { opacity: 0; transform: scaleX(.28); }
+  20%, 72% { opacity: 1; transform: scaleX(1); }
+  100% { opacity: 0; transform: scaleX(.72); }
 }
 
 /* Launch countdown: focus the effect on the changing number, not the backdrop. */

@@ -61,9 +61,9 @@ function draw(terrain: Terrain): HTMLCanvasElement {
 
   switch (terrain) {
     case 'green': {
-      base(ctx, '#3f9457', '#2f7a45');
-      speckle(ctx, rnd, 'rgba(28,92,52,0.55)', 26, 7); // leafy clumps
-      speckle(ctx, rnd, 'rgba(120,200,130,0.35)', 18, 4);
+      base(ctx, '#55b96b', '#3f9d58');
+      speckle(ctx, rnd, 'rgba(27,112,55,0.48)', 26, 7); // leafy clumps
+      speckle(ctx, rnd, 'rgba(154,230,144,0.42)', 20, 4);
       break;
     }
     case 'blue': {

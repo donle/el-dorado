@@ -16,13 +16,16 @@ import { BoardBackground } from './background.js';
 
 const HEX_SIZE = 1;
 const GAP = 0.94;
-const MAX_PIXEL_RATIO = 1.25;
-const SELF_MARKER_FRAME_MS = 1000 / 12;
+const DESKTOP_MAX_PIXEL_RATIO = 1.25;
+const LOW_GPU_MAX_PIXEL_RATIO = 1;
+const IDLE_ANIMATION_FRAME_MS = 1000 / 8;
 const HIDDEN_TAB_FRAME_MS = 1000;
 const TOP_DOWN_POLAR = 0.001;
 const START_CONTINENT_DISTANCE_SCALE = 1.22;
 const START_CAMERA_ANIMATION_MS = 1300;
 const TERMINAL_HEIGHT = 0.68;
+const TERRAIN_DEMAND_DARKEN_STEP = 0.22;
+const TERRAIN_DEMAND_DARKEN_MIN = 0.38;
 const COST_LABEL_GEO = new THREE.PlaneGeometry(0.92, 0.92).rotateX(-Math.PI / 2);
 const COST_LABEL_SIZE = 160;
 const COST_ICON_DRAW_SIZE = 60;
@@ -146,6 +149,11 @@ function terrainHeight(t: Terrain, cost: number): number {
   return 0.3 + cost * 0.12;
 }
 
+function terrainDemandShade(cost: number): number {
+  if (cost <= 1) return 1;
+  return Math.max(TERRAIN_DEMAND_DARKEN_MIN, 1 - (cost - 1) * TERRAIN_DEMAND_DARKEN_STEP);
+}
+
 function pawnLandingHeight(hex: Hex, terrainTop: number): number {
   return hex.terrain === 'mountain' ? terrainTop + MOUNTAIN_PAWN_LANDING_LIFT : terrainTop;
 }
@@ -153,6 +161,16 @@ function pawnLandingHeight(hex: Hex, terrainTop: number): number {
 function cameraIntroEase(t: number): number {
   const x = Math.min(1, Math.max(0, t));
   return 0.5 - Math.cos(x * Math.PI) * 0.5;
+}
+
+function isLowGpuDevice(): boolean {
+  const coarsePointer = window.matchMedia?.('(hover: none) and (pointer: coarse)').matches ?? false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && coarsePointer);
+}
+
+function maxPixelRatio(): number {
+  return isLowGpuDevice() ? LOW_GPU_MAX_PIXEL_RATIO : DESKTOP_MAX_PIXEL_RATIO;
 }
 
 function visualTerrain(t: Terrain): Terrain {
@@ -181,8 +199,8 @@ export class Board {
   private highlights = new Set<string>();
   private blockadeHighlights = new Set<string>();
   private hexGeoCache = new Map<string, THREE.CylinderGeometry>();
-  private topMaterialCache = new Map<Terrain, THREE.MeshStandardMaterial>();
-  private sideMaterialCache = new Map<Terrain, THREE.MeshStandardMaterial>();
+  private topMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
+  private sideMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
   private costLabelMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
   private costIconImageCache = new Map<CostIcon, HTMLImageElement>();
   private terminalTopMaterial: THREE.MeshStandardMaterial | null = null;
@@ -209,6 +227,7 @@ export class Board {
   private pawns = new Map<string, PawnState>();
   private pawnGlowTextureCache: THREE.CanvasTexture | null = null;
   private pawnRayTextureCache: THREE.CanvasTexture | null = null;
+  private readonly lowGpuMode = isLowGpuDevice();
   private highlightMeshes: THREE.Mesh[] = [];
   private ringGeo: THREE.BufferGeometry | null = null;
   private inspectionFillGeo = new THREE.CylinderGeometry(HEX_SIZE * 0.84, HEX_SIZE * 0.84, 0.012, 6);
@@ -276,11 +295,11 @@ export class Board {
   constructor(private canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: (window.devicePixelRatio || 1) <= 1.25,
+      antialias: (window.devicePixelRatio || 1) <= maxPixelRatio(),
       powerPreference: 'low-power',
     });
     this.renderer.autoClear = false;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPixelRatio()));
     this.renderer.shadowMap.enabled = this.realShadows;
     if (this.realShadows) this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setClearColor(0x8fb8c2);
@@ -377,10 +396,40 @@ export class Board {
     this.requestFrame();
   }
 
+  panToPlayerIfOffscreen(playerId: string | null): void {
+    if (!playerId) return;
+    const pawn = this.pawns.get(playerId);
+    if (!pawn || this.isWorldPointInView(pawn.target)) return;
+    const nextTarget = new THREE.Vector3(pawn.target.x, this.controls.target.y, pawn.target.z);
+    const delta = nextTarget.clone().sub(this.controls.target);
+    this.cameraAnimation = {
+      startedAt: performance.now(),
+      durationMs: 650,
+      fromPosition: this.camera.position.clone(),
+      toPosition: this.camera.position.clone().add(delta),
+      fromTarget: this.controls.target.clone(),
+      toTarget: nextTarget,
+    };
+    this.requestFrame();
+  }
+
   private updateSelfMarkers(): void {
     for (const [id, pawn] of this.pawns) {
       pawn.selfMarker.visible = id === this.selfPlayerId;
     }
+  }
+
+  private isWorldPointInView(point: THREE.Vector3): boolean {
+    this.camera.updateMatrixWorld(true);
+    const projected = point.clone();
+    projected.y += 0.9;
+    projected.project(this.camera);
+    return projected.z >= -1
+      && projected.z <= 1
+      && projected.x >= -0.92
+      && projected.x <= 0.92
+      && projected.y >= -0.88
+      && projected.y <= 0.88;
   }
 
   private requestFrame(delayMs = 0): void {
@@ -418,7 +467,9 @@ export class Board {
     this.renderer.clearDepth();
     this.renderer.render(this.overlayScene, this.camera);
     if (moving || cameraMoving) this.requestFrame();
-    else if (animatingSelfMarker || animatingPawnGlow) this.requestFrame(document.hidden ? HIDDEN_TAB_FRAME_MS : SELF_MARKER_FRAME_MS);
+    else if (animatingSelfMarker || animatingPawnGlow) {
+      this.requestFrame(document.hidden ? HIDDEN_TAB_FRAME_MS : IDLE_ANIMATION_FRAME_MS);
+    }
   }
 
   private stepPawns(dt: number): boolean {
@@ -460,15 +511,16 @@ export class Board {
     for (const pawn of this.pawns.values()) {
       const marker = pawn.selfMarker;
       if (!marker.visible) continue;
-      visible = true;
 
       const pulseValue = (Math.sin(t * 5.4) + 1) / 2;
       const pulse = 1 + (pulseValue - 0.5) * 0.14;
       marker.position.set(
         pawn.group.position.x,
-        pawn.group.position.y + SELF_ARROW_BASE_Y + Math.sin(t * 4.2) * SELF_ARROW_BOB,
+        pawn.group.position.y + SELF_ARROW_BASE_Y + (this.lowGpuMode ? 0 : Math.sin(t * 4.2) * SELF_ARROW_BOB),
         pawn.group.position.z,
       );
+      if (this.lowGpuMode) continue;
+      visible = true;
       marker.scale.setScalar(pulse);
 
       const arrowMat = marker.userData.arrowMat as THREE.MeshBasicMaterial | undefined;
@@ -485,6 +537,11 @@ export class Board {
     for (const pawn of this.pawns.values()) {
       const group = pawn.group.userData.turnGlow as THREE.Group | undefined;
       if (!group?.visible) continue;
+      if (this.lowGpuMode) {
+        group.scale.setScalar(1);
+        group.rotation.y = 0;
+        continue;
+      }
       visible = true;
 
       const pulse = (Math.sin(t * 3.4) + 1) / 2;
@@ -524,7 +581,7 @@ export class Board {
   private resize(): void {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPixelRatio()));
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -550,26 +607,32 @@ export class Board {
     return g;
   }
 
-  private topMaterial(terrain: Terrain): THREE.MeshStandardMaterial {
-    let mat = this.topMaterialCache.get(terrain);
+  private topMaterial(terrain: Terrain, cost: number): THREE.MeshStandardMaterial {
+    const cacheKey = `${terrain}:${Math.max(0, cost)}`;
+    let mat = this.topMaterialCache.get(cacheKey);
     if (!mat) {
+      const shade = terrainDemandShade(cost);
       mat = new THREE.MeshStandardMaterial({
         map: terrainTexture(terrain),
+        color: new THREE.Color(shade, shade, shade),
         roughness: 0.85,
       });
-      this.topMaterialCache.set(terrain, mat);
+      this.topMaterialCache.set(cacheKey, mat);
     }
     return mat;
   }
 
-  private sideMaterial(terrain: Terrain): THREE.MeshStandardMaterial {
-    let mat = this.sideMaterialCache.get(terrain);
+  private sideMaterial(terrain: Terrain, cost: number): THREE.MeshStandardMaterial {
+    const cacheKey = `${terrain}:${Math.max(0, cost)}`;
+    let mat = this.sideMaterialCache.get(cacheKey);
     if (!mat) {
+      const shade = terrainDemandShade(cost);
+      const color = new THREE.Color(SIDE_COLOR[terrain] ?? 0x445).multiplyScalar(shade);
       mat = new THREE.MeshStandardMaterial({
-        color: SIDE_COLOR[terrain] ?? 0x445,
+        color,
         roughness: 0.95,
       });
-      this.sideMaterialCache.set(terrain, mat);
+      this.sideMaterialCache.set(cacheKey, mat);
     }
     return mat;
   }
@@ -665,8 +728,8 @@ export class Board {
       const geo = this.hexGeo(`${terrain}:${h.toFixed(2)}`, h);
       const k = hexKey(hex);
       const isTerminal = terminalVisibility.terminalKeys.has(k);
-      const top = isTerminal ? PICK_MATERIAL : this.topMaterial(terrain);
-      const side = isTerminal ? PICK_MATERIAL : this.sideMaterial(terrain);
+      const top = isTerminal ? PICK_MATERIAL : this.topMaterial(terrain, hex.cost);
+      const side = isTerminal ? PICK_MATERIAL : this.sideMaterial(terrain, hex.cost);
       // CylinderGeometry material groups: [side, top, bottom]
       const mesh = new THREE.Mesh(geo, [side, top, side]);
       const { x, z } = this.worldXZ(hex);
@@ -1065,49 +1128,53 @@ export class Board {
     ring.renderOrder = 37;
 
     const rays: THREE.Mesh[] = [];
-    for (let i = 0; i < 3; i++) {
-      const baseRotation = (Math.PI * 2 * i) / 3 + 0.24;
-      const rayMat = new THREE.MeshBasicMaterial({
-        map: this.pawnRayTexture(),
-        color: tint,
-        transparent: true,
-        opacity: 0.36,
-        depthWrite: false,
-        depthTest: true,
-        toneMapped: false,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-      });
-      const ray = new THREE.Mesh(ACTIVE_PAWN_RAY_GEO, rayMat);
-      ray.position.y = 0.66;
-      ray.rotation.y = baseRotation;
-      ray.renderOrder = 38 + i;
-      ray.userData.baseRotation = baseRotation;
-      rays.push(ray);
-      group.add(ray);
+    if (!this.lowGpuMode) {
+      for (let i = 0; i < 3; i++) {
+        const baseRotation = (Math.PI * 2 * i) / 3 + 0.24;
+        const rayMat = new THREE.MeshBasicMaterial({
+          map: this.pawnRayTexture(),
+          color: tint,
+          transparent: true,
+          opacity: 0.36,
+          depthWrite: false,
+          depthTest: true,
+          toneMapped: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        });
+        const ray = new THREE.Mesh(ACTIVE_PAWN_RAY_GEO, rayMat);
+        ray.position.y = 0.66;
+        ray.rotation.y = baseRotation;
+        ray.renderOrder = 38 + i;
+        ray.userData.baseRotation = baseRotation;
+        rays.push(ray);
+        group.add(ray);
+      }
     }
 
     const flames: THREE.Mesh[] = [];
-    for (let i = 0; i < 3; i++) {
-      const angle = (Math.PI * 2 * i) / 3 + 0.62;
-      const flameMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(0xffb74d).lerp(tint, 0.35),
-        transparent: true,
-        opacity: 0.4,
-        depthWrite: false,
-        depthTest: true,
-        toneMapped: false,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-      });
-      const flame = new THREE.Mesh(ACTIVE_PAWN_FLAME_GEO, flameMat);
-      flame.position.set(Math.cos(angle) * 0.32, 0.46, Math.sin(angle) * 0.32);
-      flame.rotation.y = angle;
-      flame.renderOrder = 42 + i;
-      flame.userData.baseRotation = angle;
-      flame.userData.baseY = 0.46;
-      flames.push(flame);
-      group.add(flame);
+    if (!this.lowGpuMode) {
+      for (let i = 0; i < 3; i++) {
+        const angle = (Math.PI * 2 * i) / 3 + 0.62;
+        const flameMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(0xffb74d).lerp(tint, 0.35),
+          transparent: true,
+          opacity: 0.4,
+          depthWrite: false,
+          depthTest: true,
+          toneMapped: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        });
+        const flame = new THREE.Mesh(ACTIVE_PAWN_FLAME_GEO, flameMat);
+        flame.position.set(Math.cos(angle) * 0.32, 0.46, Math.sin(angle) * 0.32);
+        flame.rotation.y = angle;
+        flame.renderOrder = 42 + i;
+        flame.userData.baseRotation = angle;
+        flame.userData.baseY = 0.46;
+        flames.push(flame);
+        group.add(flame);
+      }
     }
 
     group.userData.glowMat = glowMat;

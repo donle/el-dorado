@@ -49,6 +49,7 @@ const BOOT_ASSET_URLS = [
   '/ui/loading-table.jpg',
   '/ui/lobby-hero.jpg',
   '/ui/lobby-props.jpg',
+  '/ui/turn-intro-tomb.jpg',
   '/textures/golden-city-ground.jpg',
   ...TERRAIN_ASSET_URLS,
   '/cards/card-back.jpg',
@@ -160,8 +161,8 @@ class App {
   aiDelay = Number(localStorage.getItem('eldorado.aiDelay')) || 1000;
   hint = '';
   error = '';
-  /** Which panel is open as a bottom sheet on mobile (null = none). */
-  mobilePanel: 'players' | 'market' | null = null;
+  /** Which mobile overlay is open (null = none). */
+  mobilePanel: 'players' | 'market' | 'log' | null = null;
   nameValue = localStorage.getItem('eldorado.name') ?? '';
   /** True from "start game" until the first board state arrives (freezes lobby). */
   private starting = false;
@@ -193,6 +194,8 @@ class App {
   private actionLog: ActionLogEntry[] = [];
   private actionLogSeq = 0;
   private knownCardDefs = new Map<string, string>();
+  private turnIntroEl: HTMLElement | null = null;
+  private turnIntroTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(BoardClass: BoardConstructor) {
     this.setupMobileLayoutClasses();
@@ -257,6 +260,7 @@ class App {
         if (m.room.hostId === this.you) localStorage.setItem('eldorado.mapId', this.selectedMapId);
         if (m.room.phase === 'lobby') {
           this.endStarting(false);
+          this.clearTurnIntro();
           this.state = null;
           this.resetActionLog();
           this.resetSelection();
@@ -287,6 +291,9 @@ class App {
         this.rememberCards(previousState);
         this.rememberCards(m.state);
         this.appendActionLog(m.events ?? [], m.state, previousState);
+        const shouldShowTurnIntro = this.shouldShowTurnIntro(previousState, m.state, m.events ?? []);
+        const turnPlayerChanged = !!previousState
+          && previousState.turn?.playerId !== m.state.turn?.playerId;
         this.state = m.state;
         this.syncSelectionToState();
         if (this.starting) {
@@ -295,6 +302,8 @@ class App {
           break;
         }
         this.enterGameView();
+        if (turnPlayerChanged) this.board.panToPlayerIfOffscreen(m.state.turn?.playerId ?? null);
+        if (shouldShowTurnIntro) this.showTurnIntro();
         for (const e of buys) this.animateBuy(e.playerId, e.defId, sources.get(`${e.defId}|${e.playerId}`));
         break;
       }
@@ -372,6 +381,7 @@ class App {
   }
 
   private clearRoomState(): void {
+    this.clearTurnIntro();
     sessionStorage.removeItem('eldorado.session');
     this.you = null;
     this.room = null;
@@ -385,6 +395,36 @@ class App {
     this.board.setInspectedHex(null);
     this.board.setInspectedBlockade(null);
     this.closeTerrainPanel();
+  }
+
+  private shouldShowTurnIntro(previousState: GameState | null, nextState: GameState, events: GameEvent[]): boolean {
+    if (!this.you || nextState.phase !== 'playing' || nextState.turn?.playerId !== this.you) return false;
+    if (previousState?.turn?.playerId === this.you) return false;
+    if (previousState) return true;
+    return events.some((e) => e.type === 'turnStarted' && e.playerId === this.you);
+  }
+
+  private showTurnIntro(): void {
+    this.clearTurnIntro();
+    const overlay = el('div', 'turn-intro-overlay');
+    overlay.innerHTML = `
+      <div class="turn-intro-panel" role="status" aria-live="polite">
+        <span class="turn-intro-mark" aria-hidden="true"></span>
+        <span class="turn-intro-title">你的回合</span>
+        <span class="turn-intro-sub">开始行动</span>
+      </div>`;
+    document.body.appendChild(overlay);
+    this.turnIntroEl = overlay;
+    this.turnIntroTimer = setTimeout(() => this.clearTurnIntro(), 1900);
+  }
+
+  private clearTurnIntro(): void {
+    if (this.turnIntroTimer) {
+      clearTimeout(this.turnIntroTimer);
+      this.turnIntroTimer = undefined;
+    }
+    this.turnIntroEl?.remove();
+    this.turnIntroEl = null;
   }
 
   private returnToLobby(): void {
@@ -1121,7 +1161,13 @@ class App {
     if (this.selected.has(cardId)) this.selected.delete(cardId);
     else this.selected.add(cardId);
     this.promoteTargetDefId = null;
-    if (this.selectedActionCard()?.def.ability !== 'take_free') this.buyTargetDefId = null;
+    // Only clear the market buy target when the user is switching to an actual
+    // action card (other than "take_free"). Adding a non-action hand card to
+    // the payment selection must NOT drop the buy target — otherwise tapping
+    // a 1💰 traveller to pay for a 1💰 market card wipes the target and
+    // leaves a floating preview where the buy bar should be.
+    const action = this.selectedActionCard();
+    if (action && action.def.ability !== 'take_free') this.buyTargetDefId = null;
     this.recomputeHighlights();
     this.renderHud();
     this.renderTerrainPanel();
@@ -1143,11 +1189,17 @@ class App {
       this.flash('这张牌当前无法选择');
       return;
     }
+    // On mobile (preview flow) the drawer stays open after a buy/promote target
+    // is set so the user can see the sticky summary bar with the confirm button.
+    // Desktop still auto-closes the market drawer — the right-hand panel would
+    // overlap the action-bar otherwise.
+    const stayOpen = this.usesMarketPreviewFlow();
+
     if (this.selectedActionCard()?.def.ability === 'take_free') {
       this.promoteTargetDefId = null;
       this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
       this.hint = this.buyTargetDefId ? '点击「免费获得」使用发报机' : '';
-      if (this.buyTargetDefId) this.mobilePanel = null;
+      if (this.buyTargetDefId && !stayOpen) this.mobilePanel = null;
       this.renderHud();
       return;
     }
@@ -1162,14 +1214,14 @@ class App {
       }
       this.promoteTargetDefId = this.promoteTargetDefId === defId ? null : defId;
       this.hint = this.promoteTargetDefId ? '点击「放入市场」补位' : '';
-      if (this.promoteTargetDefId) this.mobilePanel = null;
+      if (this.promoteTargetDefId && !stayOpen) this.mobilePanel = null;
       this.renderHud();
       return;
     }
     this.promoteTargetDefId = null;
     this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
     this.hint = this.buyTargetDefId ? '选手牌支付，然后点「确认购买」' : '';
-    if (this.buyTargetDefId) this.mobilePanel = null;
+    if (this.buyTargetDefId && !stayOpen) this.mobilePanel = null;
     this.renderHud();
   }
 
@@ -1420,6 +1472,8 @@ class App {
   private confirmPromoteMarket(): void {
     if (!this.promoteTargetDefId) return;
     this.promoteMarket(this.promoteTargetDefId);
+    // Leave the drawer open on mobile so the user can see the new market state
+    // immediately and continue from the in-drawer controls.
   }
 
   private confirmBuy(): void {
@@ -1429,6 +1483,8 @@ class App {
       return;
     }
     this.act({ type: 'BuyCard', defId: this.buyTargetDefId, paymentCardIds: [...this.selected] });
+    // Leave the drawer open on mobile so the user can see the new market state
+    // immediately and continue from the in-drawer controls.
   }
 
   private confirmRemoveAfterDraw(): void {
@@ -1681,11 +1737,15 @@ class App {
     const marketPreview = this.usesMarketPreviewFlow();
 
     this.preview.innerHTML = previewHtml(defId);
-    this.preview.classList.toggle('actionable', marketPreview && this.canSelectMarketPreview(defId));
-    if (marketPreview && this.canSelectMarketPreview(defId)) {
+    this.preview.classList.toggle('from-log', this.mobilePanel === 'log');
+    const actionableMarketPreview = marketPreview && this.marketPreviewDefId === defId && this.canSelectMarketPreview(defId);
+    this.preview.classList.toggle('actionable', actionableMarketPreview);
+    if (actionableMarketPreview) {
       const pile = this.state?.market.find((m) => m.defId === defId);
       const promote = !!pile && !pile.onBoard && this.marketNeedsPromotion(this.state!) && !this.state!.turn?.hasBought;
-      const select = button(promote ? '放入市场' : '选择卡牌', () => this.selectMarketPreviewCard(), false);
+      const def = getDef(defId);
+      const label = promote ? `放入市场 · ${def.cost}💰` : `选为购买目标 · ${def.cost}💰`;
+      const select = button(label, () => this.selectMarketPreviewCard(), false);
       select.className = 'preview-select-card';
       this.preview.appendChild(select);
     }
@@ -1734,6 +1794,7 @@ class App {
   private hidePreview(): void {
     this.preview.classList.add('hidden');
     this.preview.classList.remove('actionable');
+    this.preview.classList.remove('from-log');
   }
 
   // --- rendering: lobby ---
@@ -1967,8 +2028,8 @@ class App {
     return Math.max(0, Math.min(1, 1 - toFinish(p.position) / Math.max(ref, 1)));
   }
 
-  private renderActionLog(): void {
-    const panel = el('div', 'action-log panel');
+  private buildActionLogPanel(extraClass = ''): HTMLElement {
+    const panel = el('div', `action-log panel ${extraClass}`.trim());
     panel.innerHTML = '<h3>行动日志</h3>';
     const list = el('div', 'action-log-list');
     if (this.actionLog.length > 0) {
@@ -1991,6 +2052,12 @@ class App {
           if (segment.defId) {
             classes.push('action-log-card');
             this.attachPreview(node, segment.defId);
+            node.addEventListener('click', (ev) => {
+              if (!this.isMobileDevice()) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              this.showPreview(node, segment.defId!);
+            });
           }
           if (segment.coord || segment.blockadeId) {
             classes.push('action-log-terrain');
@@ -1999,6 +2066,12 @@ class App {
               else if (segment.coord) this.board.setInfoHoverHex(segment.coord);
             });
             node.addEventListener('mouseleave', () => this.board.clearInfoHover());
+            node.addEventListener('click', (ev) => {
+              if (!this.isMobileDevice()) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              this.showLogTerrainPreview(segment.coord ?? null, segment.blockadeId ?? null);
+            });
           }
           if (classes.length) node.className = classes.join(' ');
           text.appendChild(node);
@@ -2008,14 +2081,53 @@ class App {
         row.appendChild(body);
         list.appendChild(row);
       }
+    } else {
+      const empty = el('div', 'action-log-empty');
+      empty.textContent = '鏆傛棤琛屽姩璁板綍';
+      list.appendChild(empty);
     }
     panel.appendChild(list);
-    this.hud.appendChild(panel);
     list.scrollTop = list.scrollHeight;
+    return panel;
+  }
+
+  private renderActionLog(): void {
+    const panel = this.buildActionLogPanel();
+    this.hud.appendChild(panel);
+  }
+
+  private renderMobileActionLogDialog(): void {
+    const scrim = el('div', 'mobile-log-scrim');
+    scrim.onclick = () => this.closeMobilePanel();
+
+    const dialog = this.buildActionLogPanel('mobile-log-dialog');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.addEventListener('click', (ev) => ev.stopPropagation());
+    const close = button('×', () => this.closeMobilePanel(), true);
+    close.className = 'mobile-log-close';
+    close.setAttribute('aria-label', '鍏抽棴琛屽姩鏃ュ織');
+    dialog.appendChild(close);
+    scrim.appendChild(dialog);
+    this.hud.appendChild(scrim);
+  }
+
+  private showLogTerrainPreview(coord: Axial | null, blockadeId: string | null): void {
+    this.cancelTerrainHoverClear();
+    this.pinnedTerrain = null;
+    this.pinnedBlockadeId = null;
+    this.hoveredTerrain = coord ? { q: coord.q, r: coord.r } : null;
+    this.hoveredBlockadeId = blockadeId;
+    if (blockadeId) this.board.setInfoHoverBlockade(blockadeId);
+    else if (coord) this.board.setInfoHoverHex(coord);
+    this.renderTerrainPanel();
   }
 
   private renderHud(): void {
     this.hidePreview();
+    const previousMarketScrollTop = this.mobilePanel === 'market'
+      ? this.hud.querySelector<HTMLElement>('.market-panel.open')?.scrollTop ?? null
+      : null;
     if (!this.state || this.state.phase === 'lobby') {
       this.hud.innerHTML = '';
       return;
@@ -2050,9 +2162,16 @@ class App {
 
     if (this.settingsOpen) this.renderSettingsMenu(s);
 
-    // --- mobile toolbar (market sheet toggle) ---
+    // --- mobile toolbar (log + market sheet toggles) ---
     const toolbar = el('div', 'mobile-toolbar');
-    const mbtn = button('🛒 市场', () => {
+    const logBtn = button('日志', () => {
+      this.mobilePanel = this.mobilePanel === 'log' ? null : 'log';
+      this.marketPreviewDefId = null;
+      this.renderHud();
+    });
+    if (this.mobilePanel === 'log') logBtn.classList.add('active');
+    toolbar.appendChild(logBtn);
+    const mbtn = button('市场', () => {
       this.mobilePanel = this.mobilePanel === 'market' ? null : 'market';
       if (this.mobilePanel !== 'market') this.marketPreviewDefId = null;
       this.renderHud();
@@ -2098,6 +2217,9 @@ class App {
     const needsPromotion = onBoard.length < 6 && upcoming.length > 0;
     const canPromote = myTurn && needsPromotion && !s.turn?.hasBought;
     const freeTakeAction = this.selectedActionCard()?.def.ability === 'take_free';
+    const inlineMarketDetailDefId = this.usesMarketPreviewFlow()
+      ? this.marketPreviewDefId ?? this.buyTargetDefId ?? this.promoteTargetDefId
+      : null;
     const shopCard = (pile: (typeof s.market)[number], locked: boolean): HTMLDivElement => {
       const def = getDef(pile.defId);
       const sub = def.kind === 'action' ? '行动牌' : def.power ? `力量 ${def.power}` : '';
@@ -2112,7 +2234,28 @@ class App {
         <span class="nm">${escapeHtml(def.name)}<small>${sub}${def.singleUse ? ' · 单次' : ''}</small></span>
         <span class="price"><span class="c">${def.cost}💰</span><span class="left">${left}</span></span>`;
       if (this.usesMarketPreviewFlow()) {
-        card.onclick = () => this.previewMarketCard(pile.defId);
+        // Mobile: tap = direct buy target (option B). Long-press = preview details.
+        card.onclick = () => {
+          if (this.canSelectMarketPreview(pile.defId)) {
+            this.onMarketClick(pile.defId);
+          } else {
+            this.previewMarketCard(pile.defId);
+          }
+        };
+        let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+        const clearLP = () => {
+          if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+        };
+        card.addEventListener('touchstart', () => {
+          clearLP();
+          longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            this.previewMarketCard(pile.defId);
+          }, 420);
+        }, { passive: true });
+        card.addEventListener('touchend', clearLP);
+        card.addEventListener('touchmove', clearLP);
+        card.addEventListener('touchcancel', clearLP);
       } else if (freeTakeAction && myTurn && pile.count > 0) {
         card.onclick = () => this.onMarketClick(pile.defId);
       } else if (locked && canPromote) card.onclick = () => this.onMarketClick(pile.defId);
@@ -2122,20 +2265,96 @@ class App {
       this.shopEls.set(pile.defId, card);
       return card;
     };
+    const appendShopCard = (pile: (typeof s.market)[number], locked: boolean): void => {
+      market.appendChild(shopCard(pile, locked));
+      if (inlineMarketDetailDefId === pile.defId) {
+        const detail = el('div', 'market-detail');
+        detail.innerHTML = marketInlineDetailHtml(pile.defId);
+        market.appendChild(detail);
+      }
+    };
     const bought = myTurn && !!s.turn?.hasBought;
     const marketTitle = needsPromotion
       ? canPromote ? '在售有空位' : '候补市场'
       : bought ? '本回合已购买' : '在售';
     market.innerHTML = `<h3>市场 · ${marketTitle}</h3>`;
-    for (const pile of onBoard) market.appendChild(shopCard(pile, false));
+    for (const pile of onBoard) appendShopCard(pile, false);
     if (upcoming.length) {
       const sub = el('h3', '');
       sub.textContent = `${canPromote ? '候补可补位' : '候补市场'} · ${upcoming.length}`;
       sub.style.marginTop = '14px';
       market.appendChild(sub);
-      for (const pile of upcoming) market.appendChild(shopCard(pile, true));
+      for (const pile of upcoming) appendShopCard(pile, true);
     }
+
+    // In-drawer buy/promote footer: only rendered on mobile when a buy or
+    // promote target is set. It's the single source of truth for the
+    // confirm/cancel pair during the buy flow, replacing the old sticky
+    // .mobile-buy-bar. The footer sits at the bottom of the drawer's scroll
+    // area (sticky) so it stays visible while the user scrolls market cards
+    // — and crucially it doesn't sit above the hand cards, so the hand area
+    // stays unobstructed.
+    const inDrawerBuyMode = (this.mobilePanel === 'market')
+      && (!!this.buyTargetDefId || !!this.promoteTargetDefId)
+      && this.usesMarketPreviewFlow();
+    if (inDrawerBuyMode) {
+      const footer = el('div', 'drawer-footer');
+      const info = el('div', 'drawer-footer-info');
+      if (this.promoteTargetDefId) {
+        const def = getDef(this.promoteTargetDefId);
+        info.innerHTML = `<b>放入市场</b><span>${escapeHtml(def.name)}</span>`;
+      } else if (this.buyTargetDefId) {
+        const def = getDef(this.buyTargetDefId);
+        const cost = def.cost;
+        const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
+        if (this.selectedActionCard()?.def.ability === 'take_free') {
+          info.innerHTML = `<b>免费获得 ${escapeHtml(def.name)}</b><span>使用发报机，不消耗金币</span>`;
+        } else {
+          info.innerHTML = `<b>购买 ${escapeHtml(def.name)}</b><span>已选 ${have}/${cost} 金币</span>`;
+        }
+      }
+      footer.appendChild(info);
+
+      const cancelBtn = button('取消', () => {
+        this.buyTargetDefId = null;
+        this.promoteTargetDefId = null;
+        this.marketPreviewDefId = null;
+        this.hint = '';
+        this.renderHud();
+      }, true);
+      cancelBtn.classList.add('cmd-btn', 'drawer-footer-cancel');
+      footer.appendChild(cancelBtn);
+
+      if (this.promoteTargetDefId) {
+        const promote = button('确认放入', () => this.confirmPromoteMarket(), false);
+        promote.className = 'gold cmd-btn drawer-footer-confirm';
+        footer.appendChild(promote);
+      } else if (this.buyTargetDefId) {
+        const def = getDef(this.buyTargetDefId);
+        const cost = def.cost;
+        const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
+        const freeTake = this.selectedActionCard()?.def.ability === 'take_free';
+        const buy = button(
+          freeTake ? '确认获得' : have < cost ? `差 ${cost - have} 金币` : '确认购买',
+          () => this.confirmBuy(),
+          false,
+        );
+        buy.className = 'gold cmd-btn drawer-footer-confirm';
+        buy.disabled = !freeTake && have < cost;
+        footer.appendChild(buy);
+      }
+
+      market.appendChild(footer);
+    }
+
     this.hud.appendChild(market);
+    if (previousMarketScrollTop !== null) {
+      const restoreMarketScroll = () => {
+        market.scrollTop = Math.min(previousMarketScrollTop, Math.max(0, market.scrollHeight - market.clientHeight));
+      };
+      restoreMarketScroll();
+      requestAnimationFrame(restoreMarketScroll);
+    }
 
     // Mobile: a tap-to-dismiss scrim + swipe-down-to-close on the open sheet.
     if (this.mobilePanel === 'market') {
@@ -2143,6 +2362,9 @@ class App {
       scrim.onclick = () => this.closeMobilePanel();
       this.hud.appendChild(scrim);
       this.attachSheetDismiss(market);
+    }
+    if (this.mobilePanel === 'log') {
+      this.renderMobileActionLogDialog();
     }
 
     this.renderActionLog();
@@ -2430,6 +2652,7 @@ class App {
       this.terrainPanel.onmouseenter = null;
       this.terrainPanel.onmouseleave = null;
       this.terrainPanel.classList.add('hidden');
+      this.terrainPanel.classList.remove('from-log');
       this.terrainPanel.innerHTML = '';
       if (!hex) this.board.setInspectedHex(null);
       if (!activeBlockade) this.board.setInspectedBlockade(null);
@@ -2446,6 +2669,7 @@ class App {
       const ownerText = owner ? `归属：${playerDisplayName(owner)}` : '尚未被领取';
       const edgeCount = this.blockadeEdges(activeBlockade).length;
       this.terrainPanel.classList.remove('hidden');
+      this.terrainPanel.classList.toggle('from-log', this.mobilePanel === 'log');
       this.terrainPanel.classList.toggle('pinned', pinned);
       this.terrainPanel.innerHTML = `
         <div class="terrain-head">
@@ -2476,6 +2700,7 @@ class App {
     const occupantText = occupant ? `占据：${playerDisplayName(occupant)}` : '未被占据';
     const status = this.terrainActionStatus(hex);
     this.terrainPanel.classList.remove('hidden');
+    this.terrainPanel.classList.toggle('from-log', this.mobilePanel === 'log');
     this.terrainPanel.classList.toggle('pinned', pinned);
     this.terrainPanel.innerHTML = `
       <div class="terrain-head">
@@ -2765,6 +2990,22 @@ function previewHtml(defId: string): string {
     <div class="cp-type">${KIND_LABEL[def.kind] ?? ''}${def.singleUse ? ' · 单次性' : ''}</div>
     <div class="cp-desc">${cardDescription(defId)}</div>
     <div class="cp-foot">${cost}${power}</div>`;
+}
+
+function marketInlineDetailHtml(defId: string): string {
+  const def = getDef(defId);
+  const tags = [
+    KIND_LABEL[def.kind] ?? '',
+    def.singleUse ? '单次' : '',
+    def.power ? `力量 ${def.power}` : '',
+    def.starting ? '不可购买' : `${def.cost} 金币`,
+  ].filter(Boolean).join(' · ');
+  return `
+    <div class="market-detail-head">
+      <b>${escapeHtml(def.name)}</b>
+      <span>${escapeHtml(tags)}</span>
+    </div>
+    <div class="market-detail-desc">${escapeHtml(cardDescription(defId))}</div>`;
 }
 
 /** Generated card-back artwork for the deck/discard piles. */
