@@ -1,0 +1,101 @@
+# =============================================================================
+# El Dorado — CI/CD
+# 触发：push 到 main 时自动 build 镜像推送到 ghcr.io，再 SSH 到服务器部署
+# 也可手动触发（workflow_dispatch）
+#
+# 镜像仓库：ghcr.io/donle/el-dorado（与 double-jump 完全独立）。
+# 服务器部署脚本 ./deploy.sh 会自动清理旧 double-jump 容器与镜像。
+# =============================================================================
+
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要部署的 tag（留空用 latest）"
+        required: false
+        default: "latest"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: donle/el-dorado
+
+jobs:
+  # ========== Job 1: build & push 镜像到 ghcr.io ==========
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ========== Job 2: SSH 到服务器拉新镜像并重启 ==========
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    environment:
+      name: production
+      url: ${{ secrets.PUBLIC_URL }}
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script_stop: false
+          script: |
+            set -e
+            cd /opt/el-dorado
+            # .env 已经在首次部署时配好，deploy.sh 会自动 source
+            TAG="${{ inputs.tag || 'latest' }}" ./deploy.sh "${{ inputs.tag || 'latest' }}"
+            # 顺手清理 3 天前的悬空镜像
+            docker image prune -af --filter "until=72h" 2>/dev/null || true
+
+      - name: Smoke test
+        if: success()
+        run: |
+          # 部署完后访问一下首页确认 200
+          sleep 5
+          STATUS=$(curl -sk -o /dev/null -w '%{http_code}' -m 10 "${{ secrets.PUBLIC_URL }}/")
+          if [[ "$STATUS" != "200" ]]; then
+            echo "Smoke test failed: HTTP $STATUS"
+            exit 1
+          fi
+          echo "Smoke test OK: HTTP $STATUS"
