@@ -238,8 +238,8 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .shop-card.previewing { border-color: var(--accent-bright); background: rgba(69,213,193,0.1);
   box-shadow: 0 0 0 1px rgba(69,213,193,0.26); }
 .shop-card.sold { opacity: 0.4; pointer-events: none; }
-.shop-card.upcoming { opacity: 0.5; filter: grayscale(0.35); cursor: default; }
-.shop-card.upcoming:hover { border-color: transparent; transform: none; }
+.shop-card.upcoming { opacity: 0.62; filter: grayscale(0.35); cursor: pointer; }
+.shop-card.upcoming:hover { border-color: rgba(69,213,193,0.28); background: rgba(69,213,193,0.05); transform: none; }
 .shop-card.promotable { border-color: rgba(255,209,102,0.36); background: rgba(255,209,102,0.08); }
 .shop-card.promotable:hover { border-color: var(--gold); background: rgba(255,209,102,0.14); }
 .shop-card.promotable .price .left { color: var(--gold); font-weight: 800; }

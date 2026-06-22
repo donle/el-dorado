@@ -861,7 +861,7 @@ describe('buying', () => {
     expect(r.state.market.find((m) => m.defId === 'pioneer')!.onBoard).toBe(false);
   });
 
-  it('allows buying a reserve pile directly when the market has a vacancy', () => {
+  it('rejects buying a reserve pile directly when the market has a vacancy', () => {
     const s = game();
     s.market.find((m) => m.defId === 'photographer')!.count = 1;
     giveHand(s, 'p0', ['traveller', 'traveller']);
@@ -885,8 +885,40 @@ describe('buying', () => {
       defId: 'pioneer',
       paymentCardIds: ['p1:millionaire#t0', 'p1:millionaire#t1'],
     });
+    expect(r.result.ok).toBe(false);
+    expect(r.state.market.find((m) => m.defId === 'pioneer')!.onBoard).toBe(false);
+    expect(r.state.players[1].discard.some((c) => c.defId === 'pioneer')).toBe(false);
+  });
+
+  it('allows promoting a reserve pile into a vacancy before buying it', () => {
+    const s = game();
+    s.market.find((m) => m.defId === 'photographer')!.count = 1;
+    giveHand(s, 'p0', ['traveller', 'traveller']);
+
+    let r = run(
+      s,
+      'p0',
+      {
+        type: 'BuyCard',
+        defId: 'photographer',
+        paymentCardIds: ['p0:traveller#t0', 'p0:traveller#t1'],
+      },
+      { type: 'EndTurn' },
+    );
+    expect(r.result.ok).toBe(true);
+    expect(r.state.turn!.playerId).toBe('p1');
+    giveHand(r.state, 'p1', ['millionaire', 'millionaire']);
+
+    r = run(r.state, 'p1', { type: 'PromoteMarket', defId: 'pioneer' });
     expect(r.result.ok).toBe(true);
     expect(r.result.events).toContainEqual({ type: 'marketPromoted', playerId: 'p1', defId: 'pioneer' });
+
+    r = run(r.state, 'p1', {
+      type: 'BuyCard',
+      defId: 'pioneer',
+      paymentCardIds: ['p1:millionaire#t0', 'p1:millionaire#t1'],
+    });
+    expect(r.result.ok).toBe(true);
     expect(r.state.market.find((m) => m.defId === 'pioneer')!.onBoard).toBe(true);
     expect(r.state.market.find((m) => m.defId === 'pioneer')!.count).toBe(2);
     expect(r.state.turn!.hasBought).toBe(true);
@@ -902,6 +934,29 @@ describe('buying', () => {
       paymentCardIds: ['p0:millionaire#t0'],
     });
     expect(r.result.ok).toBe(false);
+  });
+
+  it('puts a bought cartographer into hand so it can be used immediately', () => {
+    const s = game();
+    s.market.find((m) => m.defId === 'cartographer')!.onBoard = true;
+    giveHand(s, 'p0', ['journalist']);
+    giveDeck(s, 'p0', ['scout', 'captain']);
+
+    let r = run(s, 'p0', {
+      type: 'BuyCard',
+      defId: 'cartographer',
+      paymentCardIds: ['p0:journalist#t0'],
+    });
+    expect(r.result.ok).toBe(true);
+    const cartographer = r.state.players[0].hand.find((c) => c.defId === 'cartographer');
+    expect(cartographer).toBeTruthy();
+    expect(r.state.players[0].discard.some((c) => c.defId === 'cartographer')).toBe(false);
+
+    r = run(r.state, 'p0', { type: 'UseAbility', cardId: cartographer!.id });
+    expect(r.result.ok).toBe(true);
+    expect(r.result.events).toContainEqual({ type: 'drew', playerId: 'p0', count: 2 });
+    expect(r.state.players[0].hand.map((c) => c.defId)).toEqual(['scout', 'captain']);
+    expect(r.state.turn!.inPlay.some((c) => c.defId === 'cartographer')).toBe(true);
   });
 });
 

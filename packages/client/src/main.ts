@@ -124,6 +124,7 @@ class App {
   selected = new Set<string>();
   mode: Mode = 'idle';
   buyTargetDefId: string | null = null;
+  promoteTargetDefId: string | null = null;
   marketPreviewDefId: string | null = null;
   nativeActionCardId: string | null = null;
   clearTarget: Axial | null = null;
@@ -316,6 +317,7 @@ class App {
     this.selected.clear();
     this.mode = 'idle';
     this.buyTargetDefId = null;
+    this.promoteTargetDefId = null;
     this.marketPreviewDefId = null;
     this.nativeActionCardId = null;
     this.clearTarget = null;
@@ -628,6 +630,7 @@ class App {
     const wasRemoveMode = this.mode === 'remove';
     this.mode = 'idle';
     this.buyTargetDefId = null;
+    this.promoteTargetDefId = null;
     this.marketPreviewDefId = null;
     this.nativeActionCardId = null;
     this.clearTarget = null;
@@ -1047,6 +1050,7 @@ class App {
     this.nativeActionCardId = null;
     if (this.selected.has(cardId)) this.selected.delete(cardId);
     else this.selected.add(cardId);
+    this.promoteTargetDefId = null;
     if (this.selectedActionCard()?.def.ability !== 'take_free') this.buyTargetDefId = null;
     this.recomputeHighlights();
     this.renderHud();
@@ -1054,7 +1058,11 @@ class App {
   }
 
   private onMarketClick(defId: string): void {
-    if (!this.isMyTurn()) return;
+    if (!this.state) return;
+    if (!this.isMyTurn()) {
+      this.previewMarketCard(defId);
+      return;
+    }
     if (this.mode === 'remove') {
       this.flash('请先处理要移除的手牌');
       return;
@@ -1066,6 +1074,7 @@ class App {
       return;
     }
     if (this.selectedActionCard()?.def.ability === 'take_free') {
+      this.promoteTargetDefId = null;
       this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
       this.hint = this.buyTargetDefId ? '点击「免费获得」使用发报机' : '';
       if (this.buyTargetDefId) this.mobilePanel = null;
@@ -1073,10 +1082,21 @@ class App {
       return;
     }
     if (this.state!.turn?.hasBought) { this.flash('本回合已购买 · 每回合限买 1 张'); return; }
-    if (!pile.onBoard && !this.marketNeedsPromotion(this.state!)) {
-      this.flash('这张牌还没有进入市场');
+    if (!pile.onBoard) {
+      this.buyTargetDefId = null;
+      if (!this.marketNeedsPromotion(this.state!)) {
+        this.marketPreviewDefId = defId;
+        this.hint = '候补牌需要市场有空位才能放入';
+        this.renderHud();
+        return;
+      }
+      this.promoteTargetDefId = this.promoteTargetDefId === defId ? null : defId;
+      this.hint = this.promoteTargetDefId ? '点击「放入市场」补位' : '';
+      if (this.promoteTargetDefId) this.mobilePanel = null;
+      this.renderHud();
       return;
     }
+    this.promoteTargetDefId = null;
     this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
     this.hint = this.buyTargetDefId ? '选手牌支付，然后点「确认购买」' : '';
     if (this.buyTargetDefId) this.mobilePanel = null;
@@ -1092,6 +1112,10 @@ class App {
 
   private previewMarketCard(defId: string): void {
     this.marketPreviewDefId = this.marketPreviewDefId === defId ? null : defId;
+    if (this.marketPreviewDefId) {
+      this.buyTargetDefId = null;
+      this.promoteTargetDefId = null;
+    }
     this.renderHud();
   }
 
@@ -1223,6 +1247,7 @@ class App {
     if (def.kind !== 'action') return;
 
     this.nativeActionCardId = null;
+    this.promoteTargetDefId = null;
     if (def.ability !== 'take_free') this.buyTargetDefId = null;
 
     if (
@@ -1316,9 +1341,15 @@ class App {
       return;
     }
     this.buyTargetDefId = null;
+    this.promoteTargetDefId = null;
     this.marketPreviewDefId = null;
     this.hint = '';
     this.act({ type: 'PromoteMarket', defId });
+  }
+
+  private confirmPromoteMarket(): void {
+    if (!this.promoteTargetDefId) return;
+    this.promoteMarket(this.promoteTargetDefId);
   }
 
   private confirmBuy(): void {
@@ -1485,7 +1516,12 @@ class App {
   }
 
   private animateBuy(playerId: string, defId: string, source?: DOMRect): void {
-    const toEl = playerId === this.you ? this.discardPileEl : this.playerCardEls.get(playerId);
+    const immediateHandEl = defId === 'cartographer'
+      ? [...(this.me?.hand ?? [])].reverse().find((c) => c.defId === defId)
+      : undefined;
+    const toEl = playerId === this.you
+      ? (immediateHandEl ? this.handEls.get(immediateHandEl.id) : this.discardPileEl)
+      : this.playerCardEls.get(playerId);
     if (!toEl) return;
     let from = source;
     const offscreen =
@@ -1533,7 +1569,7 @@ class App {
 
   /** A card is "pinned" while it's selected — its preview stays open. */
   private isPinned(): boolean {
-    return this.selected.size > 0 || !!this.buyTargetDefId || !!this.marketPreviewDefId;
+    return this.selected.size > 0 || !!this.buyTargetDefId || !!this.promoteTargetDefId || !!this.marketPreviewDefId;
   }
 
   private attachPreview(node: HTMLElement, defId: string): void {
@@ -1559,6 +1595,10 @@ class App {
       const node = this.shopEls.get(this.buyTargetDefId);
       if (node) return this.showPreview(node, this.buyTargetDefId);
     }
+    if (this.promoteTargetDefId) {
+      const node = this.shopEls.get(this.promoteTargetDefId);
+      if (node) return this.showPreview(node, this.promoteTargetDefId);
+    }
     if (this.marketPreviewDefId) {
       const node = this.shopEls.get(this.marketPreviewDefId);
       if (node) return this.showPreview(node, this.marketPreviewDefId);
@@ -1573,7 +1613,9 @@ class App {
     this.preview.innerHTML = previewHtml(defId);
     this.preview.classList.toggle('actionable', marketPreview && this.canSelectMarketPreview(defId));
     if (marketPreview && this.canSelectMarketPreview(defId)) {
-      const select = button('选择卡牌', () => this.selectMarketPreviewCard(), false);
+      const pile = this.state?.market.find((m) => m.defId === defId);
+      const promote = !!pile && !pile.onBoard && this.marketNeedsPromotion(this.state!) && !this.state!.turn?.hasBought;
+      const select = button(promote ? '放入市场' : '选择卡牌', () => this.selectMarketPreviewCard(), false);
       select.className = 'preview-select-card';
       this.preview.appendChild(select);
     }
@@ -1938,10 +1980,10 @@ class App {
       const def = getDef(pile.defId);
       const sub = def.kind === 'action' ? '行动牌' : def.power ? `力量 ${def.power}` : '';
       const cls = locked ? (canPromote ? 'promotable' : 'upcoming') : pile.count === 0 ? 'sold' : '';
-      const left = locked ? (canPromote ? '可买' : '候补') : `×${pile.count}`;
+      const left = locked ? (canPromote ? '补位' : '候补') : `×${pile.count}`;
       const card = el(
         'div',
-        `shop-card ${this.buyTargetDefId === pile.defId ? 'target' : ''} ${this.marketPreviewDefId === pile.defId ? 'previewing' : ''} ${cls}`,
+        `shop-card ${this.buyTargetDefId === pile.defId || this.promoteTargetDefId === pile.defId ? 'target' : ''} ${this.marketPreviewDefId === pile.defId ? 'previewing' : ''} ${cls}`,
       );
       card.innerHTML = `
         <span class="ic card-thumb">${cardFace(def)}</span>
@@ -1952,6 +1994,7 @@ class App {
       } else if (freeTakeAction && myTurn && pile.count > 0) {
         card.onclick = () => this.onMarketClick(pile.defId);
       } else if (locked && canPromote) card.onclick = () => this.onMarketClick(pile.defId);
+      else if (locked) card.onclick = () => this.previewMarketCard(pile.defId);
       else if (!locked && pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
       this.attachPreview(card, pile.defId);
       this.shopEls.set(pile.defId, card);
@@ -1965,7 +2008,7 @@ class App {
     for (const pile of onBoard) market.appendChild(shopCard(pile, false));
     if (upcoming.length) {
       const sub = el('h3', '');
-      sub.textContent = `${canPromote ? '候补可买' : '候补市场'} · ${upcoming.length}`;
+      sub.textContent = `${canPromote ? '候补可补位' : '候补市场'} · ${upcoming.length}`;
       sub.style.marginTop = '14px';
       market.appendChild(sub);
       for (const pile of upcoming) market.appendChild(shopCard(pile, true));
@@ -2039,6 +2082,11 @@ class App {
         actions.appendChild(cancel);
       } else {
         const compact = this.isCompactCommandLayout();
+        if (this.promoteTargetDefId) {
+          const promote = button(compact ? '放入' : '放入市场', () => this.confirmPromoteMarket(), false);
+          promote.className = 'gold cmd-btn';
+          actions.appendChild(promote);
+        }
         if (this.buyTargetDefId) {
           const cost = getDef(this.buyTargetDefId).cost;
           const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
@@ -2107,6 +2155,9 @@ class App {
       const verb = this.clearBlockadeId ? '移除连接地形' : '清除地形';
       return `<b>${verb}</b><span>${this.selected.size}/${cost} 张牌</span>`;
     }
+    if (this.promoteTargetDefId) {
+      return `<b>放入市场</b><span>${escapeHtml(getDef(this.promoteTargetDefId).name)}</span>`;
+    }
     if (this.buyTargetDefId) {
       const cost = getDef(this.buyTargetDefId).cost;
       const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
@@ -2145,7 +2196,7 @@ class App {
     }
     if (this.selected.size > 0) return `<b>已选手牌</b><span>${this.selected.size} 张可用于行动</span>`;
     if (myTurn && !s.turn?.hasBought && this.marketNeedsPromotion(s)) {
-      return '<b>市场有空位</b><span>可买在售牌，或选择候补牌</span>';
+      return '<b>市场有空位</b><span>可买在售牌，或放入候补牌</span>';
     }
     return '<b>你的回合</b><span>选择手牌或目标地形</span>';
   }

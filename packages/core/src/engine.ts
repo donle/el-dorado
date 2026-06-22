@@ -403,9 +403,7 @@ function buyCard(
   const pile = state.market.find((m) => m.defId === defId);
   if (!pile || pile.count <= 0) throw new RuleError('这张牌当前无法购买');
   if (!pile.onBoard) {
-    if (!hasMarketVacancy(state)) throw new RuleError('这张牌还没有进入市场');
-    pile.onBoard = true;
-    events.push({ type: 'marketPromoted', playerId, defId });
+    throw new RuleError('这张牌还没有进入市场，请先将候补牌放入市场');
   }
 
   const cost = getDef(defId).cost;
@@ -424,7 +422,10 @@ function buyCard(
     takeFromHand(p, card.id);
     p.discard.push(card);
   }
-  p.discard.push(mintCard(p, defId));
+  const bought = mintCard(p, defId);
+  // Cartographer's card text allows it to be played immediately after purchase.
+  if (defId === 'cartographer') p.hand.push(bought);
+  else p.discard.push(bought);
   pile.count -= 1;
   if (pile.count === 0 && pile.onBoard) {
     pile.onBoard = false;
