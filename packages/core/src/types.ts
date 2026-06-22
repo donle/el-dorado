@@ -166,6 +166,8 @@ export interface TurnState {
   removedThisTurn: Card[];
   /** Optional hand-removal choice that must be resolved after an action draws cards. */
   pendingRemoval?: { sourceCardId: string; max: number };
+  /** Optional hand-trim requirement to resolve at end of turn (hand → ≤ max). */
+  pendingTrim?: { max: number };
   /** Whether the player has already bought a card this turn. */
   hasBought: boolean;
   /** Whether the player has used the discard skill at least once this turn. */
