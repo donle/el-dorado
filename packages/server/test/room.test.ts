@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Room } from '../src/room.js';
-import { planTurn, type ServerMessage } from '@eldorado/core';
+import { planTurn, HAND_SIZE, type ServerMessage } from '@eldorado/core';
 
 describe('Room', () => {
   it('assigns distinct colors and a host', () => {
@@ -182,5 +182,47 @@ describe('Room', () => {
     expect(room.closed).toBe(true);
     expect(hostMessages.some((m) => m.type === 'roomClosed')).toBe(false);
     expect(guestMessages).toContainEqual({ type: 'roomClosed', message: '房主已退出，房间已解散' });
+  });
+});
+
+describe('AI end-of-turn trim (integration)', () => {
+  it('AI runAITurns completes turn when AI hand > HAND_SIZE', async () => {
+    // Build a 2-player room: host + one AI. After start() the host is the
+    // current player, so make THEM the AI for this run (matches the
+    // "convert host into AI" pattern used by the other AI tests).
+    const room = new Room('TEST', () => Promise.resolve());
+    room.addHuman('Host', () => {});
+    room.addAI();
+    room.start('classic', 7);
+
+    // Flip the CURRENT player (turn player) to AI so runAITurns plays
+    // exactly one AI turn and stops at the still-human seat.
+    const curId = room.game!.turn!.playerId;
+    const curIdx = room.members.findIndex((m) => m.id === curId);
+    (room as unknown as { members: Array<{ isAI: boolean }> }).members[curIdx].isAI = true;
+    const ai = room.game!.players.find((p) => p.id === curId)!;
+    expect(ai.isAI).toBe(true);
+
+    // Force the AI's hand above HAND_SIZE so the end-of-turn trim must run.
+    ai.hand = [
+      { id: 'a:pioneer#t0', defId: 'pioneer' },
+      { id: 'a:captain#t1', defId: 'captain' },
+      { id: 'a:journalist#t2', defId: 'journalist' },
+      { id: 'a:explorer#t3', defId: 'explorer' },
+      { id: 'a:explorer#t4', defId: 'explorer' },
+    ];
+    expect(ai.hand.length).toBeGreaterThan(HAND_SIZE);
+
+    await room.runAITurns();
+
+    // Re-fetch from the post-run state (applyAction rebuilds state, so
+    // `ai` is stale).
+    const aiAfter = room.game!.players.find((p) => p.id === curId)!;
+
+    // Room did not crash and game continues (current player is now the
+    // still-human seat).
+    expect(room.game!.phase).toBe('playing');
+    // Trim happened: AI hand is at or below the cap after the turn ends.
+    expect(aiAfter.hand.length).toBeLessThanOrEqual(HAND_SIZE);
   });
 });
