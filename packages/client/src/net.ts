@@ -18,7 +18,7 @@ export class Net {
     }
     const url =
       import.meta.env.DEV
-        ? `ws://${location.hostname}:8787`
+        ? `ws://${location.hostname}:8787/ws`
         : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
     const ws = new WebSocket(url);
     this.ws = ws;

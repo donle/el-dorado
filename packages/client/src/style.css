@@ -621,6 +621,39 @@ button:disabled::after { display: none; }
   min-height: 44px; padding: 8px 9px; border-radius: 8px;
   background: rgba(255,255,255,0.045); border: 1px solid rgba(246,214,145,0.12);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.045);
+  transition: background 0.35s ease-out, border-color 0.35s ease-out;
+}
+/* 新进 entry 的高亮渐变。用 @keyframes（一次性）而非 transition，
+   是因为 renderHud 每次重建整个 panel，新 DOM 节点一插入就会播放动画。 */
+@keyframes action-log-fresh-flash {
+  0% {
+    background: color-mix(in srgb, var(--log-player, #f6d691) 55%, transparent);
+    border-color: var(--log-player, #f6d691);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.18),
+      0 0 0 1px var(--log-player, #f6d691),
+      0 0 18px color-mix(in srgb, var(--log-player, #f6d691) 35%, transparent);
+  }
+  55% {
+    background: color-mix(in srgb, var(--log-player, #f6d691) 22%, transparent);
+    border-color: color-mix(in srgb, var(--log-player, #f6d691) 60%, rgba(246,214,145,0.12));
+  }
+  100% {
+    background: rgba(255,255,255,0.045);
+    border-color: rgba(246,214,145,0.12);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.045);
+  }
+}
+.action-log-entry--fresh {
+  animation: action-log-fresh-flash 2.4s cubic-bezier(0.18, 0.7, 0.25, 1) 1;
+}
+.action-log-entry--fresh .action-log-dot {
+  animation: action-log-dot-pulse 2.4s cubic-bezier(0.18, 0.7, 0.25, 1) 1;
+}
+@keyframes action-log-dot-pulse {
+  0%   { transform: scale(1.8); box-shadow: 0 0 0 2px rgba(0,0,0,0.35), 0 0 18px var(--log-player, #f6d691); }
+  60%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
 }
 .action-log-dot {
   width: 8px; height: 8px; margin-top: 5px; border-radius: 50%;
@@ -1471,9 +1504,32 @@ body.mobile-device .modal {
   box-shadow: 0 6px 18px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.06);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
-.pcard.active { border-color: rgba(255,209,102,0.6); transform: translateY(-2px);
-  box-shadow: 0 0 0 1px rgba(255,209,102,0.5), 0 0 22px rgba(255,209,102,0.32), 0 8px 20px rgba(0,0,0,0.45); }
+/* 当前回合玩家卡：玩家色呼吸光晕（统一规则，不分 pin 状态） */
+.pcard.active { border-color: var(--pc); transform: translateY(-2px);
+  animation: pcard-glow-pulse 1.4s ease-in-out infinite; }
+@keyframes pcard-glow-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--pc) 65%, transparent),
+      0 0 28px 6px color-mix(in srgb, var(--pc) 55%, transparent),
+      0 0 60px 8px color-mix(in srgb, var(--pc) 30%, transparent),
+      0 10px 22px rgba(0,0,0,0.5);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--pc) 95%, transparent),
+      0 0 40px 8px color-mix(in srgb, var(--pc) 80%, transparent),
+      0 0 90px 14px color-mix(in srgb, var(--pc) 50%, transparent),
+      0 12px 26px rgba(0,0,0,0.55);
+  }
+}
+.pcard.pinned-hand { border-color: var(--pc); cursor: pointer; }
+.pcard.pinned-hand::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: -6px;
+  height: 2px; border-radius: 2px; background: var(--pc);
+  box-shadow: 0 0 12px var(--pc); }
+.pcard { cursor: pointer; }
 .pcard.finished { opacity: 0.72; }
+.pcard.finished.active { animation: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc) 40%, transparent), 0 6px 16px rgba(0,0,0,0.4); }
 .pcard .pc-top { display: flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 700; }
 .pcard .pc-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pc); flex: 0 0 auto;
   box-shadow: 0 0 0 2px rgba(0,0,0,0.35), 0 0 8px var(--pc); }
@@ -1499,6 +1555,88 @@ body.mobile-device .modal {
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.5); overflow: hidden; margin-top: 7px; }
 .pcard .pc-progress > span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-bright), var(--gold));
   box-shadow: 0 0 8px rgba(255,209,102,0.5); }
+
+/* ---------- Player hand inspector (pinned, click a pcard to open) ---------- */
+.player-hand-panel {
+  position: absolute;
+  top: 168px;                /* just below the row of pcards (top:64 + ~80 tall + 24 gap) */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  width: min(330px, calc(100vw - 28px));
+  max-height: 22rem;          /* ≈ 4 行卡 + head/foot，超出滚动 */
+  overflow: hidden;          /* 让 list 滚动时圆角/边框不漏馅 */
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  --pc: var(--gold);
+  animation: player-hand-pop .22s cubic-bezier(0.18, 0.8, 0.25, 1);
+}
+@keyframes player-hand-pop {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.php-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px 9px;
+  border-bottom: 1px solid var(--border);
+  border-top: 3px solid var(--pc);
+  border-radius: 9px 9px 0 0;
+}
+.php-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pc);
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.35), 0 0 8px var(--pc); flex: 0 0 auto; }
+.php-title-wrap { flex: 1; min-width: 0; }
+.php-kicker { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: 0.04em; }
+.php-title { color: var(--ink); font-size: 14px; font-weight: 800;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.php-close {
+  width: 26px; height: 26px; border: 1px solid var(--border); border-radius: 6px;
+  background: rgba(0,0,0,0.34); color: var(--ink); font-size: 18px; line-height: 1;
+  cursor: pointer; padding: 0; flex: 0 0 auto;
+  transition: background .15s ease, border-color .15s ease;
+}
+.php-close:hover { background: rgba(0,0,0,0.5); border-color: var(--border-strong); }
+.php-list {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 6px; display: flex; flex-direction: column; gap: 4px;
+  scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
+}
+.php-list::-webkit-scrollbar { width: 8px; }
+.php-list::-webkit-scrollbar-track { background: transparent; }
+.php-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong); border-radius: 4px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+.php-list::-webkit-scrollbar-thumb:hover { background: var(--pc); background-clip: padding-box; }
+.php-row {
+  display: grid; grid-template-columns: 38px 1fr auto; gap: 9px; align-items: center;
+  padding: 5px 8px; border-radius: 7px;
+  background: rgba(255,255,255,0.04);
+  transition: background .15s ease;
+}
+.php-row:hover { background: rgba(255,255,255,0.08); }
+.php-thumb { width: 38px; height: 38px; border-radius: 5px; overflow: hidden; }
+.php-thumb svg, .php-thumb img { width: 100%; height: 100%; display: block; }
+.php-info { min-width: 0; }
+.php-name { color: var(--ink); font-size: 12.5px; font-weight: 800;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.php-kind { color: var(--muted); font-size: 10.5px; margin-top: 1px; }
+.php-count { font-size: 14px; font-weight: 900; color: var(--pc); padding: 0 4px;
+  min-width: 32px; text-align: center;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--pc) 50%, transparent); }
+.php-empty { padding: 22px 12px; text-align: center; color: var(--muted); font-size: 12.5px; }
+.php-foot {
+  padding: 7px 12px; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  display: flex; justify-content: space-between; align-items: center;
+}
+body.mobile-device .player-hand-panel { top: 156px; width: min(310px, calc(100vw - 24px)); }
+@media (max-width: 640px) {
+  .player-hand-panel { top: 158px; max-height: 18rem; }
+}
+/* 全局 .hidden 没有 display:none 规则；本面板清空 innerHTML 后 .panel 的 1px border + box-shadow + ::before/::after 仍渲染成一条线 */
+.player-hand-panel.hidden { display: none; }
 
 /* ---------- Your draw / discard piles (flank the hand in the dock) ---------- */
 .pile { pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 6px;

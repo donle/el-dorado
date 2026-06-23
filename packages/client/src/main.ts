@@ -183,6 +183,10 @@ class App {
   private handEls = new Map<string, HTMLElement>();
   private shopEls = new Map<string, HTMLElement>();
   private playerCardEls = new Map<string, HTMLElement>();
+  // 玩家手牌检视面板：独立 panel，跟卡牌 preview / 地形 panel 完全解耦。
+  // 生命周期不同——pinned 才存在，hover 不触发。
+  private playerHandPanel = el('div', 'player-hand-panel panel hidden');
+  private pinnedPlayerId: string | null = null;
   private drawPileEl: HTMLElement | null = null;
   private discardPileEl: HTMLElement | null = null;
   private mobileDeviceQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
@@ -195,6 +199,13 @@ class App {
   private terrainHoverClearTimer: ReturnType<typeof setTimeout> | undefined;
   private actionLog: ActionLogEntry[] = [];
   private actionLogSeq = 0;
+  // 上次实际渲染过的最大 entry id。renderHud 会重建整个 panel，所以
+  // 用来识别"刚加入的"entry：id > lastRenderedId 的就是新的，给它加
+  // .action-log-entry--fresh class 触发一次性高亮动画。
+  // hasRenderedLog 用来在首次 render 时跳过所有 entry 的高亮，
+  // 避免进入游戏时整个历史 log 一起闪。
+  private hasRenderedLog = false;
+  private actionLogLastRenderedId = 0;
   private knownCardDefs = new Map<string, string>();
   private turnIntroEl: HTMLElement | null = null;
   private turnIntroTimer: ReturnType<typeof setTimeout> | undefined;
@@ -203,6 +214,16 @@ class App {
     this.setupMobileLayoutClasses();
     document.body.appendChild(this.preview);
     document.body.appendChild(this.terrainPanel);
+    document.body.appendChild(this.playerHandPanel);
+    // 点 player-hand-panel 之外的位置时关闭。挂一次，listener 内部判断 pinned 状态。
+    document.addEventListener('mousedown', (ev) => {
+      if (!this.pinnedPlayerId) return;
+      const t = ev.target as Node | null;
+      if (!t) return;
+      if (this.playerHandPanel.contains(t)) return;
+      if (this.playerCardEls.get(this.pinnedPlayerId)?.contains(t)) return;
+      this.closePlayerHandPanel();
+    });
     this.board = new BoardClass(document.getElementById('board') as HTMLCanvasElement);
     (window as unknown as { __board: BoardInstance }).__board = this.board;
     (window as unknown as { __app: App }).__app = this;
@@ -469,6 +490,8 @@ class App {
   private resetActionLog(): void {
     this.actionLog = [];
     this.actionLogSeq = 0;
+    this.hasRenderedLog = false;
+    this.actionLogLastRenderedId = 0;
     this.knownCardDefs.clear();
   }
 
@@ -1834,6 +1857,91 @@ class App {
     this.preview.classList.remove('from-log');
   }
 
+  // --- player hand inspector (pinned, independent from card preview / terrain panel) ---
+
+  private togglePlayerHand(playerId: string): void {
+    if (this.pinnedPlayerId === playerId) {
+      this.closePlayerHandPanel();
+    } else {
+      this.pinnedPlayerId = playerId;
+      this.renderPlayerHandPanel();
+      // 高亮当前 pinned 玩家卡
+      this.playerCardEls.forEach((el, id) => el.classList.toggle('pinned-hand', id === playerId));
+    }
+  }
+
+  private closePlayerHandPanel(): void {
+    this.pinnedPlayerId = null;
+    this.playerHandPanel.classList.add('hidden');
+    this.playerHandPanel.innerHTML = '';
+    this.playerCardEls.forEach((el) => el.classList.remove('pinned-hand'));
+  }
+
+  private renderPlayerHandPanel(): void {
+    if (!this.state || !this.pinnedPlayerId) return;
+    const player = this.state.players.find((p) => p.id === this.pinnedPlayerId);
+    if (!player) {
+      // 玩家已离开（断线/被踢）→ 自动关闭
+      this.closePlayerHandPanel();
+      return;
+    }
+    // 整局汇总：手牌 + 牌库 + 弃牌（removed 是永久离开游戏的牌，不计入）
+    const counts = new Map<string, { defId: string; count: number; hand: number; deck: number; discard: number }>();
+    const bump = (c: { defId: string }, bucket: 'hand' | 'deck' | 'discard') => {
+      const cur = counts.get(c.defId) ?? { defId: c.defId, count: 0, hand: 0, deck: 0, discard: 0 };
+      cur.count++;
+      cur[bucket]++;
+      counts.set(c.defId, cur);
+    };
+    for (const c of player.hand) bump(c, 'hand');
+    for (const c of player.deck) bump(c, 'deck');
+    for (const c of player.discard) bump(c, 'discard');
+    // 按 kind 排（green/blue/yellow/action/joker），同 kind 按牌名
+    const kindRank: Record<string, number> = { green: 0, blue: 1, yellow: 2, action: 3, joker: 4 };
+    const entries = [...counts.values()]
+      .map((e) => ({ def: getDef(e.defId), ...e }))
+      .sort((a, b) =>
+        (kindRank[a.def.kind] ?? 9) - (kindRank[b.def.kind] ?? 9)
+        || a.def.name.localeCompare(b.def.name, 'zh'),
+      );
+    const totalAll = player.hand.length + player.deck.length + player.discard.length;
+    const playerColor = colorHex(player.color);
+    const breakdown = (e: { hand: number; deck: number; discard: number }) => {
+      const parts: string[] = [];
+      if (e.hand) parts.push(`手 ${e.hand}`);
+      if (e.deck) parts.push(`库 ${e.deck}`);
+      if (e.discard) parts.push(`弃 ${e.discard}`);
+      return parts.join(' · ');
+    };
+    const rows = entries.length === 0
+      ? '<div class="php-empty">该玩家目前没有任何牌</div>'
+      : entries.map((e) => `
+          <div class="php-row" style="--pc: ${playerColor}">
+            <div class="php-thumb">${cardFace(e.def)}</div>
+            <div class="php-info">
+              <div class="php-name">${escapeHtml(e.def.name)}</div>
+              <div class="php-kind">${KIND_LABEL[e.def.kind] ?? ''}${e.def.singleUse ? ' · 单次' : ''} · ${breakdown(e)}</div>
+            </div>
+            <div class="php-count" title="手牌 + 牌库 + 弃牌合计">×${e.count}</div>
+          </div>`).join('');
+    this.playerHandPanel.style.setProperty('--pc', playerColor);
+    this.playerHandPanel.innerHTML = `
+      <div class="php-head">
+        <span class="php-dot"></span>
+        <div class="php-title-wrap">
+          <div class="php-kicker">整局持牌</div>
+          <div class="php-title">${escapeHtml(playerDisplayName(player))}</div>
+        </div>
+        <button class="php-close" aria-label="关闭持牌详情" type="button">×</button>
+      </div>
+      <div class="php-list">${rows}</div>
+      <div class="php-foot">合计 ${totalAll} 张（手 ${player.hand.length} · 库 ${player.deck.length} · 弃 ${player.discard.length}）</div>`;
+    this.playerHandPanel.classList.remove('hidden');
+    this.playerHandPanel
+      .querySelector<HTMLButtonElement>('.php-close')!
+      .addEventListener('click', () => this.closePlayerHandPanel());
+  }
+
   // --- rendering: lobby ---
 
   /** Freeze the lobby under a 5-second launch countdown before revealing the board. */
@@ -2087,8 +2195,19 @@ class App {
     panel.innerHTML = '<h3>行动日志</h3>';
     const list = el('div', 'action-log-list');
     if (this.actionLog.length > 0) {
-      for (const entry of this.actionLog.slice(-24)) {
+      // 记录渲染前的滚动位置/距离底部的距离。
+      // 移动端 dialog 每次都重建（mobileLogOpen 切换时），重建时无历史滚动位置，
+      // 默认应当滚到底；桌面端 panel 也是每次 renderHud 都重建，但用 list 自身的
+      // clientHeight 衡量靠底。
+      // 我们改用：list 在 panel 挂上 DOM 后再 requestAnimationFrame 测一次
+      // 当时是否靠底；靠底则滚到底（sticky bottom），用户主动上滑后不强拉。
+      const rendered = this.actionLog.slice(-24);
+      for (const entry of rendered) {
         const row = el('div', 'action-log-entry');
+        // 新加的 entry（id > 上次渲染见过的最大 id，且不是首次 render）触发高亮动画
+        if (this.hasRenderedLog && entry.id > this.actionLogLastRenderedId) {
+          row.classList.add('action-log-entry--fresh');
+        }
         row.style.setProperty('--log-player', entry.playerColor);
 
         const dot = document.createElement('span');
@@ -2141,7 +2260,16 @@ class App {
       list.appendChild(empty);
     }
     panel.appendChild(list);
-    list.scrollTop = list.scrollHeight;
+    // 新消息进来时滚到底。panel 每次 renderHud 都重建（scrollTop 从 0 开始），
+    // 没有"之前的位置"可以参考做 sticky，所以无条件跟随最新内容。
+    // 下一帧设值：保证 panel 已挂上 DOM、layout 完成，scrollHeight 才是准的。
+    requestAnimationFrame(() => {
+      list.scrollTop = list.scrollHeight;
+    });
+    // 记录这次渲染过的最大 id，下一次 render 时用它判断"新的"
+    const lastEntry = this.actionLog[this.actionLog.length - 1];
+    if (lastEntry) this.actionLogLastRenderedId = lastEntry.id;
+    this.hasRenderedLog = true;
     return panel;
   }
 
@@ -2245,6 +2373,7 @@ class App {
       const active = p.id === s.turn?.playerId;
       const card = el('div', `pcard ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}`);
       card.style.setProperty('--pc', colorHex(p.color));
+      if (p.id === this.pinnedPlayerId) card.classList.add('pinned-hand');
       const tags = `${p.isAI ? '<span class="ptag">电脑</span>' : ''}${p.offline ? '<span class="ptag offline">离线</span>' : ''}${p.id === this.you ? '<span class="ptag you">你</span>' : ''}`;
       card.innerHTML = `
         <div class="pc-top">
@@ -2259,6 +2388,7 @@ class App {
           <span><b>阻挡物</b>${p.blockades}</span>
         </div>
         <div class="pc-progress"><span style="width:${Math.round(this.progressOf(p) * 100)}%"></span></div>`;
+      card.addEventListener('click', () => this.togglePlayerHand(p.id));
       pcards.appendChild(card);
       this.playerCardEls.set(p.id, card);
     }
@@ -2544,6 +2674,9 @@ class App {
     }
     if (s.phase === 'finished') this.renderGameOverOverlay(s);
     this.renderTerrainPanel();
+    // 出牌 / 摸牌后手牌变了，pinned 玩家手牌面板要反映最新数据；
+    // renderHud 已经重建了玩家卡 DOM（pinned-hand class 重新挂上），这里刷新 panel 内容
+    if (this.pinnedPlayerId) this.renderPlayerHandPanel();
   }
 
   private commandStateHtml(myTurn: boolean, turnName: string): string {
