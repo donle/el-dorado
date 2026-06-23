@@ -333,4 +333,29 @@ describe('Game-start sync barrier', () => {
     expect(pending).toContain(room.members[0].id);
     expect(pending).toContain(room.members[1].id);
   });
+
+  it('disconnect during barrier removes the player from pendingReady and updates clients', () => {
+    const messages: ServerMessage[] = [];
+    const room = new Room('TEST', () => Promise.resolve());
+    const alice = room.addHuman('Alice', (m) => messages.push(m));
+    const bob = room.addHuman('Bob', (m) => messages.push(m));
+    room.start('classic', 1);
+
+    messages.length = 0;
+    const changed = room.disconnect(alice.id);
+
+    expect(changed).toBe(true);
+    // Alice is now AI+offline (existing disconnect semantics).
+    expect(room.member(alice.id)!.isAI).toBe(true);
+    expect(room.member(alice.id)!.offline).toBe(true);
+
+    // Clients received an updated `starting` broadcast that no longer lists Alice.
+    const starts = messages.filter((m) => m.type === 'starting') as Array<{
+      type: 'starting';
+      pendingPlayers: string[];
+    }>;
+    expect(starts.length).toBeGreaterThanOrEqual(1);
+    const lastPending = starts[starts.length - 1].pendingPlayers;
+    expect(lastPending).toEqual([bob.id]);
+  });
 });

@@ -99,6 +99,17 @@ export class Room {
     if (!m) return false;
     if (send && m.send !== send) return false;
     m.send = null;
+    // If they were still waiting on the start barrier, drop them now so the
+    // 'waiting N players' UI doesn't over-count a known-gone client. If that
+    // empties the set, the barrier clears and AI begins.
+    if (this.pendingReady.delete(playerId)) {
+      if (this.pendingReady.size === 0) {
+        this.clearReadyTimeout();
+        void this.runAITurns();
+      } else {
+        this.broadcastStarting();
+      }
+    }
     if (this.phase === 'playing' && !m.isAI && !m.offline) {
       m.isAI = true;
       m.offline = true;
