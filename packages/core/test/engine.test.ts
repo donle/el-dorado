@@ -1391,4 +1391,13 @@ describe('End-of-turn hand cap', () => {
     // The turn should still advance normally.
     expect(r.state.currentPlayerIdx).not.toBe(s.currentPlayerIdx);
   });
+
+  it('dispatch blocks non-DiscardCards actions when pendingTrim is set', () => {
+    const s = game(2);
+    // Force pendingTrim state by setting it directly on turn.
+    s.turn!.pendingTrim = { max: 4 };
+    const r = applyAction(s, 'p0', { type: 'EndTurn' });
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toMatch(/先把手牌精简到/);
+  });
 });

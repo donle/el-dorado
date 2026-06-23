@@ -86,6 +86,9 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
   if (state.turn?.pendingRemoval && action.type !== 'RemoveCards') {
     throw new RuleError('请先处理要移除的手牌');
   }
+  if (state.turn?.pendingTrim && action.type !== 'DiscardCards') {
+    throw new RuleError('先把手牌精简到 ' + HAND_SIZE + ' 张');
+  }
 
   switch (action.type) {
     case 'PlayMovementCard':
