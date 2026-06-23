@@ -39,6 +39,13 @@ export class Room {
   phase: 'lobby' | 'playing' | 'finished' = 'lobby';
   members: Member[] = [];
   game: GameState | null = null;
+  private pendingReady: Set<string> = new Set();
+  private readyTimer: NodeJS.Timeout | null = null;
+  /** Cap on how long we wait for all humans to finish their countdown before
+   *  flipping any missing ones to AI control. Must be < the WS heartbeat
+   *  (default 30s) so a silently-dead client hits this barrier before the
+   *  heartbeat kills the socket. */
+  private readonly READY_TIMEOUT_MS = 30_000;
 
   constructor(code: string, sleep?: (ms: number) => Promise<void>) {
     this.code = code;
@@ -147,6 +154,10 @@ export class Room {
     }));
     this.game = createGame(seeds, mapId, seed);
     this.phase = 'playing';
+    this.pendingReady = new Set(
+      this.members.filter((m) => !m.isAI && !m.offline).map((m) => m.id),
+    );
+    this.clearReadyTimeout();
   }
 
   returnToLobby(): void {
@@ -173,6 +184,59 @@ export class Room {
 
   broadcastState(events: GameEvent[] = []): void {
     if (this.game) this.broadcast({ type: 'state', state: this.game, events });
+  }
+
+  /** Broadcast the current list of humans still waiting for ready. */
+  broadcastStarting(): void {
+    this.broadcast({
+      type: 'starting',
+      pendingPlayers: [...this.pendingReady],
+    });
+  }
+
+  /** Start the 30s countdown. If no humans need ready, run AI immediately. */
+  armReadyTimeout(): void {
+    this.clearReadyTimeout();
+    if (this.pendingReady.size === 0) {
+      // All-AI or all-offline game: nothing to wait for.
+      void this.runAITurns();
+      return;
+    }
+    this.readyTimer = setTimeout(() => this.handleReadyTimeout(), this.READY_TIMEOUT_MS);
+  }
+
+  private clearReadyTimeout(): void {
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
+  }
+
+  /** Fired by the 30s timer: flip any still-unready humans to AI control. */
+  private handleReadyTimeout(): void {
+    this.readyTimer = null;
+    for (const id of this.pendingReady) {
+      const m = this.member(id);
+      if (!m) continue;
+      m.isAI = true;
+      m.offline = true;
+      this.syncGamePlayer(m);
+    }
+    this.pendingReady.clear();
+    this.broadcastRoom();
+    this.broadcastStarting(); // pendingPlayers now []
+    void this.runAITurns();
+  }
+
+  /** Called when a human client finishes their countdown. No-op if not pending. */
+  markReady(playerId: string): void {
+    if (!this.pendingReady.has(playerId)) return;
+    this.pendingReady.delete(playerId);
+    this.broadcastStarting();
+    if (this.pendingReady.size === 0) {
+      this.clearReadyTimeout();
+      void this.runAITurns();
+    }
   }
 
   private currentPlayerId(): string | null {
