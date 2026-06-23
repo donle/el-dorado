@@ -6,11 +6,11 @@
 # 跟 double-jump 一套部署模板，目录布局改为 packages/*；推送到
 # ghcr.io/donle/el-dorado（不再共用 double-jump 的镜像名）。
 #
-# pnpm 10 引入了后台 store server，老 Docker (20.10) 默认 store 写在容器层，
-# 会撞 EPERM。用 BuildKit 的 --mount=type=cache 把 store 落到 host cache 目录：
-#   - 跨 build 复用（增量快）
-#   - 不进 image layer（镜像更小、不污染缓存）
-#   - 避开容器内 /tmp 写权限问题
+# pnpm 10 引入了后台 store server，IPC socket + state lock 落在系统临时目录，
+# 老 Docker (20.10) 上会撞 EPERM。三层防护：
+#   1. --mount=type=cache 把 store 落到 host cache 目录（不污染镜像层、跨 build 复用）
+#   2. mkdir+chmod 1777 显式准备 pnpm-server 状态目录，避开容器内 /tmp 权限/挂载差异
+#   3. pnpm_config_state_dir 把 pnpm 10 的 store-server state 钉到上一步那个目录
 # 需 DOCKER_BUILDKIT=1（Docker 20.10 默认未开）或 buildx。
 # =============================================================================
 
@@ -35,11 +35,12 @@ COPY packages/core/ ./packages/core/
 # client 源码（src、public、vite.config、tsconfig）
 COPY packages/client/ ./packages/client/
 
-# 只装 client 的依赖（--filter @eldorado/client... 拉取它的传递依赖）
+# pnpm install：cache mount 落 store 到 host，1777 临时目录放 server state/socket
 # --ignore-scripts 避免 pnpm 10+ 拦截未声明的 install 脚本（esbuild 手动跑）
-# --mount=type=cache 把 pnpm store 写到 host，跨 build 复用（同一个 id）
 RUN --mount=type=cache,target=/pnpm/store,id=pnpm-store \
+    mkdir -p /tmp/pnpm-server && chmod 1777 /tmp/pnpm-server && \
     PNPM_STORE_DIR=/pnpm/store \
+    pnpm_config_state_dir=/tmp/pnpm-server \
     pnpm install --no-lockfile --filter @eldorado/client... \
     --config.strict-dep-builds=false --ignore-scripts 2>&1 | tail -20
 
@@ -64,7 +65,9 @@ COPY packages/server/ ./packages/server/
 COPY packages/core/ ./packages/core/
 
 RUN --mount=type=cache,target=/pnpm/store,id=pnpm-store \
+    mkdir -p /tmp/pnpm-server && chmod 1777 /tmp/pnpm-server && \
     PNPM_STORE_DIR=/pnpm/store \
+    pnpm_config_state_dir=/tmp/pnpm-server \
     pnpm install --no-lockfile --filter @eldorado/server... \
     --config.strict-dep-builds=false --ignore-scripts 2>&1 | tail -10
 
