@@ -2,10 +2,19 @@
 # El Dorado — 单镜像构建（HTTP 静态 + WebSocket 单进程，端口 3000）
 # 构建上下文：仓库根
 # 用法：
-#   docker build -t el-dorado .
-# 跟 double-jump 同一套部署模板，目录布局改为 packages/*；推送到
+#   DOCKER_BUILDKIT=1 docker build -t el-dorado .
+# 跟 double-jump 一套部署模板，目录布局改为 packages/*；推送到
 # ghcr.io/donle/el-dorado（不再共用 double-jump 的镜像名）。
+#
+# pnpm 10 引入了后台 store server，老 Docker (20.10) 默认 store 写在容器层，
+# 会撞 EPERM。用 BuildKit 的 --mount=type=cache 把 store 落到 host cache 目录：
+#   - 跨 build 复用（增量快）
+#   - 不进 image layer（镜像更小、不污染缓存）
+#   - 避开容器内 /tmp 写权限问题
+# 需 DOCKER_BUILDKIT=1（Docker 20.10 默认未开）或 buildx。
 # =============================================================================
+
+# syntax=docker/dockerfile:1.4
 
 # ---------- Stage 1: build client ----------
 FROM node:22-alpine AS client-build
@@ -28,7 +37,10 @@ COPY packages/client/ ./packages/client/
 
 # 只装 client 的依赖（--filter @eldorado/client... 拉取它的传递依赖）
 # --ignore-scripts 避免 pnpm 10+ 拦截未声明的 install 脚本（esbuild 手动跑）
-RUN pnpm install --no-lockfile --filter @eldorado/client... \
+# --mount=type=cache 把 pnpm store 写到 host，跨 build 复用（同一个 id）
+RUN --mount=type=cache,target=/pnpm/store,id=pnpm-store \
+    PNPM_STORE_DIR=/pnpm/store \
+    pnpm install --no-lockfile --filter @eldorado/client... \
     --config.strict-dep-builds=false --ignore-scripts 2>&1 | tail -20
 
 # vite 依赖 esbuild 原生二进制，--ignore-scripts 跳过了它，手动跑 install.js
@@ -43,9 +55,6 @@ RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 WORKDIR /build
 
 ENV NODE_OPTIONS=--max-old-space-size=1024
-# 显式把 pnpm store 放到 /tmp，避开默认路径的写权限问题
-ENV PNPM_HOME=/tmp/pnpm-home
-ENV PNPM_STORE_DIR=/tmp/pnpm-store
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY packages/server/package.json ./packages/server/
@@ -54,7 +63,9 @@ COPY packages/core/package.json ./packages/core/
 COPY packages/server/ ./packages/server/
 COPY packages/core/ ./packages/core/
 
-RUN pnpm install --no-lockfile --filter @eldorado/server... \
+RUN --mount=type=cache,target=/pnpm/store,id=pnpm-store \
+    PNPM_STORE_DIR=/pnpm/store \
+    pnpm install --no-lockfile --filter @eldorado/server... \
     --config.strict-dep-builds=false --ignore-scripts 2>&1 | tail -10
 
 # ---------- Stage 3: runtime ----------

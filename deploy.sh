@@ -48,7 +48,9 @@ fi
 if [[ "$TAG" == "local" ]]; then
   TAG="local-$(date +%Y%m%d-%H%M%S)"
   echo "==> [local] 在服务器上 build 镜像：$IMAGE:$TAG"
-  docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+  # Dockerfile 用了 BuildKit 语法（--mount=type=cache + # syntax=docker/dockerfile:1.4）。
+  # Docker 20.10 默认未启 BuildKit，必须显式开，否则 --mount=type=cache 会被忽略并 EPERM。
+  DOCKER_BUILDKIT=1 docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
 else
   echo "==> 拉取镜像：$IMAGE:$TAG"
   docker pull "$IMAGE:$TAG"
