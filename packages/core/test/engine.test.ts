@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createGame } from '../src/setup.js';
 import { applyAction } from '../src/engine.js';
 import { isAdjacent, key, neighbors } from '../src/hex.js';
@@ -1445,5 +1445,60 @@ describe('End-of-turn hand cap', () => {
     expect(r.state.turn?.pendingTrim).toEqual({ max: 4 }); // still open
     expect(r.state.players[0].hand.length).toBe(5); // 6 - 1 = 5, still > max
     expect(r.state.currentPlayerIdx).toBe(before); // did NOT advance
+  });
+
+  it('AI safety net: endTurn with AI hand > 4 auto-discards lowest-power and advances', () => {
+    const s = game(2);
+    s.players[0].isAI = true;
+    // Mix of powers: explorer(1), sailor(1), scout(2), sailor(1), scientist(0)
+    // Lowest-power-first discard should drop scientist(0), then one of the 1-powers.
+    giveHand(s, 'p0', ['explorer', 'sailor', 'scout', 'sailor', 'scientist']);
+    expect(s.players[0].hand).toHaveLength(5);
+    const before = s.currentPlayerIdx;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const r = applyAction(s, 'p0', { type: 'EndTurn' });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      expect(r.state.turn?.pendingTrim).toBeUndefined();
+      expect(r.state.players[0].hand.length).toBe(4);
+      expect(r.state.currentPlayerIdx).not.toBe(before); // advanced
+      // AI safety net MUST emit the [AI-TRIM-SAFETY] warning
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[AI-TRIM-SAFETY]'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('AI safety net does NOT fire when AI hand ≤ 4', () => {
+    const s = game(2);
+    s.players[0].isAI = true;
+    giveHand(s, 'p0', ['sailor', 'explorer', 'sailor', 'explorer']);
+    expect(s.players[0].hand).toHaveLength(4);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const r = applyAction(s, 'p0', { type: 'EndTurn' });
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(r.result.ok).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('AI safety net fires for offline player too', () => {
+    const s = game(2);
+    s.players[0].offline = true;
+    giveHand(s, 'p0', ['sailor', 'explorer', 'sailor', 'explorer', 'sailor']);
+    expect(s.players[0].hand).toHaveLength(5);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const r = applyAction(s, 'p0', { type: 'EndTurn' });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      expect(r.state.players[0].hand.length).toBe(4);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[AI-TRIM-SAFETY]'));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

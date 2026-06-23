@@ -483,6 +483,37 @@ function discardCards(
   }
 }
 
+/**
+ * Safety net for AI / offline players: when they end a turn with a hand over
+ * HAND_SIZE (because their plan forgot a DiscardCards action), automatically
+ * discard the lowest-power-first cards down to the cap. Logs a warning so we
+ * can diagnose plan bugs in production.
+ */
+function autoDiscardLowestPower(
+  state: GameState,
+  p: Player,
+  count: number,
+  events: GameEvent[],
+): void {
+  const ids = p.hand
+    .slice()
+    .sort((a, b) => getDef(a.defId).power - getDef(b.defId).power)
+    .slice(0, count)
+    .map((c) => c.id);
+
+  for (const id of ids) {
+    const card = takeFromHand(p, id);
+    p.discard.push(card);
+  }
+  if (state.turn) state.turn.hasDiscarded = true;
+  events.push({ type: 'discarded', playerId: p.id, count: ids.length });
+
+  console.warn(
+    `[AI-TRIM-SAFETY] auto-discarded ${ids.length} card(s) for AI/offline player ${p.id} ` +
+      `at end of turn (plan likely missing DiscardCards).`,
+  );
+}
+
 function removeCards(
   state: GameState,
   playerId: string,
@@ -607,11 +638,15 @@ function endTurn(state: GameState, playerId: string, events: GameEvent[]): void 
   }
   for (const card of turn.removedThisTurn) p.removed.push(card);
 
-  // Hand-cap trim check: if a human player holds more than HAND_SIZE cards
-  // at end of turn, defer draw/advance until they discard down to the cap.
-  // (AI/offline safety net is implemented in Task 5.)
+  // Hand-cap trim check: if a player holds more than HAND_SIZE cards at end
+  // of turn, defer draw/advance for humans until they discard down to the cap.
+  // AI/offline safety net auto-discards the lowest-power cards so the room
+  // doesn't stall on a missing DiscardCards action.
   if (p.hand.length > HAND_SIZE) {
-    if (!p.isAI && !p.offline) {
+    if (p.isAI || p.offline) {
+      autoDiscardLowestPower(state, p, p.hand.length - HAND_SIZE, events);
+      // Falls through to normal draw + advanceTurn below.
+    } else {
       turn.pendingTrim = { max: HAND_SIZE };
       return;
     }
