@@ -13,7 +13,7 @@
  */
 import type { GameState, Player, Hex, MoveSymbol, Terrain, Axial, Blockade, MarketPile } from './types.js';
 import type { Action } from './actions.js';
-import { getDef, coinValue, movableSymbols } from './cards.js';
+import { getDef, coinValue, movableSymbols, HAND_SIZE } from './cards.js';
 import { neighbors, key } from './hex.js';
 
 function terrainSymbol(t: Terrain): MoveSymbol | null {
@@ -480,6 +480,21 @@ export function planTurn(state: GameState, playerId: string): Action[] {
     const cardIds = available().map((c) => c.id);
     if (cardIds.length) actions.push({ type: 'DiscardCards', cardIds });
   }
+
+  // End-of-turn hand-cap trim: if the AI still holds more than HAND_SIZE cards
+  // (e.g. bought a card on top of a full hand), discard the lowest-power excess
+  // so the server doesn't have to fall back to the [AI-TRIM-SAFETY] auto-discard.
+  // Uses the same lowest-power-first order as engine's autoDiscardLowestPower.
+  const trimCount = p.hand.length - HAND_SIZE;
+  if (trimCount > 0) {
+    const toDiscard = p.hand
+      .slice()
+      .sort((a, b) => getDef(a.defId).power - getDef(b.defId).power)
+      .slice(0, trimCount)
+      .map((c) => c.id);
+    if (toDiscard.length > 0) actions.push({ type: 'DiscardCards', cardIds: toDiscard });
+  }
+
   actions.push({ type: 'EndTurn' });
   return actions;
 }

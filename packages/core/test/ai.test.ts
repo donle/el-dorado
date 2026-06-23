@@ -146,3 +146,110 @@ describe('AI', () => {
     expect(dc.cardIds.length).toBeGreaterThan(0);
   });
 });
+
+describe('AI end-of-turn trim', () => {
+  it('planTurn emits DiscardCards before EndTurn when hand > HAND_SIZE and moved=true', () => {
+    // Construct a state where the AI CAN move (moved=true) but starts with 5
+    // cards in hand — so the rest fallback does NOT fire, and the only way a
+    // DiscardCards action can appear is via the trim block.
+    //
+    // Setup mirrors the existing "emits RemoveBlockade" test (q=2,r=-3 with
+    // full machete/paddle/coin coverage in hand+deck). The AI traverses and
+    // uses 4 of 5 hand cards across 3 StepTo + 2 PlayMovementCard pairs.
+    // After all movement, 1 card remains in hand → trim discards it.
+    let s = createGame(
+      [
+        { id: 'a', name: 'A', color: 'red', isAI: true },
+        { id: 'b', name: 'B', color: 'blue', isAI: true },
+      ],
+      'classic',
+      1,
+    );
+    const a = s.players.find((p) => p.id === 'a')!;
+    const oldHex = s.hexes.find((h) => h.q === a.position.q && h.r === a.position.r);
+    if (oldHex) oldHex.occupant = undefined;
+    a.position = { q: 2, r: -3 };
+    const newHex = s.hexes.find((h) => h.q === 2 && h.r === -3)!;
+    newHex.occupant = 'a';
+    // 5 cards: full symbol coverage (pioneer=5, captain=3, journalist=3) plus
+    // two lowest-power explorers (power=1) so trim has a clear "lowest" pick.
+    a.hand = [
+      { id: 'a:pioneer#t0', defId: 'pioneer' },
+      { id: 'a:captain#t1', defId: 'captain' },
+      { id: 'a:journalist#t2', defId: 'journalist' },
+      { id: 'a:explorer#t3', defId: 'explorer' },
+      { id: 'a:explorer#t4', defId: 'explorer' },
+    ];
+    a.deck = [
+      { id: 'a:pioneer#d0', defId: 'pioneer' },
+      { id: 'a:captain#d1', defId: 'captain' },
+      { id: 'a:journalist#d2', defId: 'journalist' },
+    ];
+    a.discard = [];
+
+    const plan = planTurn(s, 'a');
+    // The plan must end with EndTurn.
+    expect(plan[plan.length - 1].type).toBe('EndTurn');
+    // The AI must have moved at least once (otherwise the rest fallback would
+    // also discard and we couldn't isolate the trim behavior).
+    const hasStep = plan.some((x) => x.type === 'StepTo' || x.type === 'UseAbility');
+    expect(hasStep, 'expected AI to move so the rest fallback is skipped').toBe(true);
+    // The plan must contain at least one DiscardCards (only the trim block
+    // produces one when moved=true).
+    const discards = plan.filter((x) => x.type === 'DiscardCards') as Array<{
+      type: 'DiscardCards';
+      cardIds: string[];
+    }>;
+    expect(discards.length, 'expected at least one DiscardCards from trim').toBeGreaterThanOrEqual(1);
+    // The DiscardCards must come before EndTurn.
+    const lastDiscardIdx = plan
+      .map((x, i) => (x.type === 'DiscardCards' ? i : -1))
+      .filter((i) => i >= 0)
+      .pop()!;
+    const endTurnIdx = plan.findIndex((x) => x.type === 'EndTurn');
+    expect(lastDiscardIdx).toBeLessThan(endTurnIdx);
+    // The trimmed card should be the lowest-power card in the hand (explorer = 1).
+    const handIds = new Set(a.hand.map((c) => c.id));
+    const allTrimIds = discards.flatMap((d) => d.cardIds);
+    for (const id of allTrimIds) {
+      expect(handIds.has(id), `trimmed id ${id} should be from hand`).toBe(true);
+    }
+  });
+
+  it('planTurn does not emit a trim DiscardCards when hand <= HAND_SIZE', () => {
+    // 4 cards in hand (== HAND_SIZE), same setup as above minus one explorer.
+    // The plan should NOT include a DiscardCards at all: no trim (hand == cap),
+    // and the rest fallback doesn't fire because the AI moves.
+    let s = createGame(
+      [
+        { id: 'a', name: 'A', color: 'red', isAI: true },
+        { id: 'b', name: 'B', color: 'blue', isAI: true },
+      ],
+      'classic',
+      1,
+    );
+    const a = s.players.find((p) => p.id === 'a')!;
+    const oldHex = s.hexes.find((h) => h.q === a.position.q && h.r === a.position.r);
+    if (oldHex) oldHex.occupant = undefined;
+    a.position = { q: 2, r: -3 };
+    const newHex = s.hexes.find((h) => h.q === 2 && h.r === -3)!;
+    newHex.occupant = 'a';
+    a.hand = [
+      { id: 'a:pioneer#t0', defId: 'pioneer' },
+      { id: 'a:captain#t1', defId: 'captain' },
+      { id: 'a:journalist#t2', defId: 'journalist' },
+      { id: 'a:explorer#t3', defId: 'explorer' },
+    ];
+    a.deck = [
+      { id: 'a:pioneer#d0', defId: 'pioneer' },
+      { id: 'a:captain#d1', defId: 'captain' },
+      { id: 'a:journalist#d2', defId: 'journalist' },
+    ];
+    a.discard = [];
+
+    const plan = planTurn(s, 'a');
+    const discards = plan.filter((x) => x.type === 'DiscardCards');
+    expect(discards.length, 'hand == HAND_SIZE: no trim DiscardCards expected').toBe(0);
+    expect(plan[plan.length - 1].type).toBe('EndTurn');
+  });
+});
