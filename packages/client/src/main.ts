@@ -4,6 +4,7 @@ import { cardFace } from './cardFaces.js';
 import {
   getDef,
   CARD_DEFS,
+  HAND_SIZE,
   movableSymbols,
   coinValue,
   neighbors,
@@ -128,7 +129,7 @@ function sameCoord(a: Axial, b: Axial): boolean {
   return a.q === b.q && a.r === b.r;
 }
 
-type Mode = 'idle' | 'clear' | 'remove';
+type Mode = 'idle' | 'clear' | 'remove' | 'trim';
 type ActionLogSegment = { text: string; defId?: string; coord?: Axial; blockadeId?: string };
 type ActionLogEntry = {
   id: number;
@@ -738,6 +739,7 @@ class App {
    */
   private syncSelectionToState(): void {
     const wasRemoveMode = this.mode === 'remove';
+    const wasTrimMode = this.mode === 'trim';
     this.mode = 'idle';
     this.buyTargetDefId = null;
     this.promoteTargetDefId = null;
@@ -759,6 +761,19 @@ class App {
       this.mode = 'remove';
       this.removeAfterDrawLimit = pending.max;
       this.hint = `选择最多 ${pending.max} 张手牌移除，或直接跳过`;
+    }
+    // NEW: pendingTrim branch (mutually exclusive with pendingRemoval — only
+    // enter trim when not already in remove mode, matching the dispatch gate
+    // on the server).
+    const pendingTrim = this.state?.turn?.pendingTrim;
+    if (pendingTrim) {
+      if (!wasTrimMode) this.selected.clear();
+      this.mode = 'trim';
+      this.hint = `回合末：精简手牌到 ${pendingTrim.max} 张`;
+    } else if (wasTrimMode) {
+      // pendingTrim 已解析（DiscardCards 续跑后下发的 state），回到 idle
+      this.selected.clear();
+      this.hint = '';
     }
   }
 
@@ -1128,6 +1143,13 @@ class App {
 
   private onCardClick(cardId: string): void {
     if (!this.isMyTurn()) return;
+    // NEW: trim mode toggles selection
+    if (this.mode === 'trim') {
+      if (this.selected.has(cardId)) this.selected.delete(cardId);
+      else this.selected.add(cardId);
+      this.renderHud();
+      return;
+    }
     if (this.mode === 'remove') {
       const handIds = new Set((this.me?.hand ?? []).map((c) => c.id));
       if (!handIds.has(cardId)) return;
@@ -1495,6 +1517,15 @@ class App {
       return;
     }
     this.act({ type: 'RemoveCards', cardIds });
+  }
+
+  private confirmTrim(): void {
+    if (this.mode !== 'trim') return;
+    this.act({
+      type: 'DiscardCards',
+      cardIds: [...this.selected],
+    });
+    // 不手动清 selected：DiscardCards 触发 state 推送后 syncSelectionToState 会清
   }
 
   private cancelMode(): void {
@@ -2424,6 +2455,14 @@ class App {
         const cancel = button('取消', () => this.cancelMode(), true);
         cancel.classList.add('cmd-btn');
         actions.appendChild(cancel);
+      } else if (this.mode === 'trim' && s.turn?.pendingTrim && me) {
+        const handSize = me.hand.length;
+        const min = Math.max(0, handSize - HAND_SIZE);
+        const sel = this.selectedHandCardIds().length;
+        const btn = button(`确认精简 ${sel}/${min}`, () => this.confirmTrim(), false);
+        btn.className = 'gold cmd-btn';
+        btn.disabled = sel < min;
+        actions.appendChild(btn);
       } else {
         const compact = this.isCompactCommandLayout();
         if (this.promoteTargetDefId) {
@@ -2498,6 +2537,12 @@ class App {
         : this.hexAt(this.clearTarget!)?.cost ?? 0;
       const verb = this.clearBlockadeId ? '移除连接地形' : '清除地形';
       return `<b>${verb}</b><span>${this.selected.size}/${cost} 张牌</span>`;
+    }
+    if (this.mode === 'trim') {
+      const me = this.me;
+      const handSize = me?.hand.length ?? 0;
+      const min = Math.max(0, handSize - HAND_SIZE);
+      return `<b>回合末精简</b><span>已选 ${this.selectedHandCardIds().length}/${min} 张，至少弃到 ${HAND_SIZE} 张</span>`;
     }
     if (this.promoteTargetDefId) {
       return `<b>放入市场</b><span>${escapeHtml(getDef(this.promoteTargetDefId).name)}</span>`;
