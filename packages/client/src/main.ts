@@ -171,6 +171,7 @@ class App {
   private startingTickTimer: ReturnType<typeof setInterval> | undefined;
   private startingCountdownDone = false;
   private startingCountdownEndsAt = 0;
+  private startingPendingPlayers: Set<string> = new Set();
   /** Whether the in-game settings dropdown is open. */
   private settingsOpen = false;
   private systemDialog: HTMLElement | null = null;
@@ -306,6 +307,11 @@ class App {
         if (turnPlayerChanged) this.board.panToPlayerIfOffscreen(m.state.turn?.playerId ?? null);
         if (shouldShowTurnIntro) this.showTurnIntro();
         for (const e of buys) this.animateBuy(e.playerId, e.defId, sources.get(`${e.defId}|${e.playerId}`));
+        break;
+      }
+      case 'starting': {
+        this.startingPendingPlayers = new Set(m.pendingPlayers);
+        this.updateStartingCopy();
         break;
       }
       case 'roomClosed':
@@ -1871,17 +1877,34 @@ class App {
     node.classList.add('tick');
   }
 
+  private updateStartingCopy(): void {
+    if (!this.starting) return;
+    const copy = this.lobby.querySelector<HTMLElement>('[data-starting-copy]');
+    if (!copy) return;
+    if (!this.startingCountdownDone) {
+      copy.textContent = '确认装备，校准指南针...';
+      return;
+    }
+    const remaining = this.startingPendingPlayers.size;
+    if (remaining === 0) {
+      copy.textContent = '即将开始...';
+    } else {
+      copy.textContent = `等待 ${remaining} 名玩家准备中...`;
+    }
+  }
+
   private completeStartingCountdown(): void {
     if (!this.starting) return;
     this.startingCountdownDone = true;
     clearInterval(this.startingTickTimer);
     this.updateStartingCountdown();
+    // Tell the server we're ready — unblocks the AI barrier.
+    this.net.send({ type: 'ready' });
     if (this.state?.phase === 'playing') {
       this.endStarting(true);
       return;
     }
-    const copy = this.lobby.querySelector<HTMLElement>('[data-starting-copy]');
-    if (copy) copy.textContent = '正在同步棋盘...';
+    this.updateStartingCopy();
   }
 
   private endStarting(enterGame: boolean): void {
