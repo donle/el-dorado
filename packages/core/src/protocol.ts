@@ -32,11 +32,13 @@ export type ClientMessage =
   | { type: 'leaveRoom' }
   | { type: 'returnToLobby' }
   | { type: 'setAiDelay'; ms: number }
+  | { type: 'ready' }
   | { type: 'action'; action: Action };
 
 export type ServerMessage =
   | { type: 'joined'; code: string; playerId: string }
   | { type: 'room'; room: RoomView }
   | { type: 'state'; state: GameState; events?: GameEvent[] }
+  | { type: 'starting'; pendingPlayers: string[] }
   | { type: 'roomClosed'; message: string }
   | { type: 'error'; message: string };
