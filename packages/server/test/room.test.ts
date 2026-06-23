@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Room } from '../src/room.js';
 import { planTurn, HAND_SIZE, type ServerMessage } from '@eldorado/core';
 
@@ -224,5 +224,113 @@ describe('AI end-of-turn trim (integration)', () => {
     expect(room.game!.phase).toBe('playing');
     // Trim happened: AI hand is at or below the cap after the turn ends.
     expect(aiAfter.hand.length).toBeLessThanOrEqual(HAND_SIZE);
+  });
+});
+
+describe('Game-start sync barrier', () => {
+  it('startGame gates runAITurns until all humans ready', async () => {
+    vi.useFakeTimers();
+    try {
+      const room = new Room('TEST', () => Promise.resolve());
+      room.addHuman('Alice', () => {});
+      room.addHuman('Bob', () => {});
+      room.start('classic', 1);
+      room.armReadyTimeout();
+
+      // Neither human is ready yet — AI turns must NOT have begun.
+      const turnBefore = room.game!.turn!.playerId;
+      await vi.advanceTimersByTimeAsync(100);
+      // The turn player hasn't moved: still the same player, no AI run started.
+      expect(room.game!.turn!.playerId).toBe(turnBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('all humans ready triggers runAITurns', async () => {
+    const messages: ServerMessage[] = [];
+    const room = new Room('TEST', () => Promise.resolve());
+    room.addHuman('Alice', (m) => messages.push(m));
+    room.addHuman('Bob', (m) => messages.push(m));
+    room.start('classic', 1);
+    room.armReadyTimeout();
+
+    // Mark both humans ready.
+    const [a, b] = room.members;
+    room.markReady(a.id);
+    room.markReady(b.id);
+
+    // Give the fire-and-forget runAITurns() a microtask to advance.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The barrier is empty: the last 'starting' broadcast after both
+    // markReady calls reported an empty pendingPlayers list.
+    const starts = messages.filter((m) => m.type === 'starting');
+    expect(starts.length).toBeGreaterThan(0);
+    const last = starts[starts.length - 1] as { pendingPlayers: string[] };
+    expect(last.pendingPlayers).toEqual([]);
+  });
+
+  it('all-AI game skips the barrier and runs AI immediately', async () => {
+    const room = new Room('TEST', () => Promise.resolve());
+    room.addHuman('Host', () => {});
+    room.addAI();
+    // Make host an AI so we have a full all-AI lineup.
+    room.members[0].isAI = true;
+    room.start('classic', 7);
+
+    // armReadyTimeout should detect empty pendingReady and run AI directly.
+    room.armReadyTimeout();
+    // runAITurns is fire-and-forget; flush microtasks until the game
+    // finishes (or until we hit a safety cap to avoid hanging).
+    for (let i = 0; i < 5000 && room.game!.phase !== 'finished'; i++) {
+      await Promise.resolve();
+    }
+
+    expect(room.game!.phase).toBe('finished');
+  });
+
+  it('30s timeout flips un-ready humans to AI and runs AI', async () => {
+    vi.useFakeTimers();
+    try {
+      const room = new Room('TEST', () => Promise.resolve());
+      const alice = room.addHuman('Alice', () => {});
+      const bob = room.addHuman('Bob', () => {});
+      room.start('classic', 1);
+      room.armReadyTimeout();
+
+      // Advance to just before timeout — humans should still be human.
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(room.member(alice.id)!.isAI).toBe(false);
+      expect(room.member(bob.id)!.isAI).toBe(false);
+
+      // Cross the timeout boundary.
+      await vi.advanceTimersByTimeAsync(2);
+      expect(room.member(alice.id)!.isAI).toBe(true);
+      expect(room.member(bob.id)!.isAI).toBe(true);
+      expect(room.member(alice.id)!.offline).toBe(true);
+      expect(room.member(bob.id)!.offline).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('broadcastStarting emits the current pendingPlayers list', () => {
+    const messages: ServerMessage[] = [];
+    const room = new Room('TEST');
+    room.addHuman('Alice', (m) => messages.push(m));
+    room.addHuman('Bob', (m) => messages.push(m));
+    room.addAI();
+    room.start('classic', 1);
+
+    messages.length = 0;
+    room.broadcastStarting();
+    const starts = messages.filter((m) => m.type === 'starting');
+    expect(starts).toHaveLength(2);
+    const pending = (starts[0] as { pendingPlayers: string[] }).pendingPlayers;
+    expect(pending).toHaveLength(2);
+    expect(pending).toContain(room.members[0].id);
+    expect(pending).toContain(room.members[1].id);
   });
 });
