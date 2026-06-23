@@ -316,7 +316,9 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
       room.start(msg.mapId ?? room.mapId);
       room.broadcastRoom();
       room.broadcastState();
-      void room.runAITurns(); // in case the first player is an AI
+      // Gate AI turns behind a client readiness barrier — see handleReadyTimeout.
+      room.broadcastStarting();
+      room.armReadyTimeout();
       return;
     }
     case 'setAiDelay': {
@@ -330,6 +332,13 @@ function handle(session: Session, send: Send, msg: ClientMessage): void {
         return void send({ type: 'error', message: '你还没有进入游戏' });
       const res = session.room.handleAction(session.playerId, msg.action);
       if (!res.ok) send({ type: 'error', message: res.error ?? '这个操作不符合规则' });
+      return;
+    }
+    case 'ready': {
+      if (!session.room || !session.playerId) return;
+      // Defensive: only meaningful during the start barrier.
+      if (session.room.phase !== 'playing') return;
+      session.room.markReady(session.playerId);
       return;
     }
   }
