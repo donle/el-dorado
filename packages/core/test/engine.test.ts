@@ -1366,3 +1366,29 @@ describe('RemoveBlockade (decoupled)', () => {
     expect(r.result.ok).toBe(false);
   });
 });
+
+describe('End-of-turn hand cap', () => {
+  it('endTurn sets pendingTrim when human hand > HAND_SIZE', () => {
+    const s = game(2);
+    // Force p0 hand to exactly 5 cards (HAND_SIZE + 1).
+    giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer', 'scout']);
+    expect(s.players[0].hand).toHaveLength(5);
+    const idxBefore = s.currentPlayerIdx;
+    const r = applyAction(s, 'p0', { type: 'EndTurn' });
+    expect(r.result.ok).toBe(true);
+    expect(r.state.turn?.pendingTrim).toEqual({ max: 4 });
+    expect(r.state.currentPlayerIdx).toBe(idxBefore); // did not advance
+  });
+
+  it('endTurn does NOT set pendingTrim when human hand === HAND_SIZE', () => {
+    const s = game(2);
+    // Force p0 hand to exactly 4 cards (HAND_SIZE).
+    giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer']);
+    expect(s.players[0].hand).toHaveLength(4);
+    const r = applyAction(s, 'p0', { type: 'EndTurn' });
+    expect(r.result.ok).toBe(true);
+    expect(r.state.turn?.pendingTrim).toBeUndefined();
+    // The turn should still advance normally.
+    expect(r.state.currentPlayerIdx).not.toBe(s.currentPlayerIdx);
+  });
+});

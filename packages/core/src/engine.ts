@@ -590,6 +590,16 @@ function endTurn(state: GameState, playerId: string, events: GameEvent[]): void 
   }
   for (const card of turn.removedThisTurn) p.removed.push(card);
 
+  // Hand-cap trim check: if a human player holds more than HAND_SIZE cards
+  // at end of turn, defer draw/advance until they discard down to the cap.
+  // (AI/offline safety net is implemented in Task 5.)
+  if (p.hand.length > HAND_SIZE) {
+    if (!p.isAI && !p.offline) {
+      turn.pendingTrim = { max: HAND_SIZE };
+      return;
+    }
+  }
+
   // Draw back up to hand size.
   const need = HAND_SIZE - p.hand.length;
   if (need > 0) {
