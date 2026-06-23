@@ -1178,7 +1178,7 @@ describe('DiscardCards skill', () => {
     expect(r2.state.turn!.hasDiscarded).toBe(true);
   });
 
-  it('EndTurn no longer discards leftover hand cards', () => {
+  it('EndTurn with hand ≤ 4 advances without setting pendingTrim', () => {
     const s = game(2);
     setTurn(s, 'p0');
     giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer']);
@@ -1189,6 +1189,7 @@ describe('DiscardCards skill', () => {
     expect(r.result.ok).toBe(true);
     expect(p.discard.length).toBe(0);
     expect(p.hand).toHaveLength(4);
+    expect(r.state.turn?.pendingTrim).toBeUndefined();
   });
 });
 
@@ -1399,5 +1400,50 @@ describe('End-of-turn hand cap', () => {
     const r = applyAction(s, 'p0', { type: 'EndTurn' });
     expect(r.result.ok).toBe(false);
     if (!r.result.ok) expect(r.result.error).toMatch(/先把手牌精简到/);
+  });
+
+  it('discardCards resolves pendingTrim: hand 5 → 4, advance without draw', () => {
+    const s = game(2);
+    giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer', 'scout']);
+    expect(s.players[0].hand).toHaveLength(5);
+    s.turn!.pendingTrim = { max: 4 };
+    const before = s.currentPlayerIdx;
+    const r = applyAction(s, 'p0', { type: 'DiscardCards', cardIds: ['p0:scout#t4'] });
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return; // type guard
+    expect(r.state.turn?.pendingTrim).toBeUndefined();
+    expect(r.state.players[0].hand.length).toBe(4);
+    expect(r.state.currentPlayerIdx).not.toBe(before); // advanced
+    expect(r.state.players[0].discard.length).toBe(1);
+  });
+
+  it('discardCards resolves pendingTrim: hand 6 → 3, then draws 1', () => {
+    const s = game(2);
+    giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer', 'scout', 'navigator']);
+    expect(s.players[0].hand).toHaveLength(6);
+    s.turn!.pendingTrim = { max: 4 };
+    const ids = s.players[0].hand.slice(0, 3).map((c) => c.id);
+    const r = applyAction(s, 'p0', { type: 'DiscardCards', cardIds: ids });
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.state.turn?.pendingTrim).toBeUndefined();
+    expect(r.state.players[0].hand.length).toBe(4); // 3 remaining + draw 1
+  });
+
+  it('discardCards keeps pendingTrim open if hand still > max', () => {
+    const s = game(2);
+    // Start with 6 cards, pendingTrim = { max: 4 }. Discard only 1 -> hand 5,
+    // still > max, so pendingTrim must stay open and the turn must NOT advance.
+    giveHand(s, 'p0', ['explorer', 'sailor', 'traveller', 'photographer', 'scout', 'navigator']);
+    expect(s.players[0].hand).toHaveLength(6);
+    s.turn!.pendingTrim = { max: 4 };
+    const before = s.currentPlayerIdx;
+    const discardId = s.players[0].hand[0].id;
+    const r = applyAction(s, 'p0', { type: 'DiscardCards', cardIds: [discardId] });
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.state.turn?.pendingTrim).toEqual({ max: 4 }); // still open
+    expect(r.state.players[0].hand.length).toBe(5); // 6 - 1 = 5, still > max
+    expect(r.state.currentPlayerIdx).toBe(before); // did NOT advance
   });
 });

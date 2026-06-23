@@ -467,6 +467,20 @@ function discardCards(
   }
   turn.hasDiscarded = true;
   events.push({ type: 'discarded', playerId, count: cardIds.length });
+
+  // NEW: resolve pendingTrim if set
+  if (state.turn?.pendingTrim) {
+    if (p.hand.length <= state.turn.pendingTrim.max) {
+      state.turn.pendingTrim = undefined;
+      const need = HAND_SIZE - p.hand.length;
+      if (need > 0) {
+        const drawn = drawInto(state, p, need);
+        if (drawn > 0) events.push({ type: 'drew', playerId, count: drawn });
+      }
+      advanceTurn(state, events);
+    }
+    // else: still > max, pendingTrim remains, await next DiscardCards
+  }
 }
 
 function removeCards(
