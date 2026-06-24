@@ -8,6 +8,7 @@ import { SYMBOL_GLYPH, SYMBOL_LABEL } from './views/common/iconMap.js';
 import { button, cardBack, colorHex, el, escapeHtml, playerDisplayName } from './views/common/dom.js';
 import { renderHandPanel } from './views/hand/HandPanel.js';
 import { renderMarketPanel } from './views/market/MarketPanel.js';
+import { renderPlayerBar } from './views/players/PlayerBar.js';
 import {
   getDef,
   CARD_DEFS,
@@ -2071,35 +2072,22 @@ class App {
 
     // --- top-centre: players as cards ---
     this.playerCardEls.clear();
-    const pcards = el('div', 'player-cards');
-    const turnRank = new Map(s.turnOrder.map((id, i) => [id, i]));
-    const orderedPlayers = s.players
-      .slice()
-      .sort((a, b) => (turnRank.get(a.id) ?? Infinity) - (turnRank.get(b.id) ?? Infinity));
-    for (const p of orderedPlayers) {
-      const active = p.id === s.turn?.playerId;
-      const card = el('div', `pcard ${active ? 'active' : ''} ${p.finished ? 'finished' : ''}`);
-      card.style.setProperty('--pc', colorHex(p.color));
-      if (p.id === this.pinnedPlayerId) card.classList.add('pinned-hand');
-      const tags = `${p.isAI ? '<span class="ptag">电脑</span>' : ''}${p.offline ? '<span class="ptag offline">离线</span>' : ''}${p.id === this.you ? '<span class="ptag you">你</span>' : ''}`;
-      card.innerHTML = `
-        <div class="pc-top">
-          <span class="pc-dot"></span>
-          <span class="pc-name">${escapeHtml(playerDisplayName(p))}</span>
-          ${tags}
-          <span class="pc-flag">${p.finished ? '🏆' : active ? '▶' : ''}</span>
-        </div>
-        <div class="pc-counts">
-          <span><b>牌库</b>${p.deck.length + p.hand.length}</span>
-          <span><b>弃牌</b>${p.discard.length}</span>
-          <span><b>阻挡物</b>${p.blockades}</span>
-        </div>
-        <div class="pc-progress"><span style="width:${Math.round(this.progressOf(p) * 100)}%"></span></div>`;
-      card.addEventListener('click', () => this.togglePlayerHand(p.id));
-      pcards.appendChild(card);
-      this.playerCardEls.set(p.id, card);
-    }
-    this.hud.appendChild(pcards);
+    this.hud.appendChild(
+      renderPlayerBar(
+        {
+          players: s.players,
+          turnOrder: s.turnOrder,
+          turnPlayerId: s.turn?.playerId ?? null,
+          selfId: this.you,
+          pinnedPlayerId: this.pinnedPlayerId,
+          progressOf: (p) => this.progressOf(p),
+        },
+        {
+          onCardClick: (id) => this.togglePlayerHand(id),
+          onCardRendered: (cardEl, id) => this.playerCardEls.set(id, cardEl),
+        },
+      ),
+    );
 
     // --- right: market (all 18 cards; on-board buyable, others upcoming) ---
     const onBoard = s.market.filter((m) => m.onBoard && m.count > 0);
