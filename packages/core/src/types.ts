@@ -155,6 +155,39 @@ export interface MarketPile {
 
 export type Phase = 'lobby' | 'playing' | 'finished';
 
+/**
+ * P1 字符串收敛常量
+ * 单一来源：所有封闭字符串集合在此集中定义。
+ * @see docs/VOCAB.md
+ * @see docs/adr/0001-types-and-naming.md
+ */
+
+/** Client-side UI phase overlay (extends `Phase` for countdown UI state). */
+export const UI_PHASES = ['lobby', 'countdown', 'playing', 'finished'] as const;
+export type UIPhase = typeof UI_PHASES[number];
+
+/** WebSocket connection state. */
+export const CONNECTION_STATES = ['connecting', 'open', 'closing', 'closed'] as const;
+export type ConnectionState = typeof CONNECTION_STATES[number];
+
+/** Server-side room lifecycle (orthogonal to client UI phase). */
+export const ROOM_STATUSES = ['waiting', 'starting', 'playing', 'finished'] as const;
+export type RoomStatus = typeof ROOM_STATUSES[number];
+
+/** Asset preload categories. */
+export const ASSET_CATEGORIES = [
+  'terrain', 'card', 'card-icon', 'ui', 'icon', 'pwa',
+] as const;
+export type AssetCategory = typeof ASSET_CATEGORIES[number];
+
+/** Application-level error codes. */
+export const ERROR_CODES = [
+  'INVALID_ACTION', 'NOT_YOUR_TURN', 'ROOM_NOT_FOUND', 'ROOM_FULL',
+  'PROTOCOL_ERROR', 'INTERNAL', 'ASSET_LOAD_FAILED', 'CONNECTION_LOST',
+  'RECONNECT_FAILED', 'AI_DISABLED',
+] as const;
+export type ErrorCode = typeof ERROR_CODES[number];
+
 /** Turn-in-progress scratch state for the current player. */
 export interface TurnState {
   playerId: string;
