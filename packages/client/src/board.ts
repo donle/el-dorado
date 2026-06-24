@@ -13,29 +13,41 @@ import {
 import { terrainTexture } from './textures.js';
 import { Decorations, type Placed } from './decor.js';
 import { BoardBackground } from './background.js';
+import {
+  TERRAIN_SIDE_COLOR,
+  BLOCKADE_TOP_TINT,
+  BLOCKADE_SIDE_COLOR,
+  BLOCKADE_MARK_COLOR,
+  PLAYER_COLOR,
+  blockadeColor,
+} from './shared/palette.js';
+import {
+  HEX_SIZE,
+  HEX_GAP,
+  DESKTOP_MAX_PIXEL_RATIO,
+  LOW_GPU_MAX_PIXEL_RATIO,
+  IDLE_ANIMATION_FRAME_MS,
+  HIDDEN_TAB_FRAME_MS,
+  TOP_DOWN_POLAR,
+  START_CONTINENT_DISTANCE_SCALE,
+  START_CAMERA_ANIMATION_MS,
+  TERMINAL_HEIGHT,
+  TERRAIN_DEMAND_DARKEN_STEP,
+  TERRAIN_DEMAND_DARKEN_MIN,
+  COST_LABEL_SIZE,
+  COST_ICON_DRAW_SIZE,
+  BLOCKADE_WIDTH,
+  BLOCKADE_HEIGHT,
+  BLOCKADE_LABEL_ICON_Y_OFFSET,
+  SELF_ARROW_HEAD_LENGTH,
+  SELF_ARROW_SHAFT_LENGTH,
+  SELF_ARROW_BASE_Y,
+  SELF_ARROW_BOB,
+  MOUNTAIN_PAWN_LANDING_LIFT,
+} from './shared/constants.js';
 
-const HEX_SIZE = 1;
-const GAP = 0.94;
-const DESKTOP_MAX_PIXEL_RATIO = 1.25;
-const LOW_GPU_MAX_PIXEL_RATIO = 1;
-const IDLE_ANIMATION_FRAME_MS = 1000 / 8;
-const HIDDEN_TAB_FRAME_MS = 1000;
-const TOP_DOWN_POLAR = 0.001;
-const START_CONTINENT_DISTANCE_SCALE = 1.22;
-const START_CAMERA_ANIMATION_MS = 1300;
-const TERMINAL_HEIGHT = 0.68;
-const TERRAIN_DEMAND_DARKEN_STEP = 0.22;
-const TERRAIN_DEMAND_DARKEN_MIN = 0.38;
 const COST_LABEL_GEO = new THREE.PlaneGeometry(0.92, 0.92).rotateX(-Math.PI / 2);
-const COST_LABEL_SIZE = 160;
-const COST_ICON_DRAW_SIZE = 60;
-const BLOCKADE_WIDTH = 0.74;
-const BLOCKADE_HEIGHT = 0.16;
 const BLOCKADE_LABEL_GEO = new THREE.PlaneGeometry(0.92, 0.92).rotateX(-Math.PI / 2);
-const BLOCKADE_LABEL_ICON_Y_OFFSET = 8;
-const SELF_ARROW_LENGTH = 0.78;
-const SELF_ARROW_HEAD_LENGTH = 0.32;
-const SELF_ARROW_SHAFT_LENGTH = SELF_ARROW_LENGTH - SELF_ARROW_HEAD_LENGTH;
 const SELF_ARROW_HEAD_GEO = new THREE.ConeGeometry(0.22, SELF_ARROW_HEAD_LENGTH, 28).rotateX(Math.PI);
 const SELF_ARROW_SHAFT_GEO = new THREE.CylinderGeometry(0.055, 0.055, SELF_ARROW_SHAFT_LENGTH, 20);
 const SELF_ARROW_SHAFT_RING_GEO = new THREE.TorusGeometry(0.064, 0.009, 8, 28).rotateX(Math.PI / 2);
@@ -45,60 +57,11 @@ const ACTIVE_PAWN_GLOW_GEO = new THREE.PlaneGeometry(1.45, 1.45).rotateX(-Math.P
 const ACTIVE_PAWN_RING_GEO = new THREE.RingGeometry(0.42, 0.56, 48).rotateX(-Math.PI / 2);
 const ACTIVE_PAWN_RAY_GEO = new THREE.PlaneGeometry(0.44, 1.08);
 const ACTIVE_PAWN_FLAME_GEO = new THREE.ConeGeometry(0.16, 0.74, 5, 1, true);
-const SELF_ARROW_BASE_Y = 2.02;
-const SELF_ARROW_BOB = 0.14;
-const MOUNTAIN_PAWN_LANDING_LIFT = 0.9;
 const PICK_MATERIAL = new THREE.MeshBasicMaterial({
   transparent: true,
   opacity: 0,
   depthWrite: false,
 });
-
-const SIDE_COLOR: Record<string, number> = {
-  green: 0x24482e,
-  blue: 0x1d5668,
-  yellow: 0x8b7138,
-  rubble: 0x55585a,
-  basecamp: 0x6b3d31,
-  mountain: 0x20242a,
-  start: 0x3f4852,
-  finish: 0x9b7430,
-  eldorado: 0x87662b,
-};
-
-const BLOCKADE_TOP_TINT: Record<string, number> = {
-  green: 0xc4d0a1,
-  blue: 0xb7ccd0,
-  yellow: 0xd6b86c,
-  rubble: 0xb29a82,
-};
-
-const BLOCKADE_SIDE_COLOR: Record<string, number> = {
-  green: 0x355f36,
-  blue: 0x376b75,
-  yellow: 0x8b692e,
-  rubble: 0x68503e,
-};
-
-const BLOCKADE_MARK_COLOR: Record<string, number> = {
-  green: 0x214a2a,
-  blue: 0x235a66,
-  yellow: 0x6f511e,
-  rubble: 0x4d3a2f,
-};
-
-const PLAYER_COLOR: Record<string, number> = {
-  red: 0xe05656,
-  blue: 0x4c9bef,
-  green: 0x5ed17a,
-  yellow: 0xf0d24c,
-};
-
-const BLOCKADE_COLOR: Record<MoveSymbol, number> = {
-  machete: 0x3d9c62,
-  paddle: 0x2c8fbd,
-  coin: 0xd6a73b,
-};
 
 type CostIcon = MoveSymbol | 'discard' | 'remove';
 
@@ -601,7 +564,7 @@ export class Board {
       // matches axialToPixel's pointy-top spacing — so NO extra rotation. The
       // earlier rotateY(30°) made flat-top hexes on pointy-top centres → the
       // honeycomb stopped tessellating.
-      g = new THREE.CylinderGeometry(HEX_SIZE * GAP, HEX_SIZE * GAP, height, 6);
+      g = new THREE.CylinderGeometry(HEX_SIZE * HEX_GAP, HEX_SIZE * HEX_GAP, height, 6);
       this.hexGeoCache.set(key, g);
     }
     return g;
@@ -627,7 +590,7 @@ export class Board {
     let mat = this.sideMaterialCache.get(cacheKey);
     if (!mat) {
       const shade = terrainDemandShade(cost);
-      const color = new THREE.Color(SIDE_COLOR[terrain] ?? 0x445).multiplyScalar(shade);
+      const color = new THREE.Color(TERRAIN_SIDE_COLOR[terrain] ?? 0x445).multiplyScalar(shade);
       mat = new THREE.MeshStandardMaterial({
         color,
         roughness: 0.95,
@@ -808,7 +771,7 @@ export class Board {
     if (!mat) {
       mat = new THREE.MeshStandardMaterial({
         map: terrainTexture(terrain),
-        color: BLOCKADE_TOP_TINT[terrain] ?? 0xffffff,
+        color: blockadeColor(terrain, BLOCKADE_TOP_TINT, 0xffffff),
         roughness: 0.86,
         metalness: 0.01,
       });
@@ -821,7 +784,7 @@ export class Board {
     let mat = this.blockadeSideMaterialCache.get(terrain);
     if (!mat) {
       mat = new THREE.MeshStandardMaterial({
-        color: BLOCKADE_SIDE_COLOR[terrain] ?? SIDE_COLOR[terrain] ?? 0x17120e,
+        color: blockadeColor(terrain, BLOCKADE_SIDE_COLOR, TERRAIN_SIDE_COLOR[terrain] ?? 0x17120e),
         roughness: 0.78,
         metalness: 0.05,
       });
@@ -836,7 +799,7 @@ export class Board {
       const canvas = document.createElement('canvas');
       canvas.width = canvas.height = 128;
       const ctx = canvas.getContext('2d')!;
-      const mark = `#${(BLOCKADE_MARK_COLOR[terrain] ?? 0x4d3a2f).toString(16).padStart(6, '0')}`;
+      const mark = `#${blockadeColor(terrain, BLOCKADE_MARK_COLOR, 0x4d3a2f).toString(16).padStart(6, '0')}`;
 
       ctx.clearRect(0, 0, 128, 128);
       ctx.strokeStyle = mark;
@@ -885,7 +848,7 @@ export class Board {
     let mat = this.blockadeBandMaterialCache.get(terrain);
     if (!mat) {
       mat = new THREE.MeshBasicMaterial({
-        color: BLOCKADE_MARK_COLOR[terrain] ?? 0x4d3a2f,
+        color: blockadeColor(terrain, BLOCKADE_MARK_COLOR, 0x4d3a2f),
         transparent: true,
         opacity: 0.28,
         depthWrite: false,
@@ -904,7 +867,7 @@ export class Board {
     let mat = this.blockadeRimMaterialCache.get(terrain);
     if (!mat) {
       mat = new THREE.LineBasicMaterial({
-        color: BLOCKADE_MARK_COLOR[terrain] ?? 0x4d3a2f,
+        color: blockadeColor(terrain, BLOCKADE_MARK_COLOR, 0x4d3a2f),
         transparent: true,
         opacity: 0.86,
       });
