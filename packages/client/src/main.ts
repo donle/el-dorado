@@ -39,7 +39,7 @@ import {
   type GameEvent,
 } from '@eldorado/core';
 
-type BoardConstructor = typeof import('./board.js').Board;
+type BoardConstructor = typeof import('./scene/Board.js').Board;
 type BoardInstance = InstanceType<BoardConstructor>;
 
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
@@ -2723,7 +2723,7 @@ function marketInlineDetailHtml(defId: string): string {
 
 async function preloadGameEngine(boot: BootController): Promise<BoardConstructor> {
   boot.markEngineLoading();
-  const mod = await import('./board.js');
+  const mod = await import('./scene/Board.js');
   boot.markUiInitializing();
   return mod.Board;
 }
