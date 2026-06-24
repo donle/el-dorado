@@ -11,6 +11,11 @@ import { renderMarketPanel } from './views/market/MarketPanel.js';
 import { renderPlayerBar } from './views/players/PlayerBar.js';
 import { renderTurnInfoPanel, type ActionCardPrompt } from './views/turn/TurnInfoPanel.js';
 import {
+  clearTurnIntro as clearTurnIntroOverlay,
+  showTurnIntro as showTurnIntroOverlay,
+} from './views/overlays/TurnIntroOverlay.js';
+import { renderGameOverOverlay as renderGameOverOverlayEl } from './views/overlays/GameOverOverlay.js';
+import {
   getDef,
   CARD_DEFS,
   HAND_SIZE,
@@ -151,8 +156,6 @@ class App {
   private hasRenderedLog = false;
   private actionLogLastRenderedId = 0;
   private knownCardDefs = new Map<string, string>();
-  private turnIntroEl: HTMLElement | null = null;
-  private turnIntroTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(BoardClass: BoardConstructor) {
     this.setupMobileLayoutClasses();
@@ -362,26 +365,11 @@ class App {
   }
 
   private showTurnIntro(): void {
-    this.clearTurnIntro();
-    const overlay = el('div', 'turn-intro-overlay');
-    overlay.innerHTML = `
-      <div class="turn-intro-panel" role="status" aria-live="polite">
-        <span class="turn-intro-mark" aria-hidden="true"></span>
-        <span class="turn-intro-title">你的回合</span>
-        <span class="turn-intro-sub">开始行动</span>
-      </div>`;
-    document.body.appendChild(overlay);
-    this.turnIntroEl = overlay;
-    this.turnIntroTimer = setTimeout(() => this.clearTurnIntro(), 1900);
+    showTurnIntroOverlay();
   }
 
   private clearTurnIntro(): void {
-    if (this.turnIntroTimer) {
-      clearTimeout(this.turnIntroTimer);
-      this.turnIntroTimer = undefined;
-    }
-    this.turnIntroEl?.remove();
-    this.turnIntroEl = null;
+    clearTurnIntroOverlay();
   }
 
   private returnToLobby(): void {
@@ -2284,38 +2272,13 @@ class App {
   }
 
   private renderGameOverOverlay(s: GameState): void {
-    const winner = s.winnerId ? s.players.find((p) => p.id === s.winnerId) : null;
-    const ranked = [...s.players].sort((a, b) => {
-      if (a.finished !== b.finished) return a.finished ? -1 : 1;
-      if (b.blockades !== a.blockades) return b.blockades - a.blockades;
-      return (a.finishedAt ?? Infinity) - (b.finishedAt ?? Infinity);
-    });
-    const rows = ranked
-      .map(
-        (p, i) => `
-          <div class="end-row">
-            <span class="end-rank">${i + 1}</span>
-            <span class="end-dot" style="background:${colorHex(p.color)}"></span>
-            <span class="end-name">${escapeHtml(playerDisplayName(p))}${p.offline ? ' · 离线' : ''}</span>
-            <span class="end-score">${p.finished ? `第 ${p.finishedAt} 回合` : '未抵达'} · ${p.blockades} 阻挡物</span>
-          </div>`,
-      )
-      .join('');
-    const overlay = el('div', 'end-overlay');
-    overlay.innerHTML = `
-      <div class="end-modal">
-        <div class="end-kicker">游戏已经结束</div>
-        <h2>${winner ? `${escapeHtml(playerDisplayName(winner))} 抵达黄金城` : '无人抵达黄金城'}</h2>
-        <div class="end-sub">最终排名</div>
-        <div class="end-list">${rows}</div>
-        <div class="end-actions"></div>
-      </div>`;
-    const actionWrap = overlay.querySelector<HTMLDivElement>('.end-actions')!;
-    const roomBtn = button('返回房间', () => this.returnToLobby(), false);
-    roomBtn.className = 'gold';
-    const lobbyBtn = button('返回大厅', () => this.leaveRoom(), true);
-    actionWrap.appendChild(roomBtn);
-    actionWrap.appendChild(lobbyBtn);
+    const overlay = renderGameOverOverlayEl(
+      { players: s.players, winnerId: s.winnerId },
+      {
+        onReturnToLobby: () => this.returnToLobby(),
+        onLeaveRoom: () => this.leaveRoom(),
+      },
+    );
     this.hud.appendChild(overlay);
   }
 
