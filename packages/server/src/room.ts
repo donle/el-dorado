@@ -12,6 +12,7 @@ import {
 } from '@eldorado/core';
 import { buildRoomView, roomMessage, stateMessage, startingMessage } from './game/SnapshotBuilder.js';
 import { TurnScheduler, type TurnSchedulerHost } from './game/TurnScheduler.js';
+import { ReadyBarrier, type ReadyBarrierHost } from './game/ReadyBarrier.js';
 
 const COLORS: PlayerColor[] = ['red', 'blue', 'green', 'yellow'];
 
@@ -37,20 +38,20 @@ export class Room {
   closed = false;
   private sleep: (ms: number) => Promise<void>;
   private turnScheduler = new TurnScheduler();
+  private readyBarrier: ReadyBarrier;
   phase: 'lobby' | 'playing' | 'finished' = 'lobby';
   members: Member[] = [];
   game: GameState | null = null;
-  pendingReady: Set<string> = new Set();
-  private readyTimer: NodeJS.Timeout | null = null;
-  /** Cap on how long we wait for all humans to finish their countdown before
-   *  flipping any missing ones to AI control. Must be < the WS heartbeat
-   *  (default 30s) so a silently-dead client hits this barrier before the
-   *  heartbeat kills the socket. */
-  private readonly READY_TIMEOUT_MS = 30_000;
 
   constructor(code: string, sleep?: (ms: number) => Promise<void>) {
     this.code = code;
     this.sleep = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.readyBarrier = new ReadyBarrier(this.barrierHost());
+  }
+
+  /** Read-only view of the per-game ready barrier's pending set. */
+  get pendingReady(): ReadonlySet<string> {
+    return this.readyBarrier.pendingReady;
   }
 
   private nextColor(): PlayerColor {
@@ -101,16 +102,9 @@ export class Room {
     if (send && m.send !== send) return false;
     m.send = null;
     // If they were still waiting on the start barrier, drop them now so the
-    // 'waiting N players' UI doesn't over-count a known-gone client. If that
-    // empties the set, the barrier clears and AI begins.
-    if (this.pendingReady.delete(playerId)) {
-      if (this.pendingReady.size === 0) {
-        this.clearReadyTimeout();
-        void this.runAITurns();
-      } else {
-        this.broadcastStarting();
-      }
-    }
+    // 'waiting N players' UI doesn't over-count a known-gone client. The
+    // barrier handles the broadcast + game-start-on-empty bookkeeping.
+    this.readyBarrier.onPlayerGone(playerId);
     if (this.phase === 'playing' && !m.isAI && !m.offline) {
       m.isAI = true;
       m.offline = true;
@@ -152,10 +146,7 @@ export class Room {
     }));
     this.game = createGame(seeds, mapId, seed);
     this.phase = 'playing';
-    this.pendingReady = new Set(
-      this.members.filter((m) => !m.isAI && !m.offline).map((m) => m.id),
-    );
-    this.clearReadyTimeout();
+    this.readyBarrier.reset();
   }
 
   returnToLobby(): void {
@@ -192,47 +183,30 @@ export class Room {
 
   /** Start the 30s countdown. If no humans need ready, run AI immediately. */
   armReadyTimeout(): void {
-    this.clearReadyTimeout();
-    if (this.pendingReady.size === 0) {
-      // All-AI or all-offline game: nothing to wait for.
-      void this.runAITurns();
-      return;
-    }
-    this.readyTimer = setTimeout(() => this.handleReadyTimeout(), this.READY_TIMEOUT_MS);
-  }
-
-  private clearReadyTimeout(): void {
-    if (this.readyTimer) {
-      clearTimeout(this.readyTimer);
-      this.readyTimer = null;
-    }
-  }
-
-  /** Fired by the 30s timer: flip any still-unready humans to AI control. */
-  private handleReadyTimeout(): void {
-    this.readyTimer = null;
-    for (const id of this.pendingReady) {
-      const m = this.member(id);
-      if (!m) continue;
-      m.isAI = true;
-      m.offline = true;
-      this.syncGamePlayer(m);
-    }
-    this.pendingReady.clear();
-    this.broadcastRoom();
-    this.broadcastStarting(); // pendingPlayers now []
-    void this.runAITurns();
+    this.readyBarrier.arm();
   }
 
   /** Called when a human client finishes their countdown. No-op if not pending. */
   markReady(playerId: string): void {
-    if (!this.pendingReady.has(playerId)) return;
-    this.pendingReady.delete(playerId);
-    this.broadcastStarting();
-    if (this.pendingReady.size === 0) {
-      this.clearReadyTimeout();
-      void this.runAITurns();
-    }
+    this.readyBarrier.markReady(playerId);
+  }
+
+  /** Adapter exposing the bits of Room the ReadyBarrier needs. */
+  private barrierHost(): ReadyBarrierHost {
+    return {
+      membersNeedingReady: () =>
+        this.members.filter((m) => !m.isAI && !m.offline).map((m) => m.id),
+      flipHumanToAI: (playerId) => {
+        const m = this.member(playerId);
+        if (!m) return;
+        m.isAI = true;
+        m.offline = true;
+        this.syncGamePlayer(m);
+      },
+      broadcastStarting: () => this.broadcastStarting(),
+      broadcastRoom: () => this.broadcastRoom(),
+      runGame: () => { void this.runAITurns(); },
+    };
   }
 
   /** Apply a human action, then auto-run any AI turns that follow. */
