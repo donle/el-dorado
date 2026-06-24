@@ -42,6 +42,8 @@ import {
 type BoardConstructor = typeof import('./scene/Board.js').Board;
 type BoardInstance = InstanceType<BoardConstructor>;
 
+import { MobileLayoutProbe } from './controllers/MobileLayoutProbe.js';
+
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
 const START_COUNTDOWN_MS = 5000;
@@ -140,8 +142,7 @@ class App {
   private pinnedPlayerId: string | null = null;
   private drawPileEl: HTMLElement | null = null;
   private discardPileEl: HTMLElement | null = null;
-  private mobileDeviceQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
-  private portraitQuery = window.matchMedia('(orientation: portrait)');
+  private readonly mobileLayout = new MobileLayoutProbe();
   private hoveredTerrain: Axial | null = null;
   private pinnedTerrain: Axial | null = null;
   private hoveredBlockadeId: string | null = null;
@@ -160,7 +161,7 @@ class App {
   private knownCardDefs = new Map<string, string>();
 
   constructor(BoardClass: BoardConstructor) {
-    this.setupMobileLayoutClasses();
+    this.mobileLayout.setupMobileLayoutClasses();
     document.body.appendChild(this.preview);
     document.body.appendChild(this.terrainPanel);
     document.body.appendChild(this.playerHandPanel);
@@ -183,35 +184,6 @@ class App {
     this.board.onBlockadeClick = (id) => this.onBlockadeClick(id);
     this.net.on((e) => this.onSocketEvent(e));
     this.lobbyCtl.mount(document.getElementById('lobby') as HTMLDivElement);
-  }
-
-  private setupMobileLayoutClasses(): void {
-    const update = () => {
-      const mobile = this.isMobileDevice();
-      document.body.classList.toggle('mobile-device', mobile);
-      document.body.classList.toggle('mobile-portrait', mobile && this.portraitQuery.matches);
-    };
-    this.mobileDeviceQuery.addEventListener('change', update);
-    this.portraitQuery.addEventListener('change', update);
-    window.addEventListener('resize', update);
-    window.addEventListener('orientationchange', update);
-    update();
-  }
-
-  private isMobileDevice(): boolean {
-    const uaMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-    return uaMobile || (navigator.maxTouchPoints > 1 && this.mobileDeviceQuery.matches);
-  }
-
-  private isCompactLandscape(): boolean {
-    return document.body.classList.contains('mobile-device')
-      && !this.portraitQuery.matches
-      && window.innerHeight <= 500;
-  }
-
-  private isCompactCommandLayout(): boolean {
-    return document.body.classList.contains('mobile-device')
-      && (this.portraitQuery.matches || window.matchMedia('(max-height: 500px) and (orientation: landscape)').matches);
   }
 
   // --- networking ---
@@ -1722,7 +1694,7 @@ class App {
   }
 
   private showPreview(anchor: HTMLElement, defId: string): void {
-    const compactLandscape = this.isCompactLandscape();
+    const compactLandscape = this.mobileLayout.isCompactLandscape();
     const marketPreview = this.usesMarketPreviewFlow();
 
     this.preview.innerHTML = previewHtml(defId);
@@ -1935,7 +1907,7 @@ class App {
             classes.push('action-log-card');
             this.attachPreview(node, segment.defId);
             node.addEventListener('click', (ev) => {
-              if (!this.isMobileDevice()) return;
+              if (!this.mobileLayout.isMobileDevice()) return;
               ev.preventDefault();
               ev.stopPropagation();
               this.showPreview(node, segment.defId!);
@@ -1949,7 +1921,7 @@ class App {
             });
             node.addEventListener('mouseleave', () => this.board.clearInfoHover());
             node.addEventListener('click', (ev) => {
-              if (!this.isMobileDevice()) return;
+              if (!this.mobileLayout.isMobileDevice()) return;
               ev.preventDefault();
               ev.stopPropagation();
               this.showLogTerrainPreview(segment.coord ?? null, segment.blockadeId ?? null);
@@ -2196,7 +2168,7 @@ class App {
         : null;
     const turnCost = this.buyTargetDefId ? getDef(this.buyTargetDefId).cost : null;
     const turnCoinHave = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-    const turnCompact = this.isCompactCommandLayout();
+    const turnCompact = this.mobileLayout.isCompactCommandLayout();
     const turnHasActionCards = turnActionCards.length > 0 || !!this.nativeActionCardId;
     const turnUseLabel = this.nativeActionCardId
       ? (turnCompact ? '选目标' : '选择向导目标')
