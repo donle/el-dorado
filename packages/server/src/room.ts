@@ -1,7 +1,6 @@
 import {
   createGame,
   applyAction,
-  planTurn,
   getMap,
   type GameState,
   type PlayerColor,
@@ -12,6 +11,7 @@ import {
   type PlayerSeed,
 } from '@eldorado/core';
 import { buildRoomView, roomMessage, stateMessage, startingMessage } from './game/SnapshotBuilder.js';
+import { TurnScheduler, type TurnSchedulerHost } from './game/TurnScheduler.js';
 
 const COLORS: PlayerColor[] = ['red', 'blue', 'green', 'yellow'];
 
@@ -35,8 +35,8 @@ export class Room {
   mapId = 'classic';
   aiDelayMs = 1000;
   closed = false;
-  private aiRunning = false;
   private sleep: (ms: number) => Promise<void>;
+  private turnScheduler = new TurnScheduler();
   phase: 'lobby' | 'playing' | 'finished' = 'lobby';
   members: Member[] = [];
   game: GameState | null = null;
@@ -235,24 +235,18 @@ export class Room {
     }
   }
 
-  private currentPlayerId(): string | null {
-    if (!this.game || this.game.phase !== 'playing' || !this.game.turn) return null;
-    return this.game.turn.playerId;
-  }
-
   /** Apply a human action, then auto-run any AI turns that follow. */
   handleAction(playerId: string, action: Action): { ok: boolean; error?: string } {
     if (!this.game) return { ok: false, error: '当前没有进行中的游戏' };
-    if (this.currentPlayerId() !== playerId) return { ok: false, error: '还没轮到你' };
+    if (this.game.phase !== 'playing' || !this.game.turn || this.game.turn.playerId !== playerId) {
+      return { ok: false, error: '还没轮到你' };
+    }
 
     const res = applyAction(this.game, playerId, action);
     if (!res.result.ok) return { ok: false, error: res.result.error };
     this.game = res.state;
     this.broadcastState(res.result.events);
-    if (this.game.phase === 'finished') {
-      this.phase = 'finished';
-      this.broadcastRoom();
-    }
+    if (this.game.phase === 'finished') this.markFinished();
 
     void this.runAITurns();
     return { ok: true };
@@ -261,52 +255,27 @@ export class Room {
   /** Run AI turns until it's a human's turn or the game ends, pacing each
    * applied action by aiDelayMs. async; callers fire-and-forget with `void`. */
   async runAITurns(): Promise<void> {
-    if (this.aiRunning) return;
-    this.aiRunning = true;
-    try {
-      // Safety backstop against a pathological no-progress loop. A full
-      // all-AI game on a large map can legitimately take many hundreds of turns.
-      let guard = 0;
-      let first = true; // no delay before the very first action of the run
-      while (this.game && this.game.phase === 'playing' && guard++ < 5000) {
-        const cur = this.currentPlayerId();
-        if (!cur) break;
-        const m = this.member(cur);
-        if (!m || !m.isAI) break;
+    return this.turnScheduler.runAITurns(this.schedulerHost());
+  }
 
-        const plan = planTurn(this.game, cur);
-        let forcedEnd = false;
-        for (const act of plan) {
-          if (!first) await this.sleep(this.aiDelayMs);
-          first = false;
-          const r = applyAction(this.game, cur, act);
-          if (!r.result.ok) {
-            forcedEnd = true;
-            break;
-          }
-          this.game = r.state;
-          this.broadcastState(r.result.events);
-        }
-        if (forcedEnd) {
-          // Safety: ensure the AI relinquishes the turn even if its plan failed.
-          if (!first) await this.sleep(this.aiDelayMs);
-          first = false;
-          const end = applyAction(this.game, cur, { type: 'EndTurn' });
-          if (end.result.ok) {
-            this.game = end.state;
-            this.broadcastState(end.result.events);
-          } else {
-            break; // cannot recover; avoid an infinite loop
-          }
-        }
-      }
-      if (this.game && this.game.phase === 'finished' && this.phase !== 'finished') {
-        this.phase = 'finished';
-        this.broadcastRoom();
-      }
-    } finally {
-      this.aiRunning = false;
-    }
+  /** Adapter exposing the bits of Room the TurnScheduler needs. */
+  private schedulerHost(): TurnSchedulerHost {
+    return {
+      members: () => this.members,
+      game: () => this.game,
+      aiDelayMs: this.aiDelayMs,
+      setGame: (next) => { this.game = next; },
+      broadcast: (msg) => this.broadcast(msg),
+      markFinished: () => this.markFinished(),
+      sleep: this.sleep,
+    };
+  }
+
+  /** Move the room into the 'finished' phase and broadcast the snapshot. */
+  private markFinished(): void {
+    if (this.phase === 'finished') return;
+    this.phase = 'finished';
+    this.broadcastRoom();
   }
 
   private syncGamePlayer(member: Member): void {
