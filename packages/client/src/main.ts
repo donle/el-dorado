@@ -1,5 +1,6 @@
 import './style.css';
-import { Net } from './net.js';
+import { WebSocketAdapter } from './net/WebSocketAdapter.js';
+import type { ISocketPort, SocketEvent } from './net/SocketPort.js';
 import { cardFace } from './cardFaces.js';
 import {
   getDef,
@@ -140,7 +141,7 @@ type ActionLogEntry = {
 };
 
 class App {
-  net = new Net();
+  net: ISocketPort = new WebSocketAdapter(WebSocketAdapter.defaultUrl());
   board: BoardInstance;
   you: string | null = null;
   room: RoomView | null = null;
@@ -232,9 +233,7 @@ class App {
     this.board.onHexClick = (c) => this.onHexClick(c);
     this.board.onBlockadeHover = (id) => this.onBlockadeHover(id);
     this.board.onBlockadeClick = (id) => this.onBlockadeClick(id);
-    this.net.onMessage = (m) => this.onMessage(m);
-    this.net.onOpen = () => this.rejoinSavedSession();
-    this.net.connect();
+    this.net.on((e) => this.onSocketEvent(e));
     this.renderLobby();
   }
 
@@ -268,6 +267,12 @@ class App {
   }
 
   // --- networking ---
+
+  private onSocketEvent(e: SocketEvent): void {
+    if (e.kind === 'open') this.rejoinSavedSession();
+    else if (e.kind === 'message') this.onMessage(e.payload);
+    // 'close' / 'error' have no in-app handler (adapter drives reconnect).
+  }
 
   private onMessage(m: ServerMessage): void {
     switch (m.type) {
