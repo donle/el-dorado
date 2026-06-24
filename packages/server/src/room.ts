@@ -11,6 +11,7 @@ import {
   type Action,
   type PlayerSeed,
 } from '@eldorado/core';
+import { buildRoomView, roomMessage, stateMessage, startingMessage } from './game/SnapshotBuilder.js';
 
 const COLORS: PlayerColor[] = ['red', 'blue', 'green', 'yellow'];
 
@@ -39,7 +40,7 @@ export class Room {
   phase: 'lobby' | 'playing' | 'finished' = 'lobby';
   members: Member[] = [];
   game: GameState | null = null;
-  private pendingReady: Set<string> = new Set();
+  pendingReady: Set<string> = new Set();
   private readyTimer: NodeJS.Timeout | null = null;
   /** Cap on how long we wait for all humans to finish their countdown before
    *  flipping any missing ones to AI control. Must be < the WS heartbeat
@@ -136,21 +137,7 @@ export class Room {
   }
 
   view(): RoomView {
-    return {
-      code: this.code,
-      hostId: this.hostId,
-      phase: this.phase,
-      mapId: this.mapId,
-      aiDelayMs: this.aiDelayMs,
-      players: this.members.map((m) => ({
-        id: m.id,
-        name: m.name,
-        color: m.color,
-        isAI: m.isAI,
-        connected: m.offline ? false : m.isAI || m.send !== null,
-        offline: m.offline,
-      })),
-    };
+    return buildRoomView(this);
   }
 
   start(mapId = this.mapId, seed = Date.now() & 0xffff): void {
@@ -190,19 +177,17 @@ export class Room {
   }
 
   broadcastRoom(): void {
-    this.broadcast({ type: 'room', room: this.view() });
+    this.broadcast(roomMessage(this));
   }
 
   broadcastState(events: GameEvent[] = []): void {
-    if (this.game) this.broadcast({ type: 'state', state: this.game, events });
+    const msg = stateMessage(this, events);
+    if (msg) this.broadcast(msg);
   }
 
   /** Broadcast the current list of humans still waiting for ready. */
   broadcastStarting(): void {
-    this.broadcast({
-      type: 'starting',
-      pendingPlayers: [...this.pendingReady],
-    });
+    this.broadcast(startingMessage(this));
   }
 
   /** Start the 30s countdown. If no humans need ready, run AI immediately. */
