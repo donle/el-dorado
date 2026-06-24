@@ -8,6 +8,7 @@
  */
 import type { PlayerColor, RoomPlayer } from '@eldorado/core';
 import { MAP_OPTIONS } from '@eldorado/core';
+import { colorHex, el, escapeHtml, playerDisplayName } from '../views/common/dom.js';
 
 /** Mirrors `RoomView.players[]` — typed here to keep the view self-contained. */
 export interface LobbyPlayer extends RoomPlayer {
@@ -72,42 +73,7 @@ export interface LobbyViewEnv {
   dispatch(intent: LobbyIntent): void;
 }
 
-/** Card-color dot (matches `colorHex()` in main.ts for now; will move later). */
-function colorHex(c: PlayerColor | string): string {
-  return (
-    {
-      red: '#e05656',
-      blue: '#4c9bef',
-      green: '#5ed17a',
-      yellow: '#f0d24c',
-    } as Record<string, string>
-  )[c] ?? '#aaa';
-}
-
-function playerDisplayName(p: { name: string; isAI?: boolean }): string {
-  if (!p.isAI) return p.name;
-  const aiName = p.name.match(/^AI\s*(\d+)$/i);
-  return aiName ? `电脑 ${aiName[1]}` : p.name;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (ch) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[ch]!));
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = ''): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (className) e.className = className;
-  return e;
-}
-
-/**
- * Render the lobby into a root element.
+/** Render the lobby into a root element.
  *
  * `root` should already be the `#lobby` element from `index.html`. The view
  * wipes its children and rebuilds the modal on every call, exactly like the

@@ -4,6 +4,8 @@ import type { ISocketPort, SocketEvent } from './net/SocketPort.js';
 import { cardFace } from './cardFaces.js';
 import { BootController } from './boot/BootController.js';
 import { LobbyController } from './lobby/LobbyController.js';
+import { SYMBOL_GLYPH, SYMBOL_LABEL } from './views/common/iconMap.js';
+import { button, cardBack, colorHex, el, escapeHtml, playerDisplayName } from './views/common/dom.js';
 import {
   getDef,
   CARD_DEFS,
@@ -30,24 +32,6 @@ import {
 type BoardConstructor = typeof import('./board.js').Board;
 type BoardInstance = InstanceType<BoardConstructor>;
 
-const SYMBOL_GLYPH: Record<string, string> = {
-  machete: '🗡️',
-  paddle: '🛶',
-  coin: '🪙',
-  discard: '⛏',
-};
-const SYMBOL_LABEL: Record<MoveSymbol, string> = {
-  machete: '砍刀',
-  paddle: '船桨',
-  coin: '金币',
-};
-const KIND_GLYPH: Record<string, string> = {
-  green: '🗡️',
-  blue: '🛶',
-  yellow: '🪙',
-  joker: '🃏',
-  action: '✨',
-};
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
 const START_COUNTDOWN_MS = 5000;
@@ -2867,7 +2851,7 @@ function terrainCostText(hex: Hex): string {
 
 function blockadeCostText(blockade: Blockade): string {
   const symbol = blockadeMoveSymbol(blockade);
-  if (!symbol) return `${SYMBOL_GLYPH.discard} 弃 ${blockade.cost} 张手牌`;
+  if (!symbol) return `⛏ 弃 ${blockade.cost} 张手牌`;
   return `${SYMBOL_GLYPH[symbol]} ${SYMBOL_LABEL[symbol]} ${blockade.cost} 点`;
 }
 
@@ -2928,39 +2912,6 @@ function marketInlineDetailHtml(defId: string): string {
       <span>${escapeHtml(tags)}</span>
     </div>
     <div class="market-detail-desc">${escapeHtml(cardDescription(defId))}</div>`;
-}
-
-/** Generated card-back artwork for the deck/discard piles. */
-function cardBack(): string {
-  return '<img src="/cards/card-back.jpg" alt="卡背" draggable="false" />';
-}
-
-function el(tag: string, className = ''): HTMLDivElement {
-  const e = document.createElement(tag) as HTMLDivElement;
-  if (className) e.className = className;
-  return e;
-}
-
-function button(label: string, onClick: () => void, secondary = false): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.textContent = label;
-  if (secondary) b.className = 'secondary';
-  b.onclick = onClick;
-  return b;
-}
-
-function colorHex(c: string): string {
-  return { red: '#e05656', blue: '#4c9bef', green: '#5ed17a', yellow: '#f0d24c' }[c] ?? '#aaa';
-}
-
-function playerDisplayName(p: { name: string; isAI?: boolean }): string {
-  if (!p.isAI) return p.name;
-  const aiName = p.name.match(/^AI\s*(\d+)$/i);
-  return aiName ? `电脑 ${aiName[1]}` : p.name;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!));
 }
 
 async function preloadGameEngine(boot: BootController): Promise<BoardConstructor> {
