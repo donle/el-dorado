@@ -3,6 +3,7 @@ import { WebSocketAdapter } from './net/WebSocketAdapter.js';
 import type { ISocketPort, SocketEvent } from './net/SocketPort.js';
 import { cardFace } from './cardFaces.js';
 import { BootController } from './boot/BootController.js';
+import { LobbyController } from './lobby/LobbyController.js';
 import {
   getDef,
   CARD_DEFS,
@@ -121,27 +122,18 @@ class App {
   clearBlockadeId: string | null = null;
   removeAfterDrawLimit = 0;
   viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
-  selectedMapId = safeMapId(localStorage.getItem('eldorado.mapId'));
   /** Host's preferred per-action AI delay in ms (default 1s), persisted locally. */
   aiDelay = Number(localStorage.getItem('eldorado.aiDelay')) || 1000;
   hint = '';
   error = '';
   /** Which mobile overlay is open (null = none). */
   mobilePanel: 'players' | 'market' | 'log' | null = null;
-  nameValue = localStorage.getItem('eldorado.name') ?? '';
-  /** True from "start game" until the first board state arrives (freezes lobby). */
-  private starting = false;
-  private startingTimer: ReturnType<typeof setTimeout> | undefined;
-  private startingTickTimer: ReturnType<typeof setInterval> | undefined;
-  private startingCountdownDone = false;
-  private startingCountdownEndsAt = 0;
-  private startingPendingPlayers: Set<string> = new Set();
   /** Whether the in-game settings dropdown is open. */
   private settingsOpen = false;
   private systemDialog: HTMLElement | null = null;
 
   private hud = document.getElementById('hud') as HTMLDivElement;
-  private lobby = document.getElementById('lobby') as HTMLDivElement;
+  private lobbyCtl = new LobbyController({ socket: this.net });
   private preview = el('div', 'card-preview inspector-popover panel hidden');
   private terrainPanel = el('div', 'terrain-panel inspector-popover panel hidden');
   private handEls = new Map<string, HTMLElement>();
@@ -197,7 +189,7 @@ class App {
     this.board.onBlockadeHover = (id) => this.onBlockadeHover(id);
     this.board.onBlockadeClick = (id) => this.onBlockadeClick(id);
     this.net.on((e) => this.onSocketEvent(e));
-    this.renderLobby();
+    this.lobbyCtl.mount(document.getElementById('lobby') as HTMLDivElement);
   }
 
   private setupMobileLayoutClasses(): void {
@@ -245,23 +237,15 @@ class App {
         sessionStorage.setItem('eldorado.session', JSON.stringify({ code: m.code, playerId: m.playerId }));
         break;
       case 'room':
-        const previousRoomPhase = this.room?.phase ?? null;
         this.room = m.room;
-        this.selectedMapId = safeMapId(m.room.mapId);
-        if (m.room.hostId === this.you) localStorage.setItem('eldorado.mapId', this.selectedMapId);
         if (m.room.phase === 'lobby') {
-          this.endStarting(false);
           this.clearTurnIntro();
           this.state = null;
           this.resetActionLog();
           this.resetSelection();
           this.board.setHighlights([]);
           this.board.setBlockadeHighlights([]);
-          this.renderLobby();
           this.renderHud();
-        } else if (m.room.phase === 'playing' && !this.state && previousRoomPhase === 'lobby') {
-          // Game launch transition for everyone who was already in the lobby.
-          this.beginStarting();
         }
         break;
       case 'state': {
@@ -287,34 +271,23 @@ class App {
           && previousState.turn?.playerId !== m.state.turn?.playerId;
         this.state = m.state;
         this.syncSelectionToState();
-        if (this.starting) {
-          this.lobby.classList.remove('hidden');
-          if (this.startingCountdownDone) this.endStarting(true);
-          break;
-        }
         this.enterGameView();
         if (turnPlayerChanged) this.board.panToPlayerIfOffscreen(m.state.turn?.playerId ?? null);
         if (shouldShowTurnIntro) this.showTurnIntro();
         for (const e of buys) this.animateBuy(e.playerId, e.defId, sources.get(`${e.defId}|${e.playerId}`));
         break;
       }
-      case 'starting': {
-        this.startingPendingPlayers = new Set(m.pendingPlayers);
-        this.updateStartingCopy();
-        break;
-      }
       case 'roomClosed':
         this.onRoomClosed(m.message);
         break;
       case 'error':
-        this.endStarting(false); // a failed startGame must release the frozen lobby
         this.error = m.message;
-        this.renderLobby();
         this.renderHud();
         setTimeout(() => {
-          this.error = '';
-          this.renderLobby();
-          this.renderHud();
+          if (this.error === m.message) {
+            this.error = '';
+            this.renderHud();
+          }
         }, 2500);
         break;
     }
@@ -372,7 +345,7 @@ class App {
   private leaveRoom(): void {
     if (this.room || this.you) this.net.send({ type: 'leaveRoom' });
     this.clearRoomState();
-    this.renderLobby();
+    this.lobbyCtl.notifyLeftRoom();
     this.renderHud();
   }
 
@@ -428,9 +401,9 @@ class App {
   }
 
   private onRoomClosed(message: string): void {
-    this.endStarting(false);
+    this.lobbyCtl.endStarting();
     this.clearRoomState();
-    this.renderLobby();
+    this.lobbyCtl.render();
     this.renderHud();
     this.showSystemDialog('房间已解散', message);
   }
@@ -448,7 +421,7 @@ class App {
     scrim.querySelector<HTMLButtonElement>('button')!.onclick = () => {
       scrim.remove();
       if (this.systemDialog === scrim) this.systemDialog = null;
-      this.renderLobby();
+      this.lobbyCtl.render();
       this.renderHud();
     };
     document.body.appendChild(scrim);
@@ -1910,93 +1883,8 @@ class App {
       .addEventListener('click', () => this.closePlayerHandPanel());
   }
 
-  // --- rendering: lobby ---
-
-  /** Freeze the lobby under a 5-second launch countdown before revealing the board. */
-  private beginStarting(): void {
-    if (this.starting) return;
-    this.starting = true;
-    this.startingCountdownDone = false;
-    this.startingCountdownEndsAt = performance.now() + START_COUNTDOWN_MS;
-    this.lobby.classList.remove('hidden');
-    this.lobby.classList.add('launching');
-    if (!this.lobby.querySelector('.lobby-launch')) {
-      const crest = el('div', 'lobby-launch');
-      crest.innerHTML = `
-        <div class="lobby-launch-crest">
-          <div class="lobby-launch-kicker">路线锁定</div>
-          <div class="lobby-launch-ring"><span class="countdown-number" data-countdown="5">5</span></div>
-          <div class="lobby-launch-title">探险即将开始</div>
-          <div class="lobby-launch-copy" data-starting-copy>确认装备，校准指南针...</div>
-          <div class="lobby-launch-track"><i></i></div>
-        </div>`;
-      this.lobby.appendChild(crest);
-    }
-    clearTimeout(this.startingTimer);
-    clearInterval(this.startingTickTimer);
-    this.updateStartingCountdown();
-    this.startingTickTimer = setInterval(() => this.updateStartingCountdown(), 250);
-    this.startingTimer = setTimeout(() => this.completeStartingCountdown(), START_COUNTDOWN_MS);
-  }
-
-  private updateStartingCountdown(): void {
-    if (!this.starting) return;
-    const node = this.lobby.querySelector<HTMLElement>('[data-countdown]');
-    if (!node) return;
-    const seconds = Math.max(0, Math.ceil((this.startingCountdownEndsAt - performance.now()) / 1000));
-    const next = String(seconds);
-    if (node.textContent === next) return;
-    node.textContent = next;
-    node.dataset.countdown = next;
-    node.classList.remove('tick');
-    void node.offsetWidth;
-    node.classList.add('tick');
-  }
-
-  private updateStartingCopy(): void {
-    if (!this.starting) return;
-    const copy = this.lobby.querySelector<HTMLElement>('[data-starting-copy]');
-    if (!copy) return;
-    if (!this.startingCountdownDone) {
-      copy.textContent = '确认装备，校准指南针...';
-      return;
-    }
-    const remaining = this.startingPendingPlayers.size;
-    if (remaining === 0) {
-      copy.textContent = '即将开始...';
-    } else {
-      copy.textContent = `等待 ${remaining} 名玩家准备中...`;
-    }
-  }
-
-  private completeStartingCountdown(): void {
-    if (!this.starting) return;
-    this.startingCountdownDone = true;
-    clearInterval(this.startingTickTimer);
-    this.updateStartingCountdown();
-    // Tell the server we're ready — unblocks the AI barrier.
-    this.net.send({ type: 'ready' });
-    if (this.state?.phase === 'playing') {
-      this.endStarting(true);
-      return;
-    }
-    this.updateStartingCopy();
-  }
-
-  private endStarting(enterGame: boolean): void {
-    if (!this.starting && !this.lobby.classList.contains('launching')) return;
-    this.starting = false;
-    this.startingCountdownDone = false;
-    clearTimeout(this.startingTimer);
-    clearInterval(this.startingTickTimer);
-    this.lobby.classList.remove('launching');
-    this.lobby.querySelector('.lobby-launch')?.remove();
-    if (enterGame) this.enterGameView();
-  }
-
   private enterGameView(): void {
     if (!this.state || this.state.phase === 'lobby') return;
-    this.lobby.classList.add('hidden');
     this.board.setSelfPlayerId(this.you);
     this.board.render(this.state);
     this.renderHud();
@@ -2004,143 +1892,8 @@ class App {
     this.renderTerrainPanel();
   }
 
-  private renderLobby(): void {
-    const inLobby = this.starting || !this.state || this.state.phase !== 'playing';
-    this.lobby.classList.toggle('hidden', !inLobby && !!this.state);
-    this.renderTerrainPanel();
-    if (this.starting) return;
-    if (this.room && this.room.phase !== 'lobby') {
-      this.lobby.classList.add('hidden');
-      return;
-    }
-
-    const isHost = this.room?.hostId === this.you;
-    this.lobby.innerHTML = '';
-    const modal = el('div', 'modal');
-    modal.classList.add('lobby-modal');
-    modal.classList.add(this.room ? 'room-modal' : 'entry-modal');
-    const artHtml = `
-      <div class="lobby-art"></div>`;
-
-    if (!this.room) {
-      modal.innerHTML = `
-        ${artHtml}
-        <div class="lobby-form">
-          <h1>冲向黄金城</h1>
-          <label>你的名字</label>
-          <span class="game-field"><input id="name" value="${escapeHtml(this.nameValue)}" placeholder="玩家名" /></span>
-          <label>房间码（加入已有房间）</label>
-          <span class="game-field"><input id="code" placeholder="请输入 4 位房间码" maxlength="4" style="text-transform:uppercase" /></span>
-          <div class="row">
-            <button id="create">创建房间</button>
-            <button id="join" class="secondary">加入房间</button>
-          </div>
-          <div class="error">${escapeHtml(this.error)}</div>
-        </div>`;
-      modal.querySelector<HTMLInputElement>('#name')!.oninput = (e) => {
-        this.nameValue = (e.target as HTMLInputElement).value;
-        localStorage.setItem('eldorado.name', this.nameValue);
-      };
-      modal.querySelector<HTMLButtonElement>('#create')!.onclick = () => {
-        this.net.send({ type: 'createRoom', name: this.nameValue || '玩家' });
-        this.net.send({ type: 'setMap', mapId: this.selectedMapId });
-        this.net.send({ type: 'setAiDelay', ms: this.aiDelay });
-      };
-      modal.querySelector<HTMLButtonElement>('#join')!.onclick = () => {
-        const code = modal.querySelector<HTMLInputElement>('#code')!.value.trim().toUpperCase();
-        if (code) this.net.send({ type: 'joinRoom', code, name: this.nameValue || '玩家' });
-      };
-    } else {
-      const players = this.room.players
-        .map(
-          (p) =>
-            `<div class="player-chip"><span class="dot" style="background:${colorHex(p.color)}"></span>${escapeHtml(
-              playerDisplayName(p),
-            )}${p.isAI ? ' 🤖' : ''}${p.offline ? ' · 离线' : ''}${p.id === this.room!.hostId ? ' 👑' : ''}</div>`,
-        )
-        .join('');
-      const selectedMapId = isHost ? this.selectedMapId : safeMapId(this.room.mapId || this.selectedMapId);
-      const selectedMap = MAP_OPTIONS.find((map) => map.id === selectedMapId) ?? MAP_OPTIONS[0];
-      const mapControl = isHost
-        ? `<label for="map-select">地图</label>
-                <div class="map-picker" id="map-picker">
-                  <button id="map-select" class="map-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
-                    <span class="map-trigger-mark" aria-hidden="true"></span>
-                    <span class="map-trigger-name">${escapeHtml(selectedMap.name)}</span>
-                    <i aria-hidden="true"></i>
-                  </button>
-                  <div class="map-menu" role="listbox" aria-label="选择地图">
-                    ${MAP_OPTIONS.map(
-                      (map) =>
-                        `<button type="button" class="map-option ${map.id === selectedMapId ? 'selected' : ''}" data-map-id="${escapeHtml(
-                          map.id,
-                        )}" role="option" aria-selected="${map.id === selectedMapId ? 'true' : 'false'}">
-                          <span class="map-option-mark" aria-hidden="true"></span>
-                          <span class="map-option-name">${escapeHtml(map.name)}</span>
-                          ${map.id === selectedMapId ? '<b>当前</b>' : ''}
-                        </button>`,
-                    ).join('')}
-                  </div>
-                </div>`
-        : `<label>地图</label>
-                <div class="map-picker map-picker-static">
-                  <div class="map-trigger map-readout" role="status" aria-live="polite">
-                    <span class="map-trigger-mark" aria-hidden="true"></span>
-                    <span class="map-trigger-name">${escapeHtml(selectedMap.name)}</span>
-                  </div>
-                </div>`;
-      modal.innerHTML = `
-        ${artHtml}
-        <div class="lobby-form">
-          <h1>房间 <span class="room-code">${this.room.code}</span></h1>
-          ${mapControl}
-          <div class="lobby-players">${players}</div>
-          <div class="row room-actions">
-            <button id="leave-room" class="secondary room-leave" type="button">退出房间</button>
-            ${isHost ? '<button id="ai" class="secondary">+ 添加电脑</button>' : ''}
-            ${isHost ? `<button id="start" ${this.room.players.length < 2 ? 'disabled' : ''}>开始游戏</button>` : '<div class="sub">等待房主开始…</div>'}
-          </div>
-          <div class="error">${escapeHtml(this.error)}</div>
-        </div>`;
-      if (isHost) {
-        modal.querySelector<HTMLButtonElement>('#ai')!.onclick = () => this.net.send({ type: 'addAI' });
-        const mapPicker = modal.querySelector<HTMLElement>('#map-picker');
-        const mapTrigger = modal.querySelector<HTMLButtonElement>('#map-select');
-        if (mapPicker && mapTrigger) {
-          const setOpen = (open: boolean) => {
-            mapPicker.classList.toggle('open', open);
-            modal.classList.toggle('map-menu-open', open);
-            mapTrigger.setAttribute('aria-expanded', String(open));
-          };
-          mapTrigger.onclick = (e) => {
-            e.stopPropagation();
-            setOpen(!mapPicker.classList.contains('open'));
-          };
-          for (const option of modal.querySelectorAll<HTMLButtonElement>('.map-option')) {
-            option.onclick = (e) => {
-              e.stopPropagation();
-              this.selectedMapId = safeMapId(option.dataset.mapId ?? null);
-              localStorage.setItem('eldorado.mapId', this.selectedMapId);
-              this.net.send({ type: 'setMap', mapId: this.selectedMapId });
-              this.renderLobby();
-            };
-          }
-          modal.addEventListener('click', (e) => {
-            if (!mapPicker.contains(e.target as Node)) setOpen(false);
-          });
-        }
-        const startBtn = modal.querySelector<HTMLButtonElement>('#start');
-        if (startBtn)
-          startBtn.onclick = () => {
-            this.beginStarting(); // optimistic freeze covers the server round-trip
-            this.net.send({ type: 'startGame', mapId: this.selectedMapId });
-          };
-      }
-      modal.querySelector<HTMLButtonElement>('#leave-room')!.onclick = () => this.leaveRoom();
-    }
-    this.lobby.appendChild(modal);
-  }
-
+  // Lobby rendering moved to packages/client/src/lobby/LobbyView.ts; App no
+  // longer owns the lobby element. App only renders the in-game HUD.
   // --- rendering: HUD ---
 
   /** Rough progress 0..1 toward El Dorado, for the player roster bars. */
