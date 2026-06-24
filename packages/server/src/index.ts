@@ -1,17 +1,17 @@
 /**
  * Server entry point. Stage 1 split the protocol layer into `transport/`,
- * Stage 3 split the lobby domain into `lobby/`. `index.ts` now wires
- * transport + lobby + game-phase handlers. Stage 7 will move the game
- * internals into `game/` and retire the remaining inline handlers.
+ * Stage 3 split the lobby domain into `lobby/`. Stage C collected the
+ * static-file free functions into `StaticFileServer`. `index.ts` now
+ * wires transport + lobby + game-phase handlers.
  */
-import { createServer, type ServerResponse } from 'node:http';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, relative, resolve } from 'node:path';
+import { createServer } from 'node:http';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServerMessage } from '@eldorado/core';
 import { Room, type Send } from './room.js';
 import { WebSocketServer as Transport } from './transport/WebSocketServer.js';
 import { MessageRouter } from './transport/MessageRouter.js';
+import { StaticFileServer } from './transport/StaticFileServer.js';
 import type { IClock } from './shared/ports.js';
 import { encodeServer } from './transport/protocolCodec.js';
 import { RoomRegistry } from './lobby/RoomRegistry.js';
@@ -29,8 +29,9 @@ class SystemClock implements IClock {
 
 let transportRef: Transport | null = null;
 
+const staticFiles = new StaticFileServer(clientDistDir);
 const httpServer = createServer((req, res) =>
-  serveClient(req.url ?? '/', req.method ?? 'GET', res),
+  staticFiles.handleRequest(req.url ?? '/', req.method ?? 'GET', res),
 );
 
 function sendToConn(connId: string, msg: ServerMessage): void {
@@ -151,85 +152,3 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`[el-dorado] http://localhost:${PORT}`);
   console.log(`[el-dorado] ws://localhost:${PORT}/ws`);
 });
-
-function serveClient(rawUrl: string, method: string, response: ServerResponse): void {
-  if (method !== 'GET' && method !== 'HEAD') {
-    response.writeHead(405, { Allow: 'GET, HEAD' });
-    response.end();
-    return;
-  }
-  const url = new URL(rawUrl, 'http://localhost');
-  const pathname = decodeURIComponent(url.pathname);
-  if (pathname.startsWith('/ws')) {
-    response.writeHead(426, { 'Content-Type': 'text/plain; charset=utf-8' });
-    response.end('Upgrade Required');
-    return;
-  }
-  const requestedPath = pathname === '/' ? '/index.html' : pathname;
-  const filePath = safeResolveClientFile(requestedPath);
-  if (filePath && existsSync(filePath) && statSync(filePath).isFile()) {
-    writeFileResponse(filePath, method, response);
-    return;
-  }
-  if (pathname.startsWith('/assets/') || pathname.includes('.')) {
-    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    response.end('资源不存在。');
-    return;
-  }
-  const indexPath = safeResolveClientFile('/index.html');
-  if (indexPath && existsSync(indexPath)) {
-    writeFileResponse(indexPath, method, response);
-    return;
-  }
-  response.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
-  response.end('前端文件不存在，请先在 client 目录运行 pnpm build。');
-}
-
-function safeResolveClientFile(pathname: string): string | null {
-  const filePath = resolve(clientDistDir, `.${pathname}`);
-  const rel = relative(clientDistDir, filePath);
-  if (rel.startsWith('..') || rel === '') return null;
-  return filePath;
-}
-
-function writeFileResponse(filePath: string, method: string, response: ServerResponse): void {
-  response.writeHead(200, {
-    'Content-Type': contentTypeFor(filePath),
-    'Cache-Control': shouldAvoidStaticCache(filePath)
-      ? 'no-cache'
-      : 'public, max-age=31536000, immutable',
-  });
-  if (method === 'HEAD') {
-    response.end();
-    return;
-  }
-  createReadStream(filePath).pipe(response);
-}
-
-function contentTypeFor(filePath: string): string {
-  switch (extname(filePath).toLowerCase()) {
-    case '.html': return 'text/html; charset=utf-8';
-    case '.js': return 'text/javascript; charset=utf-8';
-    case '.mjs': return 'text/javascript; charset=utf-8';
-    case '.css': return 'text/css; charset=utf-8';
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.svg': return 'image/svg+xml';
-    case '.json':
-    case '.map': return 'application/json; charset=utf-8';
-    case '.webmanifest': return 'application/manifest+json; charset=utf-8';
-    case '.woff':
-    case '.woff2': return 'font/woff2';
-    case '.ico': return 'image/x-icon';
-    default: return 'application/octet-stream';
-  }
-}
-
-function shouldAvoidStaticCache(filePath: string): boolean {
-  return (
-    filePath.endsWith('index.html') ||
-    filePath.endsWith('sw.js') ||
-    filePath.endsWith('manifest.webmanifest')
-  );
-}
