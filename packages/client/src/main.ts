@@ -2,6 +2,7 @@ import './style.css';
 import { WebSocketAdapter } from './net/WebSocketAdapter.js';
 import type { ISocketPort, SocketEvent } from './net/SocketPort.js';
 import { cardFace } from './cardFaces.js';
+import { BootController } from './boot/BootController.js';
 import {
   getDef,
   CARD_DEFS,
@@ -25,46 +26,8 @@ import {
   type GameEvent,
 } from '@eldorado/core';
 
-const SERVICE_WORKER_READY_TIMEOUT_MS = 45000;
 type BoardConstructor = typeof import('./board.js').Board;
 type BoardInstance = InstanceType<BoardConstructor>;
-
-const TERRAIN_ASSET_URLS = [
-  '/textures/terrain-realistic/green.jpg',
-  '/textures/terrain-realistic/blue.jpg',
-  '/textures/terrain-realistic/yellow.jpg',
-  '/textures/terrain-realistic/rubble.jpg',
-  '/textures/terrain-realistic/basecamp.jpg',
-  '/textures/terrain-realistic/mountain.jpg',
-  '/textures/terrain-realistic/start.jpg',
-  '/textures/terrain-realistic/finish.jpg',
-  '/textures/terrain-realistic/eldorado.jpg',
-];
-
-const PWA_ICON_ASSET_URLS = [
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
-  '/icons/icon-512-maskable.png',
-];
-
-const BOOT_ASSET_URLS = [
-  '/ui/loading-table.jpg',
-  '/ui/lobby-hero.jpg',
-  '/ui/lobby-props.jpg',
-  '/ui/turn-intro-tomb.jpg',
-  '/textures/golden-city-ground.jpg',
-  ...TERRAIN_ASSET_URLS,
-  '/cards/card-back.jpg',
-  '/card-icons/machete.jpg',
-  '/card-icons/paddle.jpg',
-  '/card-icons/coin.jpg',
-  '/card-icons/discard.jpg',
-  '/card-icons/remove.jpg',
-  '/card-icons/single_use.jpg',
-  '/card-icons/native-move.png',
-  ...PWA_ICON_ASSET_URLS,
-  ...Object.keys(CARD_DEFS).map((id) => `/cards/${id}.jpg`),
-];
 
 const SYMBOL_GLYPH: Record<string, string> = {
   machete: '🗡️',
@@ -3247,105 +3210,19 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!));
 }
 
-async function preloadBootAssets(): Promise<void> {
-  setBootProgress(2, '缓存离线资源');
-  const swStatus = await waitForServiceWorkerPrecache();
-  const unique = [...new Set(BOOT_ASSET_URLS)];
-  const total = unique.length;
-  const waitedForSw = swStatus !== 'skipped';
-  const imageStart = waitedForSw ? 36 : 8;
-  const imageRange = waitedForSw ? 56 : 84;
-  setBootProgress(imageStart, swStatus === 'ready' ? '离线资源已缓存' : '装载本地资源');
-  let done = 0;
-  await Promise.all(
-    unique.map((url) =>
-      preloadImage(url)
-        .catch(() => undefined)
-        .finally(() => {
-          done += 1;
-          setBootProgress(imageStart + Math.round((done / total) * imageRange), done < total ? '装载图像' : '整理界面');
-        }),
-    ),
-  );
-}
-
-function preloadImage(url: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.decoding = 'async';
-    img.onload = () => {
-      if (img.decode) void img.decode().catch(() => undefined).finally(() => resolve());
-      else resolve();
-    };
-    img.onerror = () => reject(new Error(url));
-    img.src = url;
-  });
-}
-
-async function waitForServiceWorkerPrecache(): Promise<'ready' | 'timeout' | 'skipped'> {
-  if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return 'skipped';
-  const startedAt = performance.now();
-  const timer = window.setInterval(() => {
-    const elapsed = performance.now() - startedAt;
-    const ratio = Math.min(1, elapsed / SERVICE_WORKER_READY_TIMEOUT_MS);
-    const eased = 1 - Math.pow(1 - ratio, 3);
-    setBootProgress(2 + Math.round(eased * 33), '缓存离线资源');
-  }, 250);
-  const ready = await withTimeout(
-    navigator.serviceWorker.ready.then(() => true).catch(() => false),
-    SERVICE_WORKER_READY_TIMEOUT_MS,
-    false,
-  );
-  window.clearInterval(timer);
-  return ready ? 'ready' : 'timeout';
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return new Promise((resolve) => {
-    const timer = window.setTimeout(() => resolve(fallback), ms);
-    void promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        window.clearTimeout(timer);
-        resolve(fallback);
-      },
-    );
-  });
-}
-
-async function preloadGameEngine(): Promise<BoardConstructor> {
-  setBootProgress(94, '装载3D引擎');
+async function preloadGameEngine(boot: BootController): Promise<BoardConstructor> {
+  boot.markEngineLoading();
   const mod = await import('./board.js');
-  setBootProgress(98, '初始化界面');
+  boot.markUiInitializing();
   return mod.Board;
 }
 
-function setBootProgress(value: number, text: string): void {
-  const pct = Math.max(0, Math.min(100, value));
-  const bar = document.getElementById('bootbar') as HTMLSpanElement | null;
-  const label = document.getElementById('bootpct');
-  const copy = document.getElementById('boottext');
-  if (bar) bar.style.width = `${pct}%`;
-  if (label) label.textContent = `${pct}%`;
-  if (copy) copy.textContent = text;
-}
-
-function hideBootloader(): void {
-  setBootProgress(100, '准备完成');
-  const boot = document.getElementById('bootloader');
-  if (!boot) return;
-  boot.classList.add('done');
-  setTimeout(() => boot.remove(), 420);
-}
-
 async function start(): Promise<void> {
-  await preloadBootAssets();
-  const BoardClass = await preloadGameEngine();
+  const boot = new BootController();
+  await boot.run();
+  const BoardClass = await preloadGameEngine(boot);
   new App(BoardClass);
-  requestAnimationFrame(() => hideBootloader());
+  requestAnimationFrame(() => boot.hide());
 }
 
 void start();
