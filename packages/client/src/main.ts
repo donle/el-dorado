@@ -7,6 +7,7 @@ import { LobbyController } from './lobby/LobbyController.js';
 import { SYMBOL_GLYPH, SYMBOL_LABEL } from './views/common/iconMap.js';
 import { button, cardBack, colorHex, el, escapeHtml, playerDisplayName } from './views/common/dom.js';
 import { renderHandPanel } from './views/hand/HandPanel.js';
+import { renderMarketPanel } from './views/market/MarketPanel.js';
 import {
   getDef,
   CARD_DEFS,
@@ -2101,7 +2102,6 @@ class App {
     this.hud.appendChild(pcards);
 
     // --- right: market (all 18 cards; on-board buyable, others upcoming) ---
-    const market = el('div', `market-panel panel ${this.mobilePanel === 'market' ? 'open' : ''}`);
     const onBoard = s.market.filter((m) => m.onBoard && m.count > 0);
     const upcoming = s.market.filter((m) => !m.onBoard && m.count > 0);
     const needsPromotion = onBoard.length < 6 && upcoming.length > 0;
@@ -2110,148 +2110,52 @@ class App {
     const inlineMarketDetailDefId = this.usesMarketPreviewFlow()
       ? this.marketPreviewDefId ?? this.buyTargetDefId ?? this.promoteTargetDefId
       : null;
-    const shopCard = (pile: (typeof s.market)[number], locked: boolean): HTMLDivElement => {
-      const def = getDef(pile.defId);
-      const sub = def.kind === 'action' ? '行动牌' : def.power ? `力量 ${def.power}` : '';
-      const cls = locked ? (canPromote ? 'promotable' : 'upcoming') : pile.count === 0 ? 'sold' : '';
-      const left = locked ? (canPromote ? '补位' : '候补') : `×${pile.count}`;
-      const card = el(
-        'div',
-        `shop-card ${this.buyTargetDefId === pile.defId || this.promoteTargetDefId === pile.defId ? 'target' : ''} ${this.marketPreviewDefId === pile.defId ? 'previewing' : ''} ${cls}`,
-      );
-      card.innerHTML = `
-        <span class="ic card-thumb">${cardFace(def)}</span>
-        <span class="nm">${escapeHtml(def.name)}<small>${sub}${def.singleUse ? ' · 单次' : ''}</small></span>
-        <span class="price"><span class="c">${def.cost}💰</span><span class="left">${left}</span></span>`;
-      if (this.usesMarketPreviewFlow()) {
-        // Mobile: tap = direct buy target (option B). Long-press = preview details.
-        card.onclick = () => {
-          if (this.canSelectMarketPreview(pile.defId)) {
-            this.onMarketClick(pile.defId);
-          } else {
-            this.previewMarketCard(pile.defId);
-          }
-        };
-        let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-        const clearLP = () => {
-          if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-        };
-        card.addEventListener('touchstart', () => {
-          clearLP();
-          longPressTimer = setTimeout(() => {
-            longPressTimer = null;
-            this.previewMarketCard(pile.defId);
-          }, 420);
-        }, { passive: true });
-        card.addEventListener('touchend', clearLP);
-        card.addEventListener('touchmove', clearLP);
-        card.addEventListener('touchcancel', clearLP);
-      } else if (freeTakeAction && myTurn && pile.count > 0) {
-        card.onclick = () => this.onMarketClick(pile.defId);
-      } else if (locked && canPromote) card.onclick = () => this.onMarketClick(pile.defId);
-      else if (locked) card.onclick = () => this.previewMarketCard(pile.defId);
-      else if (!locked && pile.count > 0 && myTurn) card.onclick = () => this.onMarketClick(pile.defId);
-      this.attachPreview(card, pile.defId);
-      this.shopEls.set(pile.defId, card);
-      return card;
-    };
-    const appendShopCard = (pile: (typeof s.market)[number], locked: boolean): void => {
-      market.appendChild(shopCard(pile, locked));
-      if (inlineMarketDetailDefId === pile.defId) {
-        const detail = el('div', 'market-detail');
-        detail.innerHTML = marketInlineDetailHtml(pile.defId);
-        market.appendChild(detail);
-      }
-    };
-    const bought = myTurn && !!s.turn?.hasBought;
-    const marketTitle = needsPromotion
-      ? canPromote ? '在售有空位' : '候补市场'
-      : bought ? '本回合已购买' : '在售';
-    market.innerHTML = `<h3>市场 · ${marketTitle}</h3>`;
-    for (const pile of onBoard) appendShopCard(pile, false);
-    if (upcoming.length) {
-      const sub = el('h3', '');
-      sub.textContent = `${canPromote ? '候补可补位' : '候补市场'} · ${upcoming.length}`;
-      sub.style.marginTop = '14px';
-      market.appendChild(sub);
-      for (const pile of upcoming) appendShopCard(pile, true);
-    }
-
-    // In-drawer buy/promote footer: only rendered on mobile when a buy or
-    // promote target is set. It's the single source of truth for the
-    // confirm/cancel pair during the buy flow, replacing the old sticky
-    // .mobile-buy-bar. The footer sits at the bottom of the drawer's scroll
-    // area (sticky) so it stays visible while the user scrolls market cards
-    // — and crucially it doesn't sit above the hand cards, so the hand area
-    // stays unobstructed.
-    const inDrawerBuyMode = (this.mobilePanel === 'market')
-      && (!!this.buyTargetDefId || !!this.promoteTargetDefId)
-      && this.usesMarketPreviewFlow();
-    if (inDrawerBuyMode) {
-      const footer = el('div', 'drawer-footer');
-      const info = el('div', 'drawer-footer-info');
-      if (this.promoteTargetDefId) {
-        const def = getDef(this.promoteTargetDefId);
-        info.innerHTML = `<b>放入市场</b><span>${escapeHtml(def.name)}</span>`;
-      } else if (this.buyTargetDefId) {
-        const def = getDef(this.buyTargetDefId);
-        const cost = def.cost;
-        const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-        if (this.selectedActionCard()?.def.ability === 'take_free') {
-          info.innerHTML = `<b>免费获得 ${escapeHtml(def.name)}</b><span>使用发报机，不消耗金币</span>`;
-        } else {
-          info.innerHTML = `<b>购买 ${escapeHtml(def.name)}</b><span>已选 ${have}/${cost} 金币</span>`;
-        }
-      }
-      footer.appendChild(info);
-
-      const cancelBtn = button('取消', () => {
-        this.buyTargetDefId = null;
-        this.promoteTargetDefId = null;
-        this.marketPreviewDefId = null;
-        this.hint = '';
-        this.renderHud();
-      }, true);
-      cancelBtn.classList.add('cmd-btn', 'drawer-footer-cancel');
-      footer.appendChild(cancelBtn);
-
-      if (this.promoteTargetDefId) {
-        const promote = button('确认放入', () => this.confirmPromoteMarket(), false);
-        promote.className = 'gold cmd-btn drawer-footer-confirm';
-        footer.appendChild(promote);
-      } else if (this.buyTargetDefId) {
-        const def = getDef(this.buyTargetDefId);
-        const cost = def.cost;
-        const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-        const freeTake = this.selectedActionCard()?.def.ability === 'take_free';
-        const buy = button(
-          freeTake ? '确认获得' : have < cost ? `差 ${cost - have} 金币` : '确认购买',
-          () => this.confirmBuy(),
-          false,
-        );
-        buy.className = 'gold cmd-btn drawer-footer-confirm';
-        buy.disabled = !freeTake && have < cost;
-        footer.appendChild(buy);
-      }
-
-      market.appendChild(footer);
-    }
-
+    const selectedCoinSum = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
+    const market = renderMarketPanel(
+      {
+        market: s.market,
+        myTurn,
+        phase: s.phase,
+        mobilePanelOpen: this.mobilePanel === 'market',
+        buyTargetDefId: this.buyTargetDefId,
+        promoteTargetDefId: this.promoteTargetDefId,
+        marketPreviewDefId: this.marketPreviewDefId,
+        usesMarketPreviewFlow: this.usesMarketPreviewFlow(),
+        canPromote,
+        needsPromotion,
+        freeTakeAction,
+        hasBought: !!s.turn?.hasBought,
+        selectedCoinSum,
+        inlineDetailDefId: inlineMarketDetailDefId,
+        previousScrollTop: previousMarketScrollTop,
+      },
+      {
+        onSlotRendered: (slotEl, defId) => this.shopEls.set(defId, slotEl),
+        onMarketClick: (defId) => this.onMarketClick(defId),
+        previewMarketCard: (defId) => this.previewMarketCard(defId),
+        confirmPromoteMarket: () => this.confirmPromoteMarket(),
+        confirmBuy: () => this.confirmBuy(),
+        cancelDrawerBuy: () => {
+          this.buyTargetDefId = null;
+          this.promoteTargetDefId = null;
+          this.marketPreviewDefId = null;
+          this.hint = '';
+          this.renderHud();
+        },
+        attachPreview: (node, defId) => this.attachPreview(node, defId),
+        attachSheetDismiss: (panel) => this.attachSheetDismiss(panel),
+        renderInlineDetail: (defId) => marketInlineDetailHtml(defId),
+        canSelectMarketPreview: (defId) => this.canSelectMarketPreview(defId),
+      },
+    );
     this.hud.appendChild(market);
-    if (previousMarketScrollTop !== null) {
-      const restoreMarketScroll = () => {
-        market.scrollTop = Math.min(previousMarketScrollTop, Math.max(0, market.scrollHeight - market.clientHeight));
-      };
-      restoreMarketScroll();
-      requestAnimationFrame(restoreMarketScroll);
-    }
 
-    // Mobile: a tap-to-dismiss scrim + swipe-down-to-close on the open sheet.
+    // Mobile: a tap-to-dismiss scrim on the open sheet (swipe-down is wired
+    // inside renderMarketPanel via attachSheetDismiss when the panel opens).
     if (this.mobilePanel === 'market') {
       const scrim = el('div', 'sheet-scrim');
       scrim.onclick = () => this.closeMobilePanel();
       this.hud.appendChild(scrim);
-      this.attachSheetDismiss(market);
     }
     if (this.mobilePanel === 'log') {
       this.renderMobileActionLogDialog();
