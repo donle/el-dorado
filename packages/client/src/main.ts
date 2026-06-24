@@ -9,6 +9,7 @@ import { button, cardBack, colorHex, el, escapeHtml, playerDisplayName } from '.
 import { renderHandPanel } from './views/hand/HandPanel.js';
 import { renderMarketPanel } from './views/market/MarketPanel.js';
 import { renderPlayerBar } from './views/players/PlayerBar.js';
+import { renderTurnInfoPanel, type ActionCardPrompt } from './views/turn/TurnInfoPanel.js';
 import {
   getDef,
   CARD_DEFS,
@@ -2180,67 +2181,79 @@ class App {
       for (const c of me.hand) this.handEls.set(c.id, tray.querySelector<HTMLElement>(`.card.${getDef(c.defId).kind}`) ?? tray);
     }
 
-    const bar = el('div', 'action-bar command-panel');
-    const ctx = el('div', 'ctx command-state');
-    ctx.innerHTML = this.commandStateHtml(myTurn, turnName);
-    bar.appendChild(ctx);
-    const actions = el('div', 'command-actions');
-    if (myTurn && s.phase === 'playing') {
-      if (this.mode === 'remove') {
-        const removeCount = this.selectedHandCardIds().length;
-        const confirm = button(
-          removeCount > 0 ? `确认移除 ${removeCount}/${this.removeAfterDrawLimit}` : '跳过移除',
-          () => this.confirmRemoveAfterDraw(),
-          false,
-        );
-        confirm.className = 'gold cmd-btn';
-        actions.appendChild(confirm);
-      } else if (this.mode === 'clear') {
-        const cancel = button('取消', () => this.cancelMode(), true);
-        cancel.classList.add('cmd-btn');
-        actions.appendChild(cancel);
-      } else if (this.mode === 'trim' && s.turn?.pendingTrim && me) {
-        const handSize = me.hand.length;
-        const min = Math.max(0, handSize - HAND_SIZE);
-        const sel = this.selectedHandCardIds().length;
-        const btn = button(`确认精简 ${sel}/${min}`, () => this.confirmTrim(), false);
-        btn.className = 'gold cmd-btn';
-        btn.disabled = sel < min;
-        actions.appendChild(btn);
-      } else {
-        const compact = this.isCompactCommandLayout();
-        if (this.promoteTargetDefId) {
-          const promote = button(compact ? '放入' : '放入市场', () => this.confirmPromoteMarket(), false);
-          promote.className = 'gold cmd-btn';
-          actions.appendChild(promote);
+    const turnActionCards = this.selectedActionCards();
+    const turnActionCard = turnActionCards.length === 1 ? turnActionCards[0] : null;
+    const turnActionPrompt: ActionCardPrompt | null = turnActionCard
+      ? {
+          count: 1,
+          name: turnActionCard.def.name,
+          ability: turnActionCard.def.ability,
+          removeLimit: this.removeLimitForAbility(turnActionCard.def.ability),
+          removeSelectedCount: this.selectedActionRemoveIds(turnActionCard.id).length,
         }
-        if (this.buyTargetDefId) {
-          const cost = getDef(this.buyTargetDefId).cost;
-          const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-          const buy = button(compact ? `购买 ${have}/${cost}` : `确认购买 (${have}/${cost}💰)`, () => this.confirmBuy(), false);
-          buy.className = 'gold cmd-btn';
-          buy.disabled = have < cost;
-          actions.appendChild(buy);
-        }
-        if (this.selectedActionCards().length > 0 || this.nativeActionCardId) {
-          const use = button(this.nativeActionCardId ? (compact ? '选目标' : '选择向导目标') : this.selectedActionUseLabel(compact), () => this.useSelectedAction(), false);
-          use.className = 'gold cmd-btn';
-          use.disabled = !!this.nativeActionCardId || !this.canUseSelectedAction();
-          actions.appendChild(use);
-        }
-        const end = button(compact ? '结束' : '结束回合', () => this.act({ type: 'EndTurn' }), true);
-        end.classList.add('cmd-btn');
-        actions.appendChild(end);
-        const skill = button('弃牌', () => {
+      : turnActionCards.length > 1
+        ? { count: turnActionCards.length, name: '', ability: '', removeLimit: 0, removeSelectedCount: 0 }
+        : null;
+    const turnCost = this.buyTargetDefId ? getDef(this.buyTargetDefId).cost : null;
+    const turnCoinHave = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
+    const turnCompact = this.isCompactCommandLayout();
+    const turnHasActionCards = turnActionCards.length > 0 || !!this.nativeActionCardId;
+    const turnUseLabel = this.nativeActionCardId
+      ? (turnCompact ? '选目标' : '选择向导目标')
+      : this.selectedActionUseLabel(turnCompact);
+    const turnRemoveCount = this.selectedHandCardIds().length;
+    const turnHandSize = me?.hand.length ?? 0;
+    const turnTrimMin = Math.max(0, turnHandSize - HAND_SIZE);
+    const turnTakeFree = this.selectedActionCard()?.def.ability === 'take_free';
+    const turnMarketNeedsPromotion = this.marketNeedsPromotion(s);
+    const turnClearCost = this.clearBlockadeId
+      ? this.blockadeById(this.clearBlockadeId)?.cost ?? 0
+      : this.clearTarget ? this.hexAt(this.clearTarget)?.cost ?? 0 : 0;
+    const bar = renderTurnInfoPanel(
+      {
+        myTurn,
+        phase: s.phase,
+        turnName,
+        me,
+        state: s,
+        mode: this.mode,
+        removeAfterDrawLimit: this.removeAfterDrawLimit,
+        pendingTrim: !!s.turn?.pendingTrim,
+        handSizeLimit: HAND_SIZE,
+        promoteTargetDefId: this.promoteTargetDefId,
+        buyTargetDefId: this.buyTargetDefId,
+        cost: turnCost,
+        coinHave: turnCoinHave,
+        hasActionCards: turnHasActionCards,
+        nativeActionCardId: this.nativeActionCardId,
+        takeFreeSelected: turnTakeFree,
+        actionPrompt: turnActionPrompt,
+        useLabel: turnUseLabel,
+        useDisabled: !!this.nativeActionCardId,
+        canUseAction: this.canUseSelectedAction(),
+        removeCount: turnRemoveCount,
+        trimSel: turnRemoveCount,
+        trimMin: turnTrimMin,
+        isCompact: turnCompact,
+        marketNeedsPromotion: turnMarketNeedsPromotion,
+        selectedCount: this.selected.size,
+        clearCost: turnClearCost,
+        clearIsBlockade: !!this.clearBlockadeId,
+      },
+      {
+        onConfirmRemove: () => this.confirmRemoveAfterDraw(),
+        onCancelMode: () => this.cancelMode(),
+        onConfirmTrim: () => this.confirmTrim(),
+        onConfirmPromote: () => this.confirmPromoteMarket(),
+        onConfirmBuy: () => this.confirmBuy(),
+        onUseAction: () => this.useSelectedAction(),
+        onEndTurn: () => this.act({ type: 'EndTurn' }),
+        onDiscard: () => {
           if (this.selected.size === 0) return;
           this.act({ type: 'DiscardCards', cardIds: [...this.selected] });
-        }, true);
-        skill.classList.add('cmd-btn');
-        skill.disabled = this.selected.size === 0;
-        actions.appendChild(skill);
-      }
-    }
-    bar.appendChild(actions);
+        },
+      },
+    );
     // Piles flank the hand on the same row; draw on the left, discard on the right.
     if (me) {
       this.drawPileEl = this.makePile('draw', '摸牌', me.deck.length);
@@ -2268,73 +2281,6 @@ class App {
     // 出牌 / 摸牌后手牌变了，pinned 玩家手牌面板要反映最新数据；
     // renderHud 已经重建了玩家卡 DOM（pinned-hand class 重新挂上），这里刷新 panel 内容
     if (this.pinnedPlayerId) this.renderPlayerHandPanel();
-  }
-
-  private commandStateHtml(myTurn: boolean, turnName: string): string {
-    const s = this.state;
-    if (!s) return '';
-    if (s.phase === 'finished') return '<b>游戏结束</b><span>结算完成</span>';
-    if (!myTurn) return `<b>等待行动</b><span>${escapeHtml(turnName)}</span>`;
-    if (this.mode === 'remove') {
-      return `<b>移除手牌</b><span>${this.selectedHandCardIds().length}/${this.removeAfterDrawLimit} 张，可跳过</span>`;
-    }
-    if (this.mode === 'clear') {
-      const cost = this.clearBlockadeId
-        ? this.blockadeById(this.clearBlockadeId)?.cost ?? 0
-        : this.hexAt(this.clearTarget!)?.cost ?? 0;
-      const verb = this.clearBlockadeId ? '移除连接地形' : '清除地形';
-      return `<b>${verb}</b><span>${this.selected.size}/${cost} 张牌</span>`;
-    }
-    if (this.mode === 'trim') {
-      const me = this.me;
-      const handSize = me?.hand.length ?? 0;
-      const min = Math.max(0, handSize - HAND_SIZE);
-      return `<b>回合末精简</b><span>已选 ${this.selectedHandCardIds().length}/${min} 张，至少弃到 ${HAND_SIZE} 张</span>`;
-    }
-    if (this.promoteTargetDefId) {
-      return `<b>放入市场</b><span>${escapeHtml(getDef(this.promoteTargetDefId).name)}</span>`;
-    }
-    if (this.buyTargetDefId) {
-      const cost = getDef(this.buyTargetDefId).cost;
-      const have = [...this.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-      if (this.selectedActionCard()?.def.ability === 'take_free') {
-        return `<b>发报机目标</b><span>${escapeHtml(getDef(this.buyTargetDefId).name)}</span>`;
-      }
-      return `<b>购买 ${escapeHtml(getDef(this.buyTargetDefId).name)}</b><span>${have}/${cost} 金币</span>`;
-    }
-    if (this.nativeActionCardId) {
-      return '<b>原住民向导</b><span>点选一个相邻地形</span>';
-    }
-    const actionCards = this.selectedActionCards();
-    if (actionCards.length > 1) {
-      return '<b>行动牌</b><span>一次只能使用 1 张</span>';
-    }
-    if (actionCards.length === 1) {
-      const action = actionCards[0];
-      const removeIds = this.selectedActionRemoveIds(action.id);
-      const limit = this.removeLimitForAbility(action.def.ability);
-      if (limit > 0) {
-        return removeIds.length > 0
-          ? `<b>使用 ${escapeHtml(action.def.name)}</b><span>先只选择这张行动牌</span>`
-          : `<b>使用 ${escapeHtml(action.def.name)}</b><span>先摸牌，再选择移除</span>`;
-      }
-      if (action.def.ability === 'take_free') {
-        return `<b>使用 ${escapeHtml(action.def.name)}</b><span>先选择市场卡</span>`;
-      }
-      if (action.def.ability === 'native') {
-        return `<b>使用 ${escapeHtml(action.def.name)}</b><span>点击使用后选地形</span>`;
-      }
-      return `<b>使用 ${escapeHtml(action.def.name)}</b><span>点击使用行动牌</span>`;
-    }
-    const mover = s.turn?.activeMover;
-    if (mover) {
-      return `<b>${SYMBOL_GLYPH[mover.symbol]} ${SYMBOL_LABEL[mover.symbol]}</b><span>剩余 ${mover.remaining} 点</span>`;
-    }
-    if (this.selected.size > 0) return `<b>已选手牌</b><span>${this.selected.size} 张可用于行动</span>`;
-    if (myTurn && !s.turn?.hasBought && this.marketNeedsPromotion(s)) {
-      return '<b>市场有空位</b><span>可买在售牌，或放入候补牌</span>';
-    }
-    return '<b>你的回合</b><span>选择手牌或目标地形</span>';
   }
 
   private renderGameOverOverlay(s: GameState): void {
