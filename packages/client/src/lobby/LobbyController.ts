@@ -10,6 +10,7 @@
  */
 import type { RoomView, ServerMessage } from '@eldorado/core';
 import type { ISocketPort, SocketEvent } from '../net/SocketPort.js';
+import type { GameStore } from '../store/GameStore.js';
 import { MAP_OPTIONS } from '@eldorado/core';
 import {
   clearLaunchTimers,
@@ -34,11 +35,20 @@ function safeMapId(id: string | null | undefined): string {
 export interface LobbyControllerDeps {
   socket: ISocketPort;
   mapOptions?: LobbyMapOption[];
+  /**
+   * Optional GameStore. When provided, the controller can read server-driven
+   * state (room, phase, game) from the store. The store is updated by the
+   * App's socket-event handler in parallel with the controller's own
+   * message handler. Stage 5 wires the field in; future stages will
+   * migrate the controller's state reads to the store.
+   */
+  store?: GameStore;
 }
 
 export class LobbyController {
   private readonly socket: ISocketPort;
   private readonly mapOptions: LobbyMapOption[];
+  private readonly store: GameStore | undefined;
   private host: HTMLElement | null = null;
   private state: LobbyViewState = this.makeEntryState();
   private nameValue = localStorage.getItem(NAME_STORAGE_KEY) ?? '';
@@ -48,6 +58,7 @@ export class LobbyController {
   constructor(deps: LobbyControllerDeps) {
     this.socket = deps.socket;
     this.mapOptions = deps.mapOptions ?? defaultMapOptions();
+    this.store = deps.store;
     this.state.nameValue = this.nameValue;
     this.state.selectedMapId = this.selectedMapId;
   }

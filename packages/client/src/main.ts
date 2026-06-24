@@ -4,6 +4,7 @@ import type { ISocketPort, SocketEvent } from './net/SocketPort.js';
 import { cardFace } from './cardFaces.js';
 import { BootController } from './boot/BootController.js';
 import { LobbyController } from './lobby/LobbyController.js';
+import { GameStore } from './store/GameStore.js';
 import { SYMBOL_GLYPH, SYMBOL_LABEL } from './views/common/iconMap.js';
 import { button, cardBack, colorHex, el, escapeHtml, playerDisplayName } from './views/common/dom.js';
 import { renderHandPanel } from './views/hand/HandPanel.js';
@@ -126,7 +127,8 @@ class App {
   private systemDialog: HTMLElement | null = null;
 
   private hud = document.getElementById('hud') as HTMLDivElement;
-  private lobbyCtl = new LobbyController({ socket: this.net });
+  private store = new GameStore();
+  private lobbyCtl = new LobbyController({ socket: this.net, store: this.store });
   private preview = el('div', 'card-preview inspector-popover panel hidden');
   private terrainPanel = el('div', 'terrain-panel inspector-popover panel hidden');
   private handEls = new Map<string, HTMLElement>();
@@ -221,6 +223,11 @@ class App {
   }
 
   private onMessage(m: ServerMessage): void {
+    // Mirror every server message into the store so other components can
+    // subscribe. The App's local UI state (this.room / this.state / etc.)
+    // remains the source of truth for the existing code paths — the store
+    // is a parallel observable for future refactors (Stage 5.x).
+    this.store.dispatch(m);
     switch (m.type) {
       case 'joined':
         this.you = m.playerId;
@@ -338,6 +345,11 @@ class App {
     this.clearRoomState();
     this.lobbyCtl.notifyLeftRoom();
     this.renderHud();
+  }
+
+  /** Expose the server-driven state slice for subscribers (other controllers, views). */
+  getStore(): GameStore {
+    return this.store;
   }
 
   private clearRoomState(): void {
