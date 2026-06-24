@@ -6,6 +6,7 @@ import { BootController } from './boot/BootController.js';
 import { LobbyController } from './lobby/LobbyController.js';
 import { SYMBOL_GLYPH, SYMBOL_LABEL } from './views/common/iconMap.js';
 import { button, cardBack, colorHex, el, escapeHtml, playerDisplayName } from './views/common/dom.js';
+import { renderHandPanel } from './views/hand/HandPanel.js';
 import {
   getDef,
   CARD_DEFS,
@@ -2263,35 +2264,28 @@ class App {
     // --- bottom dock: hand + actions ---
     const dock = el('div', 'dock');
     const me = this.me;
-    const tray = el('div', 'hand-tray');
-    tray.addEventListener('wheel', (ev) => {
-      if (tray.scrollWidth <= tray.clientWidth || Math.abs(ev.deltaX) >= Math.abs(ev.deltaY)) return;
-      tray.scrollLeft += ev.deltaY;
-      ev.preventDefault();
-    }, { passive: false });
+    const tray = renderHandPanel(
+      {
+        me,
+        myTurn,
+        phase: s.phase,
+        selectedIds: this.selected,
+        modeIsRemove: this.mode === 'remove',
+        useLabelFor: (defId) => this.handActionUseLabel(getDef(defId)),
+        defIdFor: (cardId) => cardDefId(cardId, s),
+        attachPreview: (node, defId) => this.attachPreview(node, defId),
+      },
+      {
+        onCardClick: (cardId) => this.onCardClick(cardId),
+        onUseClick: (cardId, ev) => {
+          ev.stopPropagation();
+          this.useActionCardFromHand(cardId);
+        },
+      },
+    );
+    this.handEls.clear();
     if (me) {
-      for (const c of me.hand) {
-        const def = getDef(c.defId);
-        const selected = this.selected.has(c.id);
-        const card = el('div', `card ${def.kind} ${selected ? 'selected' : ''}`);
-        card.innerHTML = `
-          ${cardFace(def)}`;
-        if (myTurn) card.onclick = () => this.onCardClick(c.id);
-        if (myTurn && s.phase === 'playing' && def.kind === 'action' && this.mode !== 'remove') {
-          const use = document.createElement('button');
-          use.type = 'button';
-          use.className = 'card-use-btn';
-          use.textContent = this.handActionUseLabel(def);
-          use.onclick = (ev) => {
-            ev.stopPropagation();
-            this.useActionCardFromHand(c.id);
-          };
-          card.appendChild(use);
-        }
-        this.attachPreview(card, c.defId);
-        this.handEls.set(c.id, card);
-        tray.appendChild(card);
-      }
+      for (const c of me.hand) this.handEls.set(c.id, tray.querySelector<HTMLElement>(`.card.${getDef(c.defId).kind}`) ?? tray);
     }
 
     const bar = el('div', 'action-bar command-panel');
