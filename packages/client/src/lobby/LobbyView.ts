@@ -6,7 +6,7 @@
  * controller (`LobbyController`) owns the actual state and translates intents
  * into `ClientMessage` payloads on the socket.
  */
-import type { PlayerColor, RoomPlayer, RoomView } from '@eldorado/core';
+import type { PlayerColor, RoomPlayer } from '@eldorado/core';
 import { MAP_OPTIONS } from '@eldorado/core';
 
 /** Mirrors `RoomView.players[]` — typed here to keep the view self-contained. */

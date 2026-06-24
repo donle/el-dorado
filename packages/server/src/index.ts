@@ -1,19 +1,21 @@
 /**
- * Server entry point. Stage 1 split the protocol layer into `transport/`;
- * `index.ts` now boots transport, then registers message handlers that
- * delegate to `room.ts` via a shim. Stage 7 will move the room internals
- * into `game/` and retire this shim.
+ * Server entry point. Stage 1 split the protocol layer into `transport/`,
+ * Stage 3 split the lobby domain into `lobby/`. `index.ts` now wires
+ * transport + lobby + game-phase handlers. Stage 7 will move the game
+ * internals into `game/` and retire the remaining inline handlers.
  */
 import { createServer, type ServerResponse } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServerMessage } from '@eldorado/core';
-import { Room, RoomManager, type Send } from './room.js';
+import { Room, type Send } from './room.js';
 import { WebSocketServer as Transport } from './transport/WebSocketServer.js';
 import { MessageRouter } from './transport/MessageRouter.js';
 import type { IClock } from './shared/ports.js';
 import { encodeServer } from './transport/protocolCodec.js';
+import { RoomRegistry } from './lobby/RoomRegistry.js';
+import { LobbyService } from './lobby/LobbyService.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -21,22 +23,27 @@ const clientDistDir = resolve(
   fileURLToPath(new URL('../../client/dist', import.meta.url)),
 );
 
-const manager = new RoomManager();
-
-interface Session {
-  room: Room | null;
-  playerId: string | null;
-}
-
 class SystemClock implements IClock {
   now(): number { return Date.now(); }
 }
 
-const sessions = new Map<string, Session>();
+let transportRef: Transport | null = null;
 
 const httpServer = createServer((req, res) =>
   serveClient(req.url ?? '/', req.method ?? 'GET', res),
 );
+
+function sendToConn(connId: string, msg: ServerMessage): void {
+  const ws = transportRef?.getSocket(connId);
+  if (ws && ws.readyState === ws.OPEN) ws.send(encodeServer(msg));
+}
+
+const registry = new RoomRegistry();
+const lobby = new LobbyService({
+  registry,
+  sendTo: sendToConn,
+  makeBroadcastSend,
+});
 
 const router = new MessageRouter({
   send(connId: string, msg: ServerMessage): void {
@@ -51,19 +58,12 @@ const router = new MessageRouter({
   },
 });
 
-function sendToConn(connId: string, msg: ServerMessage): void {
-  const ws = transportRef?.getSocket(connId);
-  if (ws && ws.readyState === ws.OPEN) ws.send(encodeServer(msg));
-}
-
-let transportRef: Transport | null = null;
-
 const transport = new Transport(httpServer, router, new SystemClock(), {
   onOpen(connId: string): void {
-    sessions.set(connId, { room: null, playerId: null });
+    registry.setSession(connId, { room: null, playerId: null });
   },
   onClose(connId: string): void {
-    const session = sessions.get(connId);
+    const session = registry.getSession(connId);
     if (!session) return;
     if (session.room && session.playerId && !session.room.closed) {
       const changed = session.room.disconnect(session.playerId, makeBroadcastSend(session.room));
@@ -73,164 +73,78 @@ const transport = new Transport(httpServer, router, new SystemClock(), {
         void session.room.runAITurns();
       }
     }
-    sessions.delete(connId);
+    registry.clearSession(connId);
   },
 });
 transportRef = transport;
 
+// --- lobby messages (Stage 3: delegated to LobbyService) ------------------
+
 router.on('createRoom', (connId, msg) => {
-  if (msg.type !== 'createRoom') return;
-  const room = manager.create();
-  const me = room.addHuman(msg.name, makeBroadcastSend(room));
-  const session = sessions.get(connId)!;
-  session.room = room;
-  session.playerId = me.id;
-  sendToConn(connId, { type: 'joined', code: room.code, playerId: me.id });
-  room.broadcastRoom();
+  if (msg.type === 'createRoom') lobby.handle(connId, msg);
 });
-
 router.on('joinRoom', (connId, msg) => {
-  if (msg.type !== 'joinRoom') return;
-  const room = manager.get(msg.code);
-  if (!room) return void sendToConn(connId, { type: 'error', message: '没有找到这个房间' });
-  const me = room.addHuman(msg.name, makeBroadcastSend(room));
-  const session = sessions.get(connId)!;
-  session.room = room;
-  session.playerId = me.id;
-  sendToConn(connId, { type: 'joined', code: room.code, playerId: me.id });
-  room.broadcastRoom();
+  if (msg.type === 'joinRoom') lobby.handle(connId, msg);
 });
-
 router.on('rejoin', (connId, msg) => {
-  if (msg.type !== 'rejoin') return;
-  const room = manager.get(msg.code);
-  if (!room) return void sendToConn(connId, { type: 'error', message: '没有找到这个房间' });
-  const me = room.reconnect(msg.playerId, makeBroadcastSend(room));
-  if (!me) return void sendToConn(connId, { type: 'error', message: '玩家不在这个房间里' });
-  const session = sessions.get(connId)!;
-  session.room = room;
-  session.playerId = me.id;
-  sendToConn(connId, { type: 'joined', code: room.code, playerId: me.id });
-  room.broadcastRoom();
-  if (room.game) sendToConn(connId, { type: 'state', state: room.game });
+  if (msg.type === 'rejoin') lobby.handle(connId, msg);
 });
-
-router.on('addAI', (connId, _msg) => {
-  const session = sessions.get(connId)!;
-  requireHost(session);
-  session.room!.addAI();
-  session.room!.broadcastRoom();
+router.on('addAI', (connId, msg) => {
+  if (msg.type === 'addAI') lobby.handle(connId, msg);
 });
-
 router.on('removePlayer', (connId, msg) => {
-  if (msg.type !== 'removePlayer') return;
-  const session = sessions.get(connId)!;
-  requireHost(session);
-  session.room!.remove(msg.playerId);
-  session.room!.broadcastRoom();
+  if (msg.type === 'removePlayer') lobby.handle(connId, msg);
 });
-
 router.on('setMap', (connId, msg) => {
-  if (msg.type !== 'setMap') return;
-  const session = sessions.get(connId)!;
-  requireHost(session);
-  session.room!.setMap(msg.mapId);
-  session.room!.broadcastRoom();
+  if (msg.type === 'setMap') lobby.handle(connId, msg);
 });
-
-router.on('leaveRoom', (connId, _msg) => {
-  const session = sessions.get(connId)!;
-  if (!session.room || !session.playerId) return;
-  const room = session.room;
-  const playerId = session.playerId;
-  if (room.phase === 'playing') {
-    const changed = room.disconnect(playerId, makeBroadcastSend(room));
-    if (changed) {
-      room.broadcastRoom();
-      room.broadcastState();
-      void room.runAITurns();
-    }
-  } else {
-    if (playerId === room.hostId) {
-      room.broadcastClosed('房主已退出，房间已解散', playerId);
-      manager.dispose(room.code);
-      session.room = null;
-      session.playerId = null;
-      return;
-    }
-    room.remove(playerId);
-    room.broadcastRoom();
-    if (room.members.length === 0) manager.dispose(room.code);
-  }
-  session.room = null;
-  session.playerId = null;
+router.on('leaveRoom', (connId, msg) => {
+  if (msg.type === 'leaveRoom') lobby.handle(connId, msg);
 });
-
-router.on('returnToLobby', (connId, _msg) => {
-  const session = sessions.get(connId)!;
-  if (!session.room || !session.playerId)
-    return void sendToConn(connId, { type: 'error', message: '你还没有进入房间' });
-  session.room.returnToLobby();
-  session.room.broadcastRoom();
+router.on('returnToLobby', (connId, msg) => {
+  if (msg.type === 'returnToLobby') lobby.handle(connId, msg);
 });
-
 router.on('startGame', (connId, msg) => {
-  if (msg.type !== 'startGame') return;
-  const session = sessions.get(connId)!;
-  requireHost(session);
-  const room = session.room!;
-  room.start(msg.mapId ?? room.mapId);
-  room.broadcastRoom();
-  room.broadcastState();
-  room.broadcastStarting();
-  room.armReadyTimeout();
+  if (msg.type === 'startGame') lobby.handle(connId, msg);
 });
+
+// --- game-phase messages (Stage 7 will move to ActionDispatcher) ---------
 
 router.on('setAiDelay', (connId, msg) => {
   if (msg.type !== 'setAiDelay') return;
-  const session = sessions.get(connId)!;
-  if (!session.room || !session.playerId) return;
+  const session = registry.getSession(connId);
+  if (!session || !session.room || !session.playerId) return;
   session.room.setAiDelay(session.playerId, msg.ms);
   session.room.broadcastRoom();
 });
 
 router.on('action', (connId, msg) => {
   if (msg.type !== 'action') return;
-  const session = sessions.get(connId)!;
-  if (!session.room || !session.playerId)
+  const session = registry.getSession(connId);
+  if (!session || !session.room || !session.playerId) {
     return void sendToConn(connId, { type: 'error', message: '你还没有进入游戏' });
+  }
   const res = session.room.handleAction(session.playerId, msg.action);
   if (!res.ok) sendToConn(connId, { type: 'error', message: res.error ?? '这个操作不符合规则' });
 });
 
 router.on('ready', (connId, _msg) => {
-  const session = sessions.get(connId)!;
-  if (!session.room || !session.playerId) return;
+  const session = registry.getSession(connId);
+  if (!session || !session.room || !session.playerId) return;
   if (session.room.phase !== 'playing') return;
   session.room.markReady(session.playerId);
 });
 
 /**
  * Stage 1 shim: `Room` is given a `Send` that broadcasts to every connection
- * currently mapped to that room. The legacy implementation captured the
- * sending socket in a closure; this preserves wire-equivalent behavior
- * without forcing the Stage 7 IMessageBus split. It does mean a stale conn
- * will receive room broadcasts after `leaveRoom`/`disconnect` until the
- * session is deleted — which the legacy code also did until
- * `ws.on('close')` cleared `send`. We match that by deleting sessions in
- * `onClose` above.
+ * currently mapped to that room. Stage 7's IMessageBus replaces this.
  */
 function makeBroadcastSend(room: Room): Send {
   return (msg: ServerMessage): void => {
-    for (const [connId, session] of sessions) {
-      if (session.room === room) sendToConn(connId, msg);
+    for (const [connId] of registry.connectionsInRoom(room)) {
+      sendToConn(connId, msg);
     }
   };
-}
-
-function requireHost(session: Session): void {
-  if (!session.room || !session.playerId) throw new Error('你还没有进入房间');
-  if (session.room.hostId !== session.playerId) throw new Error('只有房主可以这样做');
 }
 
 httpServer.listen(PORT, '0.0.0.0', () => {

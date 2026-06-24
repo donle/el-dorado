@@ -8,7 +8,7 @@
  * The lobby launch countdown is a controller-level state machine so the
  * countdown survives in-flight re-renders.
  */
-import type { ClientMessage, RoomView, ServerMessage } from '@eldorado/core';
+import type { RoomView, ServerMessage } from '@eldorado/core';
 import type { ISocketPort, SocketEvent } from '../net/SocketPort.js';
 import { MAP_OPTIONS } from '@eldorado/core';
 import {
