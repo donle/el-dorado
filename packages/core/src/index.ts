@@ -9,4 +9,5 @@ export * from './protocol.js';
 export * from './ai.js';
 export * from './movement.js';
 export * from './progress.js';
+export * from './terrain.js';
 export { getMap, MAPS, MAP_OPTIONS, PLAYABLE_MAP_IDS, CLASSIC_MAP, OFFICIAL_MAPS, parseGrid } from './maps/index.js';

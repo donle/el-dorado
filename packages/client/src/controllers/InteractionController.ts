@@ -16,6 +16,13 @@
 import {
   getDef,
   pickHandMover,
+  blockadeMoveSymbol,
+  blockadeRequiresDiscard,
+  isFinishEntrance,
+  requiredFor,
+  stepCost,
+  sameCoord,
+  cardDefId,
   type Action,
   type Axial,
   type Blockade,
@@ -30,59 +37,12 @@ import {
 } from '@eldorado/core';
 import type { Mode } from './HoverStateMachine.js';
 
-type Terrain = import('@eldorado/core').Terrain;
-
-// --- pure helpers (module-level; no mutable state) ------------------
+// --- pure helpers ---
 //
-// These were previously defined as module-level functions in main.ts and
-// are pure (no mutable state). Inlined here so the controller can use
-// them without importing the giant App file (which would cycle). They
-// belong in @eldorado/core — promoted later as a follow-up.
-
-function sameCoord(a: Axial, b: Axial): boolean {
-  return a.q === b.q && a.r === b.r;
-}
-
-function isFinishEntrance(hex: Hex | null | undefined): boolean {
-  return !!hex && (hex.finishEntrance === true || hex.terrain === 'finish');
-}
-
-function terrainSymbol(t: Terrain): MoveSymbol | null {
-  if (t === 'green') return 'machete';
-  if (t === 'blue') return 'paddle';
-  if (t === 'yellow') return 'coin';
-  return null;
-}
-
-function blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null {
-  return terrainSymbol(blockade.terrain) ?? blockade.symbol ?? null;
-}
-
-function blockadeRequiresDiscard(blockade: Blockade): boolean {
-  return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
-}
-
-function requiredFor(hex: Hex): MoveSymbol | null {
-  if (hex.terrain === 'finish') return hex.reqSymbol ?? null;
-  if (hex.reqSymbol) return hex.reqSymbol;
-  return terrainSymbol(hex.terrain);
-}
-
-function stepCost(hex: Hex): number {
-  if (hex.terrain === 'start') return 1;
-  if (hex.terrain === 'eldorado') return 0;
-  if (hex.terrain === 'finish') return Math.max(hex.cost, 1);
-  return hex.cost;
-}
-
-/** defId for a given cardId — looks at all the player's piles + the active turn. */
-function cardDefId(cardId: string, state: GameState): string {
-  for (const p of state.players) {
-    for (const c of [...p.deck, ...p.hand, ...p.discard, ...p.removed]) if (c.id === cardId) return c.defId;
-  }
-  for (const c of [...(state.turn?.inPlay ?? []), ...(state.turn?.removedThisTurn ?? [])]) if (c.id === cardId) return c.defId;
-  return cardId;
-}
+// Pure helpers used to live as module-level functions in main.ts; they
+// were duplicated here to avoid a cyclic import on App. They are now
+// imported from @eldorado/core (Stage E extraction) so a single
+// implementation is shared with the server and AI.
 
 // --- host interface --------------------------------------------------
 

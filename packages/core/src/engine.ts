@@ -4,7 +4,6 @@ import type {
   Hex,
   Axial,
   MoveSymbol,
-  Terrain,
   Card,
   Blockade,
 } from './types.js';
@@ -12,32 +11,11 @@ import type { Action, GameEvent, ActionResult } from './actions.js';
 import { getDef, coinValue, movableSymbols, HAND_SIZE } from './cards.js';
 import { isAdjacent } from './hex.js';
 import { shuffle } from './rng.js';
+import { terrainSymbol, blockadeMoveSymbol, blockadeRequiresDiscard, isFinishEntrance, sameCoord } from './terrain.js';
 
 /** Deep-clone game state. GameState is plain JSON data, so this is exact. */
 function clone<T>(x: T): T {
   return JSON.parse(JSON.stringify(x)) as T;
-}
-
-/** Symbol a movement card must match to enter a terrain (null = wildcard). */
-function terrainSymbol(t: Terrain): MoveSymbol | null {
-  switch (t) {
-    case 'green':
-      return 'machete';
-    case 'blue':
-      return 'paddle';
-    case 'yellow':
-      return 'coin';
-    default:
-      return null; // start / finish are wildcard; mountain/rubble/basecamp handled elsewhere
-  }
-}
-
-function blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null {
-  return terrainSymbol(blockade.terrain) ?? blockade.symbol ?? null;
-}
-
-function blockadeRequiresDiscard(blockade: Blockade): boolean {
-  return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
 }
 
 function symbolLabel(symbol: MoveSymbol): string {
@@ -126,10 +104,6 @@ function hexAt(state: GameState, c: Axial): Hex | undefined {
   return state.hexes.find((h) => h.q === c.q && h.r === c.r);
 }
 
-function sameCoord(a: Axial, b: Axial): boolean {
-  return a.q === b.q && a.r === b.r;
-}
-
 function crossesBlockadeEdge(blockade: Blockade, from: Axial, to: Axial): boolean {
   const edges = blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
   return edges.some(
@@ -205,10 +179,6 @@ function moveTo(state: GameState, p: Player, to: Hex, events: GameEvent[]): void
       state.finalTurnsRemaining = finalTurnsAfter(state, p.id);
     }
   }
-}
-
-function isFinishEntrance(hex: Hex | undefined): boolean {
-  return !!hex && (hex.finishEntrance === true || hex.terrain === 'finish');
 }
 
 function finalTurnsAfter(state: GameState, playerId: string): number {

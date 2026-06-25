@@ -279,7 +279,7 @@
 
 ---
 
-# Stage E — InteractionController 内部 7 个纯 helper 上提到 core（独立阶段）
+# Stage E — InteractionController 内部 7 个纯 helper 上提到 core（独立阶段） ✅ 2026-06-26
 
 > 这是个横切关注点，不属于 App 拆分。InteractionController.ts 里有 7 个纯函数是从 main.ts 搬过来时内联的：
 >
@@ -294,6 +294,18 @@
 > 它们都被 `HoverStateMachine` / `ActionLogPanel` 间接需要（通过 host interface 转发），未来如果 server 想做合法性校验也得用。
 >
 > 建议下一轮专门做一个 Stage E commit 批次，把它们搬到 `packages/core/src/movement/` 或类似目录，添加 unit test，然后让 HoverStateMachine / InteractionController 都从 core import。
+
+## 完成内容
+
+- 新增 `packages/core/src/terrain.ts`，导出 10 个纯 helper：`terrainSymbol`、`blockadeMoveSymbol`、`blockadeRequiresDiscard`、`isFinishEntrance`、`requiredFor`、`stepCost`、`sameCoord`、`cardDefId`、`findCardDefId`、`fallbackCardDefId`
+- 新增 `packages/core/test/terrain.test.ts`，26 个 unit test 覆盖上述 helper
+- 客户端 `main.ts` 与 `controllers/InteractionController.ts` 删除本地副本，改从 `@eldorado/core` import；保留 App 上的私有 forwarder 让 `HoverStateMachine` / `ActionLogPanel` 仍走 host 接口
+- 核心包 `engine.ts`、`ai.ts`、`progress.ts` 同步删除本地副本，改从 `./terrain.js` import（同一个 package，零额外代价）
+
+## 验证
+
+- `pnpm exec tsc --noEmit`：core / client / server 全部通过（仅剩 `engine.ts:481` 旧的 `console` 找不到，是 main 分支合并之前就有的，跟 Stage E 无关）
+- `pnpm test`：157 个 core 测试通过（含 26 个新加的 terrain.test.ts）
 
 ---
 

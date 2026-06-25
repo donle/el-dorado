@@ -11,36 +11,11 @@
  * `planTurn` returns a full action sequence (ending in EndTurn) that the
  * server applies through the same validated reducer humans use.
  */
-import type { GameState, Player, Hex, MoveSymbol, Terrain, Axial, Blockade, MarketPile } from './types.js';
+import type { GameState, Player, Hex, MoveSymbol, Axial, Blockade, MarketPile, Terrain } from './types.js';
 import type { Action } from './actions.js';
 import { getDef, coinValue, movableSymbols, HAND_SIZE } from './cards.js';
 import { neighbors, key } from './hex.js';
-
-function terrainSymbol(t: Terrain): MoveSymbol | null {
-  if (t === 'green') return 'machete';
-  if (t === 'blue') return 'paddle';
-  if (t === 'yellow') return 'coin';
-  return null;
-}
-
-function blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null {
-  return terrainSymbol(blockade.terrain) ?? blockade.symbol ?? null;
-}
-
-function blockadeRequiresDiscard(blockade: Blockade): boolean {
-  return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
-}
-
-function isFinishEntrance(h: Hex): boolean {
-  return h.finishEntrance === true || h.terrain === 'finish';
-}
-
-/** Symbol a hex demands to enter. */
-function requiredFor(h: Hex): MoveSymbol | null {
-  if (h.terrain === 'finish') return h.reqSymbol ?? null;
-  if (h.reqSymbol) return h.reqSymbol;
-  return terrainSymbol(h.terrain);
-}
+import { blockadeMoveSymbol, blockadeRequiresDiscard, isFinishEntrance, requiredFor, sameCoord } from './terrain.js';
 
 function enterCost(h: Hex): number {
   if (h.terrain === 'start') return 1;
@@ -51,10 +26,6 @@ function enterCost(h: Hex): number {
 
 function stepPathCost(h: Hex): number {
   return h.terrain === 'eldorado' ? 0 : Math.max(enterCost(h), 1);
-}
-
-function sameCoord(a: Axial, b: Axial): boolean {
-  return a.q === b.q && a.r === b.r;
 }
 
 function crossesBlockadeEdge(blockade: Blockade, from: Axial, to: Axial): boolean {

@@ -6,13 +6,9 @@
  * and not tied to React / DOM state) so it can be unit-tested and reused
  * without dragging in app-level dependencies.
  */
-import type { Axial, GameState, Hex } from './types.js';
+import type { Axial, GameState } from './types.js';
 import { distance } from './hex.js';
-
-/** A "finish" hex is either the explicit El Dorado tile or any entrance cell leading to it. */
-function isFinishEntrance(hex: Hex | undefined): boolean {
-  return !!hex && (hex.finishEntrance === true || hex.terrain === 'finish');
-}
+import { isFinishEntrance } from './terrain.js';
 
 /**
  * Rough progress 0..1 toward El Dorado, for the player roster bars.

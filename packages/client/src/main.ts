@@ -27,6 +27,12 @@ import {
   isAdjacent,
   pickHandMover,
   progressOf,
+  terrainSymbol,
+  blockadeMoveSymbol,
+  blockadeRequiresDiscard,
+  cardDefId,
+  findCardDefId,
+  fallbackCardDefId,
   MAP_OPTIONS,
   type GameState,
   type RoomView,
@@ -60,40 +66,6 @@ const START_COUNTDOWN_MS = 5000;
 
 function safeMapId(id: string | null): string {
   return id && MAP_OPTION_IDS.has(id) ? id : DEFAULT_MAP_ID;
-}
-
-function terrainSymbol(t: Terrain): MoveSymbol | null {
-  if (t === 'green') return 'machete';
-  if (t === 'blue') return 'paddle';
-  if (t === 'yellow') return 'coin';
-  return null;
-}
-
-function blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null {
-  return terrainSymbol(blockade.terrain) ?? blockade.symbol ?? null;
-}
-
-function blockadeRequiresDiscard(blockade: Blockade): boolean {
-  return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
-}
-
-/** Symbol a hex demands to enter. */
-function requiredFor(hex: Hex): MoveSymbol | null {
-  if (hex.terrain === 'finish') return hex.reqSymbol ?? null;
-  if (hex.reqSymbol) return hex.reqSymbol;
-  return terrainSymbol(hex.terrain);
-}
-
-/** Power a single step onto this hex costs. */
-function stepCost(hex: Hex): number {
-  if (hex.terrain === 'start') return 1;
-  if (hex.terrain === 'eldorado') return 0;
-  if (hex.terrain === 'finish') return Math.max(hex.cost, 1);
-  return hex.cost;
-}
-
-function sameCoord(a: Axial, b: Axial): boolean {
-  return a.q === b.q && a.r === b.r;
 }
 
 class App {
@@ -823,26 +795,6 @@ class App {
 }
 
 // --- small DOM helpers ---
-
-function cardDefId(cardId: string, state: GameState): string {
-  return findCardDefId(cardId, state) ?? fallbackCardDefId(cardId);
-}
-
-function findCardDefId(cardId: string, state: GameState): string | null {
-  for (const p of state.players) {
-    const c = [...p.hand, ...p.deck, ...p.discard, ...p.removed].find((x) => x.id === cardId);
-    if (c) return c.defId;
-  }
-  const turnCard = [...(state.turn?.inPlay ?? []), ...(state.turn?.removedThisTurn ?? [])].find((x) => x.id === cardId);
-  if (turnCard) return turnCard.defId;
-  return null;
-}
-
-function fallbackCardDefId(cardId: string): string {
-  // ids look like "playerId:defId#n"
-  const m = cardId.match(/:([^:#]+)#/);
-  return m ? m[1] : cardId;
-}
 
 // KIND_LABEL moved to views/common/iconMap.ts.
 
