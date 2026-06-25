@@ -24,8 +24,8 @@ import {
   coinValue,
   neighbors,
   isAdjacent,
-  distance,
   pickHandMover,
+  progressOf,
   MAP_OPTIONS,
   type GameState,
   type RoomView,
@@ -74,10 +74,6 @@ function blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null {
 
 function blockadeRequiresDiscard(blockade: Blockade): boolean {
   return blockade.terrain === 'rubble' || blockadeMoveSymbol(blockade) === null;
-}
-
-function isFinishEntrance(hex: Hex | null | undefined): boolean {
-  return !!hex && (hex.finishEntrance === true || hex.terrain === 'finish');
 }
 
 /** Symbol a hex demands to enter. */
@@ -600,20 +596,7 @@ class App {
   // longer owns the lobby element. App only renders the in-game HUD.
   // --- rendering: HUD ---
 
-  /** Rough progress 0..1 toward El Dorado, for the player roster bars. */
-  private progressOf(p: { position: Axial; finished: boolean }): number {
-    const s = this.state;
-    if (!s) return 0;
-    if (p.finished) return 1;
-    const finishes = s.hexes.some((h) => h.terrain === 'eldorado')
-      ? s.hexes.filter((h) => h.terrain === 'eldorado')
-      : s.hexes.filter((h) => isFinishEntrance(h));
-    const starts = s.hexes.filter((h) => h.terrain === 'start');
-    if (!finishes.length) return 0;
-    const toFinish = (pos: Axial) => Math.min(...finishes.map((f) => distance(pos, f)));
-    const ref = starts.length ? Math.max(...starts.map((st) => toFinish(st))) : 1;
-    return Math.max(0, Math.min(1, 1 - toFinish(p.position) / Math.max(ref, 1)));
-  }
+  // progressOf is a pure helper that lives in @eldorado/core (C5 extraction).
 
   // buildActionLogPanel moved to ActionLogPanel.buildPanel — see
   // controllers/ActionLogPanel.ts. App's renderActionLog and
@@ -709,7 +692,7 @@ class App {
           turnPlayerId: s.turn?.playerId ?? null,
           selfId: this.you,
           pinnedPlayerId: this.playerHandCtl.getPinnedPlayerId(),
-          progressOf: (p) => this.progressOf(p),
+          progressOf: (p) => progressOf(p, s),
         },
         {
           onCardClick: (id) => this.playerHandCtl.toggle(id),
