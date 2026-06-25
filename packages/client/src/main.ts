@@ -205,6 +205,8 @@ class App {
   private terrainPanel = el('div', 'terrain-panel inspector-popover panel hidden');
   /** @internal BoardCoordinator reads these for animateBuy / refreshPinnedPreview. */
   readonly handEls = new Map<string, HTMLElement>();
+  // `readonly` (not `private`) so SessionController can read the market
+  // slot DOM during onStateUpdate to capture source rects for buy animation.
   readonly shopEls = new Map<string, HTMLElement>();
   readonly playerCardEls = new Map<string, HTMLElement>();
   // playerHandPanel + pinnedPlayerId live in PlayerHandPanel (C1 extraction).
@@ -248,8 +250,8 @@ class App {
 
   // onSocketEvent lives in SessionController (C4 extraction).
 
-  // `private` → public so SessionController can forward incoming server
-  // messages through the host interface (`onMessage: (m) => void`).
+  // C6: thin shell — store dispatch + dispatch to SessionController.
+  // All case bodies live in controllers/SessionController.ts.
   onMessage(m: ServerMessage): void {
     // Mirror every server message into the store so other components can
     // subscribe. The App's local UI state (this.room / this.state / etc.)
@@ -257,65 +259,11 @@ class App {
     // is a parallel observable for future refactors (Stage 5.x).
     this.store.dispatch(m);
     switch (m.type) {
-      case 'joined':
-        this.you = m.playerId;
-        this.board.setSelfPlayerId(this.you);
-        sessionStorage.setItem('eldorado.session', JSON.stringify({ code: m.code, playerId: m.playerId }));
-        break;
-      case 'room':
-        this.room = m.room;
-        if (m.room.phase === 'lobby') {
-          this.clearTurnIntro();
-          this.state = null;
-          this.actionLogPanel.resetActionLog();
-          this.resetSelection();
-          this.board.setHighlights([]);
-          this.board.setBlockadeHighlights([]);
-          this.renderHud();
-        }
-        break;
-      case 'state': {
-        const previousState = this.state;
-        const buys = (m.events ?? []).filter((e) => e.type === 'bought') as Array<{
-          type: 'bought';
-          playerId: string;
-          defId: string;
-        }>;
-        // Capture market source rects BEFORE the DOM is rebuilt.
-        const sources = new Map<string, DOMRect>();
-        for (const e of buys) {
-          const node = this.shopEls.get(e.defId);
-          // start from the card-face thumbnail (card-shaped), not the whole row
-          const thumb = node?.querySelector('.card-thumb') ?? node;
-          if (thumb) sources.set(`${e.defId}|${e.playerId}`, thumb.getBoundingClientRect());
-        }
-        this.actionLogPanel.rememberCards(previousState);
-        this.actionLogPanel.rememberCards(m.state);
-        this.actionLogPanel.appendActionLog(m.events ?? [], m.state, previousState);
-        const shouldShowTurnIntro = this.shouldShowTurnIntro(previousState, m.state, m.events ?? []);
-        const turnPlayerChanged = !!previousState
-          && previousState.turn?.playerId !== m.state.turn?.playerId;
-        this.state = m.state;
-        this.syncSelectionToState();
-        this.enterGameView();
-        if (turnPlayerChanged) this.board.panToPlayerIfOffscreen(m.state.turn?.playerId ?? null);
-        if (shouldShowTurnIntro) this.showTurnIntro();
-        for (const e of buys) this.animateBuy(e.playerId, e.defId, sources.get(`${e.defId}|${e.playerId}`));
-        break;
-      }
-      case 'roomClosed':
-        this.sessionCtl.onRoomClosed(m.message);
-        break;
-      case 'error':
-        this.error = m.message;
-        this.renderHud();
-        setTimeout(() => {
-          if (this.error === m.message) {
-            this.error = '';
-            this.renderHud();
-          }
-        }, 2500);
-        break;
+      case 'joined':       this.sessionCtl.onJoined(m); break;
+      case 'room':         this.sessionCtl.onRoom(m); break;
+      case 'state':        this.sessionCtl.onStateUpdate(m); break;
+      case 'roomClosed':   this.sessionCtl.onRoomClosed(m.message); break;
+      case 'error':        this.sessionCtl.onError(m.message); break;
     }
   }
 
@@ -367,10 +315,6 @@ class App {
     return id ? this.state?.blockades.find((b) => b.id === id) : undefined;
   }
 
-  private resetSelection(): void {
-    this.interaction.resetSelection();
-  }
-
   /** @internal OverlaysController (game-over overlay button) — forwards to SessionController. */
   leaveRoom(): void { this.sessionCtl.leaveRoom(); }
 
@@ -380,14 +324,11 @@ class App {
   }
 
   // clearRoomState lives in SessionController (C4 extraction).
-
-  private shouldShowTurnIntro(previousState: GameState | null, nextState: GameState, events: GameEvent[]): boolean {
-    return this.boardCtl.shouldShowTurnIntro(previousState, nextState, events);
-  }
-
-  private showTurnIntro(): void { this.boardCtl.showTurnIntro(); }
-
-  private clearTurnIntro(): void { this.boardCtl.clearTurnIntro(); }
+  // shouldShowTurnIntro / showTurnIntro / clearTurnIntro / enterGameView /
+  // animateBuy / resetSelection / syncSelectionToState live in their
+  // respective controllers (C6 extraction — App.onMessage is a thin shell
+  // that dispatches to SessionController, which calls boardCtl /
+  // interaction directly through the host interface).
 
   /** @internal OverlaysController (game-over overlay button) — forwards to SessionController. */
   returnToLobby(): void { this.sessionCtl.returnToLobby(); }
@@ -466,14 +407,9 @@ class App {
     return this.boardCtl.makePile(kind, label, count);
   }
 
-  /** Fly a card-shaped clone of the bought card from the market to its destination. */
-  private flyCard(defId: string, from: DOMRect, to: DOMRect, fade: boolean): void {
-    this.boardCtl.flyCard(defId, from, to, fade);
-  }
-
-  private animateBuy(playerId: string, defId: string, source?: DOMRect): void {
-    this.boardCtl.animateBuy(playerId, defId, source);
-  }
+  // flyCard / animateBuy live in BoardCoordinator (B4). C6 — SessionController
+  // calls boardCtl.animateBuy directly through the host interface, so the
+  // App forwarders are no longer needed.
 
   // attachSheetDismiss lives in OverlaysController (C2 extraction).
 
@@ -589,8 +525,6 @@ class App {
   }
 
   // --- player hand inspector lives in PlayerHandPanel (C1 extraction) ---
-
-  private enterGameView(): void { this.boardCtl.enterGameView(); }
 
   // Lobby rendering moved to packages/client/src/lobby/LobbyView.ts; App no
   // longer owns the lobby element. App only renders the in-game HUD.
