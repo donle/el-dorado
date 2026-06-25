@@ -120,13 +120,17 @@
 
 ## 当前 App 文件状态
 
-- `packages/client/src/main.ts`：1387 行（B1+B2+B3+B4 全部完成）
-- `packages/client/src/controllers/`：5 个 controller
+- `packages/client/src/main.ts`：1136 行（B1+B2+B3+B4+C1+C2+C3+C4 全部完成）
+- `packages/client/src/controllers/`：9 个 controller
   - `MobileLayoutProbe.ts`：49 行（B0）
   - `HoverStateMachine.ts`：437 行（B1）
   - `ActionLogPanel.ts`：450 行（B2）
   - `InteractionController.ts`：934 行（B3）
   - `BoardCoordinator.ts`：163 行（B4）
+  - `PlayerHandPanel.ts`（C1）
+  - `OverlaysController.ts`（C2）
+  - `SettingsMenuController.ts`（C3）
+  - `SessionController.ts`：117 行（C4）
 
 ---
 
@@ -199,9 +203,9 @@
 - **风险**：低。settings menu 是纯 UI；view-mode 切换是 localStorage + 类名，没有副作用。
 - **注意**：`viewMode` 字段目前在 App 上是 `public`，被 Board 场景读取（不通过 host interface）。抽走后保留 App 上的 `getViewMode()` getter，Board 通过 host 读取。
 
-## C4. SessionController（中风险，跨网络层）
+## ✅ C4. SessionController（已完成 · commit `6ebc837`）
 
-- **位置**：`packages/client/src/controllers/SessionController.ts`（新文件）
+- **位置**：`packages/client/src/controllers/SessionController.ts` · 117 行
 - **覆盖**（~80 行）：
   - `onSocketEvent(e)`
   - `rejoinSavedSession()`
@@ -211,8 +215,9 @@
   - `onRoomClosed(message)`
   - `closeMobilePanel()`（11 行，4 个 panel 都关闭）
 - **依赖**：`store`, `net`, `lobbyCtl`, `state`, `room`, `you`, `error`, `mobilePanel`, `hud`, `pinnedPlayerId`（最后一条给 PlayerHandPanel 重置）。
-- **Host 接口**：暴露 `reset()` 给 PlayerHandPanel（用于 leaveRoom 时清空 pinned）。App 上保留 forwarder 给其它 controller（如 `actionLogPanel.resetActionLog()`）。
+- **Host 接口**：暴露 `close()` 给 PlayerHandPanel（`SessionHost.playerHandCtl.close()` 在 `clearRoomState` 里调用）。App 上保留 forwarder 给其它 controller（如 `actionLogPanel.resetActionLog()`）。
 - **风险**：中。它桥接 network layer 和 UI 状态。最大的不确定性是其它 controller 暂时需要从 App 读 `room` / `you` / `state` —— 抽完后这部分从 `host` 上读。
+- **实际改动**：把 `interaction` / `boardCtl` / `actionLogPanel` / `lobbyCtl` / `onMessage` 从 `private` 提升为 `readonly`（host interface 需要这些访问点）。App：1387 → 1136 行（-251）。
 
 ## C5. progressOf 提到 core（顺手做，低风险）
 
