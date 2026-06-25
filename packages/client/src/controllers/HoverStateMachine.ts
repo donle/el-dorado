@@ -26,11 +26,16 @@ import {
   SYMBOL_LABEL,
 } from '../views/common/iconMap.js';
 import { escapeHtml, playerDisplayName } from '../views/common/dom.js';
+import {
+  terrainInfo,
+  blockadeInfo,
+  blockadeTerrain,
+  terrainCostText,
+  blockadeCostText,
+} from './TerrainInfo.js';
 
 /** Mirrors the Mode union in main.ts. Stays in lock-step until B3 owns it. */
 export type Mode = 'idle' | 'clear' | 'remove' | 'trim';
-
-type TerrainInfo = { name: string; icon: string; description: string; rule: string };
 
 type MovementRequirement = {
   required: MoveSymbol | null;
@@ -83,12 +88,7 @@ export interface HoverHost {
     candidates: Array<{ id: string; defId: string }>,
   ): { cardId: string; symbol: MoveSymbol } | null;
 
-  // --- panel render helpers (kept here for now; small + stable) ---
-  terrainInfo(hex: Hex): TerrainInfo;
-  blockadeInfo(b: Blockade): TerrainInfo;
-  blockadeTerrain(b: Blockade): Terrain;
-  terrainCostText(hex: Hex): string;
-  blockadeCostText(b: Blockade): string;
+  // --- panel render helpers (imported directly from controllers/TerrainInfo) ---
   blockadeRequiresDiscard(b: Blockade): boolean;
   blockadeMoveSymbol(b: Blockade): MoveSymbol | null;
   cardDefId(cardId: string, state: GameState): string;
@@ -293,8 +293,8 @@ export class HoverStateMachine {
 
     this.host.hidePreview();
     if (activeBlockade) {
-      const terrain = this.host.blockadeTerrain(activeBlockade);
-      const info = this.host.blockadeInfo(activeBlockade);
+      const terrain = blockadeTerrain(activeBlockade);
+      const info = blockadeInfo(activeBlockade);
       const pinned = !!this.pinnedBlockadeId && !this.hoveredBlockadeId;
       const owner = activeBlockade.claimedBy ? state.players.find((p) => p.id === activeBlockade.claimedBy) : null;
       const ownerText = owner ? `归属：${playerDisplayName(owner)}` : '尚未被领取';
@@ -314,7 +314,7 @@ export class HoverStateMachine {
         <div class="terrain-desc">${escapeHtml(info.description)}</div>
         <div class="terrain-rule"><b>规则</b><span>${escapeHtml(info.rule)}</span></div>
         <div class="terrain-meta">
-          <span>${escapeHtml(this.host.blockadeCostText(activeBlockade))}</span>
+          <span>${escapeHtml(blockadeCostText(activeBlockade))}</span>
           <span>${escapeHtml(ownerText)}</span>
           <span>连接 ${edgeCount} 条边</span>
         </div>
@@ -325,7 +325,7 @@ export class HoverStateMachine {
     }
     if (!hex) return;
 
-    const info = this.host.terrainInfo(hex);
+    const info = terrainInfo(hex);
     const pinned = !!this.pinnedTerrain && !this.hoveredTerrain;
     const occupant = hex.occupant ? state.players.find((p) => p.id === hex.occupant) : null;
     const occupantText = occupant ? `占据：${playerDisplayName(occupant)}` : '未被占据';
@@ -345,7 +345,7 @@ export class HoverStateMachine {
       <div class="terrain-desc">${escapeHtml(info.description)}</div>
       <div class="terrain-rule"><b>规则</b><span>${escapeHtml(info.rule)}</span></div>
       <div class="terrain-meta">
-        <span>${escapeHtml(this.host.terrainCostText(hex))}</span>
+        <span>${escapeHtml(terrainCostText(hex))}</span>
         <span>${escapeHtml(occupantText)}</span>
         <span>坐标 ${hex.q}, ${hex.r}</span>
       </div>
@@ -361,7 +361,7 @@ export class HoverStateMachine {
     if (blockade.claimedBy) return '这块连接地形已经被领取，不再作为可领取阻挡物。';
     if (!this.host.blockadeDestination(blockade)) return '当前棋子不在这块连接地形覆盖的边旁边，暂时不能行动。';
 
-    const requirementText = `连接地形需要 ${this.host.blockadeCostText(blockade)}；第一个移除的玩家会领取它，玩家信息中的阻挡物数量会增加。`;
+    const requirementText = `连接地形需要 ${blockadeCostText(blockade)}；第一个移除的玩家会领取它，玩家信息中的阻挡物数量会增加。`;
     if (this.host.blockadeRequiresDiscard(blockade)) {
       return `${requirementText} 选 ${blockade.cost} 张手牌弃掉即可移除这块连接地形（棋子留在原地），之后再走到对面。`;
     }
@@ -420,7 +420,7 @@ export class HoverStateMachine {
       ? `边界碎石路障需要弃 ${requirement.cost} 张手牌；成功通过后会收入你的玩家信息。`
       : requirement.blockade && requirement.required
       ? `跨越边界阻挡物并进入对岸地形共需 ${SYMBOL_GLYPH[requirement.required]}${SYMBOL_LABEL[requirement.required]} ${requirement.cost} 点（阻挡物 + 目的地地形，须同一种符号）；成功通过后阻挡物会收入你的玩家信息。`
-      : `此格需要 ${this.host.terrainCostText(hex)}。`;
+      : `此格需要 ${terrainCostText(hex)}。`;
     const mover = this.host.getState()?.turn?.activeMover;
     if (mover) {
       return this.host.canEnter(hex, mover.symbol, mover.remaining)

@@ -22,6 +22,7 @@ import type {
 import { CARD_DEFS, getDef } from '@eldorado/core';
 import { SYMBOL_LABEL } from '../views/common/iconMap.js';
 import { button, colorHex, el, playerDisplayName } from '../views/common/dom.js';
+import { terrainInfo } from './TerrainInfo.js';
 
 export type ActionLogSegment = {
   text: string;
@@ -39,8 +40,6 @@ export type ActionLogEntry = {
 };
 
 const sameCoord = (a: Axial, b: Axial): boolean => a.q === b.q && a.r === b.r;
-
-type TerrainInfo = { name: string; icon: string; description: string; rule: string };
 
 type BoardLike = {
   setInfoHoverHex(coord: Axial): void;
@@ -69,8 +68,6 @@ export interface ActionLogHost {
   // Card def lookup — implementations of these helpers live in main.ts.
   findCardDefId(cardId: string, state: GameState): string | null;
   fallbackCardDefId(cardId: string): string;
-  // Terrain info (panel header for the moved-to coord).
-  terrainInfo(hex: import('@eldorado/core').Hex): TerrainInfo;
 }
 
 const MAX_LOG_ENTRIES = 60;
@@ -177,7 +174,7 @@ export class ActionLogPanel {
   private terrainLogSegment(to: Axial, state: GameState): ActionLogSegment {
     const hex = state.hexes.find((h) => sameCoord(h, to));
     return {
-      text: hex ? `${this.host.terrainInfo(hex).name} (${to.q}, ${to.r})` : `(${to.q}, ${to.r})`,
+      text: hex ? `${terrainInfo(hex).name} (${to.q}, ${to.r})` : `(${to.q}, ${to.r})`,
       coord: { q: to.q, r: to.r },
     };
   }

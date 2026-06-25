@@ -1,7 +1,6 @@
 import './style.css';
 import { WebSocketAdapter } from './net/WebSocketAdapter.js';
 import type { ISocketPort, SocketEvent } from './net/SocketPort.js';
-import { cardFace } from './cardFaces.js';
 import { BootController } from './boot/BootController.js';
 import { LobbyController } from './lobby/LobbyController.js';
 import { GameStore } from './store/GameStore.js';
@@ -12,6 +11,7 @@ import { renderMarketPanel } from './views/market/MarketPanel.js';
 import { renderPlayerBar } from './views/players/PlayerBar.js';
 import { renderTurnInfoPanel, type ActionCardPrompt } from './views/turn/TurnInfoPanel.js';
 import { buildGearDock, buildTopBar, buildMobileToolbar } from './views/hud/ChromeBars.js';
+import { previewHtml, marketInlineDetailHtml } from './views/cards/CardDescription.js';
 import {
   clearTurnIntro as clearTurnIntroOverlay,
   showTurnIntro as showTurnIntroOverlay,
@@ -119,16 +119,6 @@ class App {
   blockadeDestination(blockade: Blockade, symbol?: MoveSymbol, power?: number): Hex | undefined {
     return this.interaction.blockadeDestination(blockade, symbol, power);
   }
-  /** @internal HoverStateMachine */
-  terrainInfo(hex: Hex): TerrainInfo { return terrainInfo(hex); }
-  /** @internal HoverStateMachine */
-  blockadeInfo(blockade: Blockade): TerrainInfo { return blockadeInfo(blockade); }
-  /** @internal HoverStateMachine */
-  blockadeTerrain(blockade: Blockade): Terrain { return blockadeTerrain(blockade); }
-  /** @internal HoverStateMachine */
-  terrainCostText(hex: Hex): string { return terrainCostText(hex); }
-  /** @internal HoverStateMachine */
-  blockadeCostText(blockade: Blockade): string { return blockadeCostText(blockade); }
   /** @internal HoverStateMachine */
   blockadeRequiresDiscard(blockade: Blockade): boolean { return blockadeRequiresDiscard(blockade); }
   /** @internal HoverStateMachine */
@@ -754,182 +744,9 @@ class App {
 
 // --- small DOM helpers ---
 
-// KIND_LABEL moved to views/common/iconMap.ts.
-
-type TerrainInfo = { name: string; icon: string; description: string; rule: string };
-
-const TERRAIN_INFO: Record<Terrain, TerrainInfo> = {
-  green: {
-    name: '丛林',
-    icon: '🗡️',
-    description: '潮湿密集的雨林区域，队伍需要砍开藤蔓和灌木才能前进。',
-    rule: '进入此格需要砍刀移动力，消耗等于格子上的数字。',
-  },
-  blue: {
-    name: '河流',
-    icon: '🛶',
-    description: '河道与浅滩交错的水域，必须依靠船桨和水路经验通过。',
-    rule: '进入此格需要船桨移动力，消耗等于格子上的数字。',
-  },
-  yellow: {
-    name: '村庄',
-    icon: '🪙',
-    description: '村落、道路和交易点组成的陆路区域，金币可以换来向导和补给。',
-    rule: '进入此格需要金币移动力，消耗等于格子上的数字。',
-  },
-  rubble: {
-    name: '碎石障碍',
-    icon: '⛏',
-    description: '坍塌的石堆挡住去路，需要丢弃补给和工具来清出通道。',
-    rule: '点击相邻碎石格后，选择指定数量的手牌弃掉，然后棋子进入该格。',
-  },
-  basecamp: {
-    name: '营地障碍',
-    icon: '⛺',
-    description: '临时营地占住路线，穿过这里会消耗并淘汰一部分随身装备。',
-    rule: '点击相邻营地格后，选择指定数量的手牌永久移出游戏，然后棋子进入该格。',
-  },
-  mountain: {
-    name: '山地',
-    icon: '⛰',
-    description: '陡峭岩脊和高地阻隔路线，是地图上的天然屏障。',
-    rule: '普通移动不能进入山地；原住民向导可以无视地形移动到相邻山地。',
-  },
-  start: {
-    name: '起点营地',
-    icon: '🚩',
-    description: '探险队出发的位置，也是路线回环时可以经过的普通格。',
-    rule: '进入起点格消耗 1 点任意移动力。',
-  },
-  finish: {
-    name: '黄金城入口',
-    icon: '🏆',
-    description: '通向黄金城的最后入口。先进入入口，再从入口踏上黄金城主体，才算抵达终点。',
-    rule: '进入入口需要满足格子的移动符号和消耗。',
-  },
-  eldorado: {
-    name: '黄金城',
-    icon: '🏛',
-    description: '传说中的黄金城主体区域。探险队必须从任一黄金城入口踏上这里才算完成旅程。',
-    rule: '只能从相邻的黄金城入口进入；最终踏入黄金城不需要出牌。进入后触发最终结算阶段。',
-  },
-};
-
-function terrainInfo(hex: Hex): TerrainInfo {
-  if (hex.finishEntrance && hex.terrain !== 'finish') {
-    const base = TERRAIN_INFO[hex.terrain];
-    return {
-      ...base,
-      name: `${base.name}入口`,
-      description: `${base.description} 这里也是黄金城前的入口格。`,
-      rule: `${terrainCostText(hex)}。先进入此入口，再从入口踏上黄金城主体，才算抵达终点。`,
-    };
-  }
-  if (hex.terrain !== 'finish') return TERRAIN_INFO[hex.terrain];
-  const symbol = hex.reqSymbol ? `${SYMBOL_GLYPH[hex.reqSymbol]}${SYMBOL_LABEL[hex.reqSymbol]}` : '任意移动力';
-  return {
-    ...TERRAIN_INFO.finish,
-    rule: `进入入口需要 ${symbol}，消耗 ${Math.max(hex.cost, 1)} 点。入口本身不是终点，还需要再进入黄金城。`,
-  };
-}
-
-function blockadeTerrain(blockade: Blockade): Terrain {
-  if (blockade.terrain) return blockade.terrain;
-  if (blockade.symbol === 'machete') return 'green';
-  if (blockade.symbol === 'paddle') return 'blue';
-  if (blockade.symbol === 'coin') return 'yellow';
-  return 'yellow';
-}
-
-function blockadeInfo(blockade: Blockade): TerrainInfo {
-  const terrain = blockadeTerrain(blockade);
-  const base = TERRAIN_INFO[terrain];
-  return {
-    name: `${base.name}连接地形`,
-    icon: base.icon,
-    description: `连接两个大陆板块边缘的 Z 字形地形，地貌为${base.name}。它不是装饰物，而是可以被选择并穿越的路线。`,
-    rule: `从这块地形覆盖的任一边跨到另一侧时，需要 ${blockadeCostText(blockade)}。第一位通过的玩家会领取这块连接地形，后续结算会记录在玩家信息中。`,
-  };
-}
-
-function terrainCostText(hex: Hex): string {
-  if (hex.terrain === 'mountain') return '普通移动不可进入';
-  if (hex.terrain === 'eldorado') return '无需出牌';
-  if (hex.terrain === 'rubble') return `清除费用 ${hex.cost} 张手牌`;
-  if (hex.terrain === 'basecamp') return `移除费用 ${hex.cost} 张手牌`;
-  if (hex.terrain === 'start') return '进入消耗 1 点任意移动力';
-  if (hex.terrain === 'finish') {
-    const symbol = hex.reqSymbol ? `${SYMBOL_GLYPH[hex.reqSymbol]} ${SYMBOL_LABEL[hex.reqSymbol]}` : '任意移动力';
-    return `${symbol} ${Math.max(hex.cost, 1)} 点`;
-  }
-  const symbol = terrainSymbol(hex.terrain);
-  return symbol ? `${SYMBOL_GLYPH[symbol]} ${SYMBOL_LABEL[symbol]} ${hex.cost} 点` : `消耗 ${hex.cost}`;
-}
-
-function blockadeCostText(blockade: Blockade): string {
-  const symbol = blockadeMoveSymbol(blockade);
-  if (!symbol) return `⛏ 弃 ${blockade.cost} 张手牌`;
-  return `${SYMBOL_GLYPH[symbol]} ${SYMBOL_LABEL[symbol]} ${blockade.cost} 点`;
-}
-
-function cardDescription(defId: string): string {
-  const def = getDef(defId);
-  if (def.kind === 'joker') {
-    return `万能牌：出牌时可当作 🗡️砍刀 / 🛶船桨 / 🪙金币 中任意一种使用（每次选一种，不可混用）。购买时按 ${def.power} 金币计。`;
-  }
-  if (def.kind === 'action') {
-    switch (def.ability) {
-      case 'draw2':
-        return '抽 2 张牌，本回合可立即打出使用。';
-      case 'draw1_remove1':
-        return '抽 1 张牌，然后可将手牌中 1 张永久移出游戏（精简牌库）。';
-      case 'draw3':
-        return '抽 3 张牌。';
-      case 'draw2_remove2':
-        return '抽 2 张牌，并可移除至多 2 张手牌。';
-      case 'take_free':
-        return '免费获得市场上任意一张牌，置入弃牌堆。';
-      case 'native':
-        return '将棋子移动到相邻 1 格，无视该格地形需求（包括山地；未移除的连接地形仍会阻挡）。';
-      default:
-        return '行动牌。';
-    }
-  }
-  const sym = def.symbol === 'machete' ? '丛林（绿）' : def.symbol === 'paddle' ? '水域（蓝）' : '村庄（黄）';
-  let s = `移动牌：提供 ${def.power} 点力量，进入需求 ≤ ${def.power} 的${sym}地格，余力可逐格穿越。`;
-  s += def.symbol === 'coin' ? ` 购买时按 ${def.power} 金币计。` : ' 购买时按 ½ 金币计。';
-  return s;
-}
-
-function previewHtml(defId: string): string {
-  const def = getDef(defId);
-  const cost = def.starting
-    ? '<span class="cp-cost">起始牌 · 不可购买</span>'
-    : `<span class="cp-cost">购买消耗 <b>${def.cost}</b> 💰</span>`;
-  const power = def.power ? `<span class="cp-pow">力量 ${def.power}</span>` : '';
-  return `
-    <div class="cp-art">${cardFace(def)}</div>
-    <div class="cp-title">${escapeHtml(def.name)}</div>
-    <div class="cp-type">${KIND_LABEL[def.kind] ?? ''}${def.singleUse ? ' · 单次性' : ''}</div>
-    <div class="cp-desc">${cardDescription(defId)}</div>
-    <div class="cp-foot">${cost}${power}</div>`;
-}
-
-function marketInlineDetailHtml(defId: string): string {
-  const def = getDef(defId);
-  const tags = [
-    KIND_LABEL[def.kind] ?? '',
-    def.singleUse ? '单次' : '',
-    def.power ? `力量 ${def.power}` : '',
-    def.starting ? '不可购买' : `${def.cost} 金币`,
-  ].filter(Boolean).join(' · ');
-  return `
-    <div class="market-detail-head">
-      <b>${escapeHtml(def.name)}</b>
-      <span>${escapeHtml(tags)}</span>
-    </div>
-    <div class="market-detail-desc">${escapeHtml(cardDescription(defId))}</div>`;
-}
+// terrainInfo / blockadeInfo / blockadeTerrain / terrainCostText / blockadeCostText
+// moved to controllers/TerrainInfo.ts (G2 extraction).
+// cardDescription / previewHtml / marketInlineDetailHtml moved to views/cards/CardDescription.ts.
 
 async function preloadGameEngine(boot: BootController): Promise<BoardConstructor> {
   boot.markEngineLoading();
