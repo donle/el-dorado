@@ -117,12 +117,13 @@
 
 ## 当前 App 文件状态
 
-- `packages/client/src/main.ts`：1426 行（已完成 B1+B2+B3 抽取）
-- `packages/client/src/controllers/`：4 个 controller
-  - `MobileLayoutProbe.ts`：49 行（B0 抽出）
+- `packages/client/src/main.ts`：1387 行（B1+B2+B3+B4 全部完成）
+- `packages/client/src/controllers/`：5 个 controller
+  - `MobileLayoutProbe.ts`：49 行（B0）
   - `HoverStateMachine.ts`：437 行（B1）
   - `ActionLogPanel.ts`：450 行（B2）
   - `InteractionController.ts`：934 行（B3）
+  - `BoardCoordinator.ts`：163 行（B4）
 
 ## 不再计划做的事（明确跳过）
 
