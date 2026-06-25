@@ -15,7 +15,7 @@ import {
   clearTurnIntro as clearTurnIntroOverlay,
   showTurnIntro as showTurnIntroOverlay,
 } from './views/overlays/TurnIntroOverlay.js';
-import { renderGameOverOverlay as renderGameOverOverlayEl } from './views/overlays/GameOverOverlay.js';
+// renderGameOverOverlayEl moved into OverlaysController (C2 extraction).
 import {
   getDef,
   CARD_DEFS,
@@ -48,6 +48,7 @@ import { ActionLogPanel, type ActionLogEntry, type ActionLogSegment } from './co
 import { InteractionController } from './controllers/InteractionController.js';
 import { BoardCoordinator } from './controllers/BoardCoordinator.js';
 import { PlayerHandPanel } from './controllers/PlayerHandPanel.js';
+import { OverlaysController } from './controllers/OverlaysController.js';
 
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
@@ -109,6 +110,8 @@ class App {
   private boardCtl!: BoardCoordinator;
   // pinned-player hand inspector state + DOM (C1 extraction)
   private playerHandCtl!: PlayerHandPanel;
+  // transient-UI overlays: flash / system dialog / sheet dismiss / game-over (C2)
+  private overlays!: OverlaysController;
 
   // --- HoverHost accessors (consumed by HoverStateMachine) ---
   // Thin getters / module-helper wrappers so HoverStateMachine doesn't
@@ -180,9 +183,10 @@ class App {
   mobilePanel: 'players' | 'market' | 'log' | null = null;
   /** Whether the in-game settings dropdown is open. */
   private settingsOpen = false;
-  private systemDialog: HTMLElement | null = null;
+  // systemDialog moved to OverlaysController (C2 extraction).
 
-  private hud = document.getElementById('hud') as HTMLDivElement;
+  /** @internal OverlaysController reads `hud` to mount the game-over overlay. */
+  readonly hud = document.getElementById('hud') as HTMLDivElement;
   private store = new GameStore();
   private lobbyCtl = new LobbyController({ socket: this.net, store: this.store });
   private preview = el('div', 'card-preview inspector-popover panel hidden');
@@ -215,6 +219,7 @@ class App {
     this.interaction = new InteractionController(this);
     this.boardCtl = new BoardCoordinator(this);
     this.playerHandCtl = new PlayerHandPanel(this);
+    this.overlays = new OverlaysController(this);
     this.board.onHexHover = (c) => this.hoverMachine.onHexHover(c);
     this.board.onHexClick = (c) => this.hoverMachine.onHexClick(c);
     this.board.onBlockadeHover = (id) => this.hoverMachine.onBlockadeHover(id);
@@ -359,7 +364,8 @@ class App {
     this.interaction.resetSelection();
   }
 
-  private leaveRoom(): void {
+  /** @internal OverlaysController (game-over overlay button). */
+  leaveRoom(): void {
     if (this.room || this.you) this.net.send({ type: 'leaveRoom' });
     this.clearRoomState();
     this.lobbyCtl.notifyLeftRoom();
@@ -396,8 +402,13 @@ class App {
 
   private clearTurnIntro(): void { this.boardCtl.clearTurnIntro(); }
 
-  private returnToLobby(): void {
+  returnToLobby(): void {
     this.net.send({ type: 'returnToLobby' });
+  }
+
+  /** @internal OverlaysController (after system dialog dismissal). */
+  renderLobby(): void {
+    this.lobbyCtl.render();
   }
 
   private onRoomClosed(message: string): void {
@@ -405,27 +416,7 @@ class App {
     this.clearRoomState();
     this.lobbyCtl.render();
     this.renderHud();
-    this.showSystemDialog('房间已解散', message);
-  }
-
-  private showSystemDialog(title: string, message: string): void {
-    this.systemDialog?.remove();
-    const scrim = el('div', 'system-dialog-scrim');
-    scrim.innerHTML = `
-      <div class="system-dialog panel" role="dialog" aria-modal="true" aria-labelledby="system-dialog-title">
-        <div class="system-dialog-mark" aria-hidden="true"></div>
-        <h2 id="system-dialog-title">${escapeHtml(title)}</h2>
-        <p>${escapeHtml(message)}</p>
-        <button type="button" class="gold">确认</button>
-      </div>`;
-    scrim.querySelector<HTMLButtonElement>('button')!.onclick = () => {
-      scrim.remove();
-      if (this.systemDialog === scrim) this.systemDialog = null;
-      this.lobbyCtl.render();
-      this.renderHud();
-    };
-    document.body.appendChild(scrim);
-    this.systemDialog = scrim;
+    this.overlays.showSystemDialog('房间已解散', message);
   }
 
   // --- action log: see controllers/ActionLogPanel.ts ---
@@ -477,7 +468,7 @@ class App {
   private confirmTrim(): void { this.interaction.confirmTrim(); }
   private cancelMode(): void { this.interaction.cancelMode(); }
 
-  private closeMobilePanel(): void {
+  closeMobilePanel(): void {
     this.mobilePanel = null;
     this.interaction.marketPreviewDefId = null;
     this.renderHud();
@@ -566,16 +557,11 @@ class App {
     this.hud.appendChild(menu);
   }
 
-  private flashTimer: ReturnType<typeof setTimeout> | undefined;
-  /** @internal InteractionController */
+  // flash + flashTimer + attachSheetDismiss + renderGameOverOverlay live in OverlaysController (C2).
+
+  /** @internal InteractionController — forwards to OverlaysController. */
   flash(msg: string): void {
-    this.error = msg;
-    this.renderHud();
-    clearTimeout(this.flashTimer);
-    this.flashTimer = setTimeout(() => {
-      this.error = '';
-      this.renderHud();
-    }, 1800);
+    this.overlays.flash(msg);
   }
 
   // --- piles & buy animation live in BoardCoordinator (B4) ---
@@ -593,37 +579,7 @@ class App {
     this.boardCtl.animateBuy(playerId, defId, source);
   }
 
-  /** Let a bottom sheet be dragged down (when scrolled to top) to dismiss it. */
-  private attachSheetDismiss(panel: HTMLElement): void {
-    let startY = 0;
-    let dragging = false;
-    panel.addEventListener(
-      'touchstart',
-      (e) => {
-        dragging = panel.scrollTop <= 0;
-        startY = e.touches[0].clientY;
-        if (dragging) panel.style.transition = 'none';
-      },
-      { passive: true },
-    );
-    panel.addEventListener(
-      'touchmove',
-      (e) => {
-        if (!dragging) return;
-        const dy = e.touches[0].clientY - startY;
-        if (dy > 0) panel.style.transform = `translateY(${dy}px)`;
-      },
-      { passive: true },
-    );
-    panel.addEventListener('touchend', (e) => {
-      if (!dragging) return;
-      const dy = e.changedTouches[0].clientY - startY;
-      panel.style.transition = '';
-      panel.style.transform = '';
-      dragging = false;
-      if (dy > 70) this.closeMobilePanel();
-    });
-  }
+  // attachSheetDismiss lives in OverlaysController (C2 extraction).
 
   // --- card preview (hover on desktop; pinned on selection for touch) ---
 
@@ -904,7 +860,7 @@ class App {
           this.renderHud();
         },
         attachPreview: (node, defId) => this.attachPreview(node, defId),
-        attachSheetDismiss: (panel) => this.attachSheetDismiss(panel),
+        attachSheetDismiss: (panel) => this.overlays.attachSheetDismiss(panel),
         renderInlineDetail: (defId) => marketInlineDetailHtml(defId),
         canSelectMarketPreview: (defId) => this.canSelectMarketPreview(defId),
       },
@@ -1051,23 +1007,14 @@ class App {
       t.textContent = this.error;
       this.hud.appendChild(t);
     }
-    if (s.phase === 'finished') this.renderGameOverOverlay(s);
+    if (s.phase === 'finished') this.overlays.renderGameOverOverlay(s);
     this.hoverMachine.renderTerrainPanel();
     // 出牌 / 摸牌后手牌变了，pinned 玩家手牌面板要反映最新数据；
     // renderHud 已经重建了玩家卡 DOM（pinned-hand class 重新挂上），这里刷新 panel 内容
     if (this.playerHandCtl.getPinnedPlayerId()) this.playerHandCtl.refresh();
   }
 
-  private renderGameOverOverlay(s: GameState): void {
-    const overlay = renderGameOverOverlayEl(
-      { players: s.players, winnerId: s.winnerId },
-      {
-        onReturnToLobby: () => this.returnToLobby(),
-        onLeaveRoom: () => this.leaveRoom(),
-      },
-    );
-    this.hud.appendChild(overlay);
-  }
+  // renderGameOverOverlay lives in OverlaysController (C2 extraction).
 
   // --- terrain / blockade hover & panel: see controllers/HoverStateMachine.ts
 }
