@@ -51,6 +51,7 @@ import { BoardCoordinator } from './controllers/BoardCoordinator.js';
 import { PlayerHandPanel } from './controllers/PlayerHandPanel.js';
 import { OverlaysController } from './controllers/OverlaysController.js';
 import { SettingsMenuController } from './controllers/SettingsMenuController.js';
+import { SessionController } from './controllers/SessionController.js';
 
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
@@ -105,17 +106,27 @@ class App {
   room: RoomView | null = null;
   state: GameState | null = null;
 
-  // interaction state lives in InteractionController (B3 extraction)
-  private interaction!: InteractionController;
+  // interaction state lives in InteractionController (B3 extraction).
+  // `readonly` (not `private`) so SessionController's host interface
+  // (see controllers/SessionController.ts) can reach `marketPreviewDefId`
+  // and `resetSelection()` through App during clearRoomState / closeMobilePanel.
+  readonly interaction!: InteractionController;
   // view-level orchestration (enter game view, turn intro, buy animation)
-  // lives in BoardCoordinator (B4 extraction)
-  private boardCtl!: BoardCoordinator;
-  // pinned-player hand inspector state + DOM (C1 extraction)
-  private playerHandCtl!: PlayerHandPanel;
+  // lives in BoardCoordinator (B4 extraction).
+  // `readonly` (not `private`) so SessionController's host interface
+  // can call `clearTurnIntro()` during clearRoomState.
+  readonly boardCtl!: BoardCoordinator;
+  // pinned-player hand inspector state + DOM (C1 extraction).
+  // `readonly` (not `private`) so SessionController's host interface can
+  // call `close()` to drop the pinned state on leaveRoom / onRoomClosed.
+  readonly playerHandCtl!: PlayerHandPanel;
   // transient-UI overlays: flash / system dialog / sheet dismiss / game-over (C2)
-  private overlays!: OverlaysController;
+  /** @internal SessionController + renderGameOverOverlay. */
+  readonly overlays!: OverlaysController;
   // in-game settings menu (view mode + AI delay + exit) (C3 extraction)
   private settingsCtl!: SettingsMenuController;
+  // session lifecycle: socket events, leave/return, room reset (C4 extraction)
+  private sessionCtl!: SessionController;
 
   // --- HoverHost accessors (consumed by HoverStateMachine) ---
   // Thin getters / module-helper wrappers so HoverStateMachine doesn't
@@ -190,7 +201,10 @@ class App {
   /** @internal OverlaysController reads `hud` to mount the game-over overlay. */
   readonly hud = document.getElementById('hud') as HTMLDivElement;
   private store = new GameStore();
-  private lobbyCtl = new LobbyController({ socket: this.net, store: this.store });
+  // `readonly` (not `private`) so SessionController's host interface
+  // can call `endStarting()` / `render()` / `notifyLeftRoom()` during
+  // leaveRoom / onRoomClosed.
+  readonly lobbyCtl = new LobbyController({ socket: this.net, store: this.store });
   private preview = el('div', 'card-preview inspector-popover panel hidden');
   private terrainPanel = el('div', 'terrain-panel inspector-popover panel hidden');
   /** @internal BoardCoordinator reads these for animateBuy / refreshPinnedPreview. */
@@ -206,7 +220,9 @@ class App {
   readonly mobileLayout: MobileLayoutProbe = new MobileLayoutProbe();
   /** @internal ActionLogPanel needs the showLogTerrainPreview entry point. */
   readonly hoverMachine: HoverStateMachine = undefined!;
-  private actionLogPanel!: ActionLogPanel;
+  // `readonly` (not `private`) so SessionController's host interface
+  // can call `resetActionLog()` during clearRoomState.
+  readonly actionLogPanel!: ActionLogPanel;
 
   constructor(BoardClass: BoardConstructor) {
     this.mobileLayout.setupMobileLayoutClasses();
@@ -223,23 +239,22 @@ class App {
     this.playerHandCtl = new PlayerHandPanel(this);
     this.overlays = new OverlaysController(this);
     this.settingsCtl = new SettingsMenuController(this);
+    this.sessionCtl = new SessionController(this);
     this.board.onHexHover = (c) => this.hoverMachine.onHexHover(c);
     this.board.onHexClick = (c) => this.hoverMachine.onHexClick(c);
     this.board.onBlockadeHover = (id) => this.hoverMachine.onBlockadeHover(id);
     this.board.onBlockadeClick = (id) => this.hoverMachine.onBlockadeClick(id);
-    this.net.on((e) => this.onSocketEvent(e));
+    this.net.on((e) => this.sessionCtl.onSocketEvent(e));
     this.lobbyCtl.mount(document.getElementById('lobby') as HTMLDivElement);
   }
 
   // --- networking ---
 
-  private onSocketEvent(e: SocketEvent): void {
-    if (e.kind === 'open') this.rejoinSavedSession();
-    else if (e.kind === 'message') this.onMessage(e.payload);
-    // 'close' / 'error' have no in-app handler (adapter drives reconnect).
-  }
+  // onSocketEvent lives in SessionController (C4 extraction).
 
-  private onMessage(m: ServerMessage): void {
+  // `private` → public so SessionController can forward incoming server
+  // messages through the host interface (`onMessage: (m) => void`).
+  onMessage(m: ServerMessage): void {
     // Mirror every server message into the store so other components can
     // subscribe. The App's local UI state (this.room / this.state / etc.)
     // remains the source of truth for the existing code paths — the store
@@ -293,7 +308,7 @@ class App {
         break;
       }
       case 'roomClosed':
-        this.onRoomClosed(m.message);
+        this.sessionCtl.onRoomClosed(m.message);
         break;
       case 'error':
         this.error = m.message;
@@ -313,16 +328,7 @@ class App {
     this.net.send({ type: 'action', action });
   }
 
-  private rejoinSavedSession(): void {
-    const saved = sessionStorage.getItem('eldorado.session');
-    if (!saved) return;
-    try {
-      const { code, playerId } = JSON.parse(saved) as { code?: string; playerId?: string };
-      if (code && playerId) this.net.send({ type: 'rejoin', code, playerId });
-    } catch {
-      sessionStorage.removeItem('eldorado.session');
-    }
-  }
+  // rejoinSavedSession lives in SessionController (C4 extraction).
 
   // --- helpers ---
 
@@ -369,35 +375,15 @@ class App {
     this.interaction.resetSelection();
   }
 
-  /** @internal OverlaysController (game-over overlay button). */
-  leaveRoom(): void {
-    if (this.room || this.you) this.net.send({ type: 'leaveRoom' });
-    this.clearRoomState();
-    this.lobbyCtl.notifyLeftRoom();
-    this.renderHud();
-  }
+  /** @internal OverlaysController (game-over overlay button) — forwards to SessionController. */
+  leaveRoom(): void { this.sessionCtl.leaveRoom(); }
 
   /** Expose the server-driven state slice for subscribers (other controllers, views). */
   getStore(): GameStore {
     return this.store;
   }
 
-  private clearRoomState(): void {
-    this.clearTurnIntro();
-    sessionStorage.removeItem('eldorado.session');
-    this.you = null;
-    this.room = null;
-    this.state = null;
-    this.actionLogPanel.resetActionLog();
-    this.resetSelection();
-    this.mobilePanel = null;
-    this.board.setSelfPlayerId(null);
-    this.board.setHighlights([]);
-    this.board.setBlockadeHighlights([]);
-    this.board.setInspectedHex(null);
-    this.board.setInspectedBlockade(null);
-    this.hoverMachine.closeTerrainPanel();
-  }
+  // clearRoomState lives in SessionController (C4 extraction).
 
   private shouldShowTurnIntro(previousState: GameState | null, nextState: GameState, events: GameEvent[]): boolean {
     return this.boardCtl.shouldShowTurnIntro(previousState, nextState, events);
@@ -407,22 +393,15 @@ class App {
 
   private clearTurnIntro(): void { this.boardCtl.clearTurnIntro(); }
 
-  returnToLobby(): void {
-    this.net.send({ type: 'returnToLobby' });
-  }
+  /** @internal OverlaysController (game-over overlay button) — forwards to SessionController. */
+  returnToLobby(): void { this.sessionCtl.returnToLobby(); }
 
   /** @internal OverlaysController (after system dialog dismissal). */
   renderLobby(): void {
     this.lobbyCtl.render();
   }
 
-  private onRoomClosed(message: string): void {
-    this.lobbyCtl.endStarting();
-    this.clearRoomState();
-    this.lobbyCtl.render();
-    this.renderHud();
-    this.overlays.showSystemDialog('房间已解散', message);
-  }
+  // onRoomClosed lives in SessionController (C4 extraction).
 
   // --- action log: see controllers/ActionLogPanel.ts ---
 
@@ -473,11 +452,8 @@ class App {
   private confirmTrim(): void { this.interaction.confirmTrim(); }
   private cancelMode(): void { this.interaction.cancelMode(); }
 
-  closeMobilePanel(): void {
-    this.mobilePanel = null;
-    this.interaction.marketPreviewDefId = null;
-    this.renderHud();
-  }
+  /** @internal OverlaysController (sheet-dismiss) + renderHud (scrim click) — forwards. */
+  closeMobilePanel(): void { this.sessionCtl.closeMobilePanel(); }
 
   // toggleViewMode / setViewMode / toggleSettings / renderSettingsMenu live in SettingsMenuController (C3).
 
