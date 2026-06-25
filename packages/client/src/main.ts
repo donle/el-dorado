@@ -5,7 +5,7 @@ import { cardFace } from './cardFaces.js';
 import { BootController } from './boot/BootController.js';
 import { LobbyController } from './lobby/LobbyController.js';
 import { GameStore } from './store/GameStore.js';
-import { SYMBOL_GLYPH, SYMBOL_LABEL } from './views/common/iconMap.js';
+import { KIND_LABEL, SYMBOL_GLYPH, SYMBOL_LABEL } from './views/common/iconMap.js';
 import { button, cardBack, colorHex, el, escapeHtml, playerDisplayName } from './views/common/dom.js';
 import { renderHandPanel } from './views/hand/HandPanel.js';
 import { renderMarketPanel } from './views/market/MarketPanel.js';
@@ -47,6 +47,7 @@ import { HoverStateMachine, type Mode } from './controllers/HoverStateMachine.js
 import { ActionLogPanel, type ActionLogEntry, type ActionLogSegment } from './controllers/ActionLogPanel.js';
 import { InteractionController } from './controllers/InteractionController.js';
 import { BoardCoordinator } from './controllers/BoardCoordinator.js';
+import { PlayerHandPanel } from './controllers/PlayerHandPanel.js';
 
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
@@ -106,6 +107,8 @@ class App {
   // view-level orchestration (enter game view, turn intro, buy animation)
   // lives in BoardCoordinator (B4 extraction)
   private boardCtl!: BoardCoordinator;
+  // pinned-player hand inspector state + DOM (C1 extraction)
+  private playerHandCtl!: PlayerHandPanel;
 
   // --- HoverHost accessors (consumed by HoverStateMachine) ---
   // Thin getters / module-helper wrappers so HoverStateMachine doesn't
@@ -188,10 +191,7 @@ class App {
   readonly handEls = new Map<string, HTMLElement>();
   readonly shopEls = new Map<string, HTMLElement>();
   readonly playerCardEls = new Map<string, HTMLElement>();
-  // 玩家手牌检视面板：独立 panel，跟卡牌 preview / 地形 panel 完全解耦。
-  // 生命周期不同——pinned 才存在，hover 不触发。
-  private playerHandPanel = el('div', 'player-hand-panel panel hidden');
-  private pinnedPlayerId: string | null = null;
+  // playerHandPanel + pinnedPlayerId live in PlayerHandPanel (C1 extraction).
   /** @internal BoardCoordinator reads drawPileEl/discardPileEl for animateBuy. */
   drawPileEl: HTMLElement | null = null;
   /** @internal BoardCoordinator reads drawPileEl/discardPileEl for animateBuy. */
@@ -206,16 +206,6 @@ class App {
     this.mobileLayout.setupMobileLayoutClasses();
     document.body.appendChild(this.preview);
     document.body.appendChild(this.terrainPanel);
-    document.body.appendChild(this.playerHandPanel);
-    // 点 player-hand-panel 之外的位置时关闭。挂一次，listener 内部判断 pinned 状态。
-    document.addEventListener('mousedown', (ev) => {
-      if (!this.pinnedPlayerId) return;
-      const t = ev.target as Node | null;
-      if (!t) return;
-      if (this.playerHandPanel.contains(t)) return;
-      if (this.playerCardEls.get(this.pinnedPlayerId)?.contains(t)) return;
-      this.closePlayerHandPanel();
-    });
     this.board = new BoardClass(document.getElementById('board') as HTMLCanvasElement);
     (window as unknown as { __board: BoardInstance }).__board = this.board;
     (window as unknown as { __app: App }).__app = this;
@@ -224,6 +214,7 @@ class App {
     this.actionLogPanel = new ActionLogPanel(this);
     this.interaction = new InteractionController(this);
     this.boardCtl = new BoardCoordinator(this);
+    this.playerHandCtl = new PlayerHandPanel(this);
     this.board.onHexHover = (c) => this.hoverMachine.onHexHover(c);
     this.board.onHexClick = (c) => this.hoverMachine.onHexClick(c);
     this.board.onBlockadeHover = (id) => this.hoverMachine.onBlockadeHover(id);
@@ -745,90 +736,7 @@ class App {
     this.preview.classList.remove('from-log');
   }
 
-  // --- player hand inspector (pinned, independent from card preview / terrain panel) ---
-
-  private togglePlayerHand(playerId: string): void {
-    if (this.pinnedPlayerId === playerId) {
-      this.closePlayerHandPanel();
-    } else {
-      this.pinnedPlayerId = playerId;
-      this.renderPlayerHandPanel();
-      // 高亮当前 pinned 玩家卡
-      this.playerCardEls.forEach((el, id) => el.classList.toggle('pinned-hand', id === playerId));
-    }
-  }
-
-  private closePlayerHandPanel(): void {
-    this.pinnedPlayerId = null;
-    this.playerHandPanel.classList.add('hidden');
-    this.playerHandPanel.innerHTML = '';
-    this.playerCardEls.forEach((el) => el.classList.remove('pinned-hand'));
-  }
-
-  private renderPlayerHandPanel(): void {
-    if (!this.state || !this.pinnedPlayerId) return;
-    const player = this.state.players.find((p) => p.id === this.pinnedPlayerId);
-    if (!player) {
-      // 玩家已离开（断线/被踢）→ 自动关闭
-      this.closePlayerHandPanel();
-      return;
-    }
-    // 整局汇总：手牌 + 牌库 + 弃牌（removed 是永久离开游戏的牌，不计入）
-    const counts = new Map<string, { defId: string; count: number; hand: number; deck: number; discard: number }>();
-    const bump = (c: { defId: string }, bucket: 'hand' | 'deck' | 'discard') => {
-      const cur = counts.get(c.defId) ?? { defId: c.defId, count: 0, hand: 0, deck: 0, discard: 0 };
-      cur.count++;
-      cur[bucket]++;
-      counts.set(c.defId, cur);
-    };
-    for (const c of player.hand) bump(c, 'hand');
-    for (const c of player.deck) bump(c, 'deck');
-    for (const c of player.discard) bump(c, 'discard');
-    // 按 kind 排（green/blue/yellow/action/joker），同 kind 按牌名
-    const kindRank: Record<string, number> = { green: 0, blue: 1, yellow: 2, action: 3, joker: 4 };
-    const entries = [...counts.values()]
-      .map((e) => ({ def: getDef(e.defId), ...e }))
-      .sort((a, b) =>
-        (kindRank[a.def.kind] ?? 9) - (kindRank[b.def.kind] ?? 9)
-        || a.def.name.localeCompare(b.def.name, 'zh'),
-      );
-    const totalAll = player.hand.length + player.deck.length + player.discard.length;
-    const playerColor = colorHex(player.color);
-    const breakdown = (e: { hand: number; deck: number; discard: number }) => {
-      const parts: string[] = [];
-      if (e.hand) parts.push(`手 ${e.hand}`);
-      if (e.deck) parts.push(`库 ${e.deck}`);
-      if (e.discard) parts.push(`弃 ${e.discard}`);
-      return parts.join(' · ');
-    };
-    const rows = entries.length === 0
-      ? '<div class="php-empty">该玩家目前没有任何牌</div>'
-      : entries.map((e) => `
-          <div class="php-row" style="--pc: ${playerColor}">
-            <div class="php-thumb">${cardFace(e.def)}</div>
-            <div class="php-info">
-              <div class="php-name">${escapeHtml(e.def.name)}</div>
-              <div class="php-kind">${KIND_LABEL[e.def.kind] ?? ''}${e.def.singleUse ? ' · 单次' : ''} · ${breakdown(e)}</div>
-            </div>
-            <div class="php-count" title="手牌 + 牌库 + 弃牌合计">×${e.count}</div>
-          </div>`).join('');
-    this.playerHandPanel.style.setProperty('--pc', playerColor);
-    this.playerHandPanel.innerHTML = `
-      <div class="php-head">
-        <span class="php-dot"></span>
-        <div class="php-title-wrap">
-          <div class="php-kicker">整局持牌</div>
-          <div class="php-title">${escapeHtml(playerDisplayName(player))}</div>
-        </div>
-        <button class="php-close" aria-label="关闭持牌详情" type="button">×</button>
-      </div>
-      <div class="php-list">${rows}</div>
-      <div class="php-foot">合计 ${totalAll} 张（手 ${player.hand.length} · 库 ${player.deck.length} · 弃 ${player.discard.length}）</div>`;
-    this.playerHandPanel.classList.remove('hidden');
-    this.playerHandPanel
-      .querySelector<HTMLButtonElement>('.php-close')!
-      .addEventListener('click', () => this.closePlayerHandPanel());
-  }
+  // --- player hand inspector lives in PlayerHandPanel (C1 extraction) ---
 
   private enterGameView(): void { this.boardCtl.enterGameView(); }
 
@@ -944,11 +852,11 @@ class App {
           turnOrder: s.turnOrder,
           turnPlayerId: s.turn?.playerId ?? null,
           selfId: this.you,
-          pinnedPlayerId: this.pinnedPlayerId,
+          pinnedPlayerId: this.playerHandCtl.getPinnedPlayerId(),
           progressOf: (p) => this.progressOf(p),
         },
         {
-          onCardClick: (id) => this.togglePlayerHand(id),
+          onCardClick: (id) => this.playerHandCtl.toggle(id),
           onCardRendered: (cardEl, id) => this.playerCardEls.set(id, cardEl),
         },
       ),
@@ -1147,7 +1055,7 @@ class App {
     this.hoverMachine.renderTerrainPanel();
     // 出牌 / 摸牌后手牌变了，pinned 玩家手牌面板要反映最新数据；
     // renderHud 已经重建了玩家卡 DOM（pinned-hand class 重新挂上），这里刷新 panel 内容
-    if (this.pinnedPlayerId) this.renderPlayerHandPanel();
+    if (this.playerHandCtl.getPinnedPlayerId()) this.playerHandCtl.refresh();
   }
 
   private renderGameOverOverlay(s: GameState): void {
@@ -1186,13 +1094,7 @@ function fallbackCardDefId(cardId: string): string {
   return m ? m[1] : cardId;
 }
 
-const KIND_LABEL: Record<string, string> = {
-  green: '丛林 · 砍刀',
-  blue: '水域 · 船桨',
-  yellow: '村庄 · 金币',
-  joker: '万能牌',
-  action: '行动牌',
-};
+// KIND_LABEL moved to views/common/iconMap.ts.
 
 type TerrainInfo = { name: string; icon: string; description: string; rule: string };
 
