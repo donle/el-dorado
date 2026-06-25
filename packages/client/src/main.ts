@@ -11,6 +11,7 @@ import { renderHandPanel } from './views/hand/HandPanel.js';
 import { renderMarketPanel } from './views/market/MarketPanel.js';
 import { renderPlayerBar } from './views/players/PlayerBar.js';
 import { renderTurnInfoPanel, type ActionCardPrompt } from './views/turn/TurnInfoPanel.js';
+import { buildGearDock, buildTopBar, buildMobileToolbar } from './views/hud/ChromeBars.js';
 import {
   clearTurnIntro as clearTurnIntroOverlay,
   showTurnIntro as showTurnIntroOverlay,
@@ -571,50 +572,35 @@ class App {
     const s = this.state;
     const myTurn = this.isMyTurn();
     const turnPlayer = s.players.find((p) => p.id === s.turn?.playerId);
-    const winnerPlayer = s.winnerId ? s.players.find((p) => p.id === s.winnerId) : null;
     const turnName = turnPlayer ? playerDisplayName(turnPlayer) : '';
-    const winnerName = winnerPlayer ? playerDisplayName(winnerPlayer) : null;
     this.hud.innerHTML = '';
     this.handEls.clear();
     this.shopEls.clear();
 
-    const gearDock = el('div', 'settings-dock');
-    const gear = button('⚙', () => this.settingsCtl.toggleSettings(), true);
-    gear.className = `settings-gear ${this.settingsCtl.isOpen() ? 'active' : ''}`;
-    gear.title = '设置';
-    gearDock.appendChild(gear);
-    this.hud.appendChild(gearDock);
+    this.hud.appendChild(buildGearDock({
+      onToggle: () => this.settingsCtl.toggleSettings(),
+      isOpen: this.settingsCtl.isOpen(),
+    }));
 
     // --- top bar ---
-    const top = el('div', 'topbar panel');
-    let banner = `<div class="turn-banner">⏳ 等待 ${escapeHtml(turnName)}</div>`;
-    if (s.phase === 'finished') banner = `<div class="turn-banner win">🏆 ${escapeHtml(winnerName ?? '')} 抵达黄金城！</div>`;
-    else if (myTurn) banner = `<div class="turn-banner you">🟢 轮到你行动</div>`;
-    top.innerHTML = `
-      <div class="brand"><span class="logo">🏆</span><span>冲向黄金城</span><span class="code">${escapeHtml(this.room?.code ?? '')}</span></div>
-      ${banner}
-      <div class="hint-inline">${this.viewMode === '2d' ? '2D 俯视 · 拖拽平移 · 滚轮缩放' : '滚轮缩放 · 拖拽平移 · 右键转视角'}</div>`;
-    this.hud.appendChild(top);
+    this.hud.appendChild(buildTopBar({
+      state: s,
+      myTurn,
+      roomCode: this.room?.code ?? null,
+      viewMode: this.viewMode,
+    }));
 
     if (this.settingsCtl.isOpen()) this.settingsCtl.renderSettingsMenu(s);
 
     // --- mobile toolbar (log + market sheet toggles) ---
-    const toolbar = el('div', 'mobile-toolbar');
-    const logBtn = button('日志', () => {
-      this.mobilePanel = this.mobilePanel === 'log' ? null : 'log';
-      this.interaction.marketPreviewDefId = null;
-      this.renderHud();
-    });
-    if (this.mobilePanel === 'log') logBtn.classList.add('active');
-    toolbar.appendChild(logBtn);
-    const mbtn = button('市场', () => {
-      this.mobilePanel = this.mobilePanel === 'market' ? null : 'market';
-      if (this.mobilePanel !== 'market') this.interaction.marketPreviewDefId = null;
-      this.renderHud();
-    });
-    if (this.mobilePanel === 'market') mbtn.classList.add('active');
-    toolbar.appendChild(mbtn);
-    this.hud.appendChild(toolbar);
+    this.hud.appendChild(buildMobileToolbar({
+      getOpen: () => this.mobilePanel,
+      toggle: (which) => {
+        this.mobilePanel = this.mobilePanel === which ? null : which;
+      },
+      clearMarketPreview: () => { this.interaction.marketPreviewDefId = null; },
+      renderHud: () => this.renderHud(),
+    }));
 
     // --- top-centre: players as cards ---
     this.playerCardEls.clear();
