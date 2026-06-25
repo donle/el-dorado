@@ -120,8 +120,8 @@
 
 ## 当前 App 文件状态
 
-- `packages/client/src/main.ts`：1136 行（B1+B2+B3+B4+C1+C2+C3+C4 全部完成）
-- `packages/client/src/controllers/`：9 个 controller
+- `packages/client/src/main.ts`：1039 行（B1+B2+B3+B4+C1+C2+C3+C4+C6+C7 全部完成，C5 在 core）
+- `packages/client/src/controllers/`：6 个 controller
   - `MobileLayoutProbe.ts`：49 行（B0）
   - `HoverStateMachine.ts`：437 行（B1）
   - `ActionLogPanel.ts`：450 行（B2）
@@ -130,7 +130,8 @@
   - `PlayerHandPanel.ts`（C1）
   - `OverlaysController.ts`（C2）
   - `SettingsMenuController.ts`（C3）
-  - `SessionController.ts`：117 行（C4）
+  - `SessionController.ts`：220 行（C4，扩展了 onMessage dispatch）
+- `packages/client/src/views/hud/ChromeBars.ts`：106 行（C7 拆出的 top bar / settings dock / mobile toolbar）
 
 ---
 
@@ -219,15 +220,15 @@
 - **风险**：中。它桥接 network layer 和 UI 状态。最大的不确定性是其它 controller 暂时需要从 App 读 `room` / `you` / `state` —— 抽完后这部分从 `host` 上读。
 - **实际改动**：把 `interaction` / `boardCtl` / `actionLogPanel` / `lobbyCtl` / `onMessage` 从 `private` 提升为 `readonly`（host interface 需要这些访问点）。App：1387 → 1136 行（-251）。
 
-## C5. progressOf 提到 core（顺手做，低风险）
+## ✅ C5. progressOf 提到 core（已完成 · commit `1bbaf12`）
 
 - **位置**：`packages/core/src/progress.ts`（新文件） + 在 main.ts 内联删除。
-- **行数**：17 行纯函数：`progressOf(p: { position: Axial; finished: boolean }): number`
-- **依赖**：纯计算，不依赖任何 state。
+- **行数**：17 行纯函数：`progressOf(p: { position: Axial; finished: boolean }, state: GameState): number`
+- **依赖**：纯计算，依赖 `state.hexes`。
 - **注意**：这个名字在客户端和潜在的 server 端都需要，做成纯函数 export 出去可以让 server-side analytics（如果以后做）也复用。
-- **风险**：极低。
+- **风险**：极低。**实际改动**：函数签名从 `progressOf(p)` 改为 `progressOf(p, state)`（消除对 `this.state` 的隐式依赖），新增 5 个 unit test。
 
-## C6. onMessage 拆薄壳（机械重构，低风险）
+## ✅ C6. onMessage 拆薄壳（已完成 · commit `a776b54`）
 
 - **位置**：`packages/client/src/main.ts`（不新建文件）
 - **改动**：把现有 74 行的 `onMessage` 改成 ~20 行的 switch 派发器，每个 case 调对应 controller 的 `applyMessage(msg)` 方法。
@@ -238,8 +239,9 @@
   - 其余本地状态（previousState → actionLog.appendActionLog）直接留在 onMessage 头尾。
 - **风险**：低。需要先做 C1–C4 才能让 controller 都有 `applyMessage`。机械重构，不改行为。
 - **预期效果**：App 上的 `onMessage` 从 74 行降到 ~30 行。
+- **实际改动**：onMessage 从 67 行降到 12 行（store dispatch + 5 个 case 分发）。`SessionController` 新增 `onJoined` / `onRoom` / `onStateUpdate` / `onError` 四个 handler；`SessionHost` 接口相应扩大。App 删除了 ~10 个不再需要的 private forwarder（`enterGameView` / `animateBuy` / `flyCard` / `showTurnIntro` / `clearTurnIntro` / `shouldShowTurnIntro` / `resetSelection` / `syncSelectionToState`）。
 
-## C7. renderHud 拆分（高风险，建议最后做）
+## ✅ C7. renderHud 拆分（部分完成 · commit `14894fc`）
 
 - **目标**：把 `renderHud` 内部的 5 个 panel builder 各自抽到 `packages/client/src/views/hud/<Panel>.ts` 作为纯函数，让 `renderHud` 退化为「组装 + 顺序管理」的 30–50 行壳。
 - **要拆的 5 个 panel**：
@@ -260,6 +262,7 @@
     - **C7a**：先抽 1 个最简单的（PlayersPanel）跑通流程，验证 host interface 模式在 panel 上也好用。
     - **C7b**：剩下的 4 个 panel 一次性抽完。
 - **预期效果**：renderHud 从 270 行降到 ~40 行；App 总规模从 C6 后的 ~600 行降到 ~300 行。
+- **实际改动**：4/5 panel 已在 B1–B4 / C1–C3 阶段被抽出到 `views/{players,market,hand,turn}/<Panel>.ts`。本 commit 只剩第 5 个（TopBar / SettingsDock / MobileToolbar），合到 `views/hud/ChromeBars.ts`，导出 `buildGearDock` / `buildTopBar` / `buildMobileToolbar` 三个纯函数。`renderHud` 从 271 → 257 行（-14）。**未达成** TODO 设定的 ~40 行目标——剩余逻辑都是面板之间的 orchestration，强行合并到一个 `RenderHudContext` input 反而会引入 ~30 字段的 god object，得不偿失。
 
 ## C1–C7 完成后的 App 形态
 
