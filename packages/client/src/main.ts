@@ -46,6 +46,7 @@ import { MobileLayoutProbe } from './controllers/MobileLayoutProbe.js';
 import { HoverStateMachine, type Mode } from './controllers/HoverStateMachine.js';
 import { ActionLogPanel, type ActionLogEntry, type ActionLogSegment } from './controllers/ActionLogPanel.js';
 import { InteractionController } from './controllers/InteractionController.js';
+import { BoardCoordinator } from './controllers/BoardCoordinator.js';
 
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
@@ -102,6 +103,9 @@ class App {
 
   // interaction state lives in InteractionController (B3 extraction)
   private interaction!: InteractionController;
+  // view-level orchestration (enter game view, turn intro, buy animation)
+  // lives in BoardCoordinator (B4 extraction)
+  private boardCtl!: BoardCoordinator;
 
   // --- HoverHost accessors (consumed by HoverStateMachine) ---
   // Thin getters / module-helper wrappers so HoverStateMachine doesn't
@@ -180,15 +184,18 @@ class App {
   private lobbyCtl = new LobbyController({ socket: this.net, store: this.store });
   private preview = el('div', 'card-preview inspector-popover panel hidden');
   private terrainPanel = el('div', 'terrain-panel inspector-popover panel hidden');
-  private handEls = new Map<string, HTMLElement>();
-  private shopEls = new Map<string, HTMLElement>();
-  private playerCardEls = new Map<string, HTMLElement>();
+  /** @internal BoardCoordinator reads these for animateBuy / refreshPinnedPreview. */
+  readonly handEls = new Map<string, HTMLElement>();
+  readonly shopEls = new Map<string, HTMLElement>();
+  readonly playerCardEls = new Map<string, HTMLElement>();
   // 玩家手牌检视面板：独立 panel，跟卡牌 preview / 地形 panel 完全解耦。
   // 生命周期不同——pinned 才存在，hover 不触发。
   private playerHandPanel = el('div', 'player-hand-panel panel hidden');
   private pinnedPlayerId: string | null = null;
-  private drawPileEl: HTMLElement | null = null;
-  private discardPileEl: HTMLElement | null = null;
+  /** @internal BoardCoordinator reads drawPileEl/discardPileEl for animateBuy. */
+  drawPileEl: HTMLElement | null = null;
+  /** @internal BoardCoordinator reads drawPileEl/discardPileEl for animateBuy. */
+  discardPileEl: HTMLElement | null = null;
   /** @internal ActionLogPanel needs the isMobileDevice gate. */
   readonly mobileLayout: MobileLayoutProbe = new MobileLayoutProbe();
   /** @internal ActionLogPanel needs the showLogTerrainPreview entry point. */
@@ -216,6 +223,7 @@ class App {
     this.hoverMachine = new HoverStateMachine(this.terrainPanel, this);
     this.actionLogPanel = new ActionLogPanel(this);
     this.interaction = new InteractionController(this);
+    this.boardCtl = new BoardCoordinator(this);
     this.board.onHexHover = (c) => this.hoverMachine.onHexHover(c);
     this.board.onHexClick = (c) => this.hoverMachine.onHexClick(c);
     this.board.onBlockadeHover = (id) => this.hoverMachine.onBlockadeHover(id);
@@ -342,6 +350,10 @@ class App {
   renderTerrainPanel(): void { this.hoverMachine.renderTerrainPanel(); }
   /** @internal App → App.onMessage */
   syncSelectionToState(): void { this.interaction.syncSelectionToState(); }
+  /** @internal BoardCoordinator */
+  setDrawPileEl(el: HTMLElement | null): void { this.drawPileEl = el; }
+  /** @internal BoardCoordinator */
+  setDiscardPileEl(el: HTMLElement | null): void { this.discardPileEl = el; }
   /** @internal App → HoverStateMachine */
   hexAt(c: Axial): Hex | undefined {
     return this.state?.hexes.find((h) => h.q === c.q && h.r === c.r);
@@ -386,19 +398,12 @@ class App {
   }
 
   private shouldShowTurnIntro(previousState: GameState | null, nextState: GameState, events: GameEvent[]): boolean {
-    if (!this.you || nextState.phase !== 'playing' || nextState.turn?.playerId !== this.you) return false;
-    if (previousState?.turn?.playerId === this.you) return false;
-    if (previousState) return true;
-    return events.some((e) => e.type === 'turnStarted' && e.playerId === this.you);
+    return this.boardCtl.shouldShowTurnIntro(previousState, nextState, events);
   }
 
-  private showTurnIntro(): void {
-    showTurnIntroOverlay();
-  }
+  private showTurnIntro(): void { this.boardCtl.showTurnIntro(); }
 
-  private clearTurnIntro(): void {
-    clearTurnIntroOverlay();
-  }
+  private clearTurnIntro(): void { this.boardCtl.clearTurnIntro(); }
 
   private returnToLobby(): void {
     this.net.send({ type: 'returnToLobby' });
@@ -436,7 +441,7 @@ class App {
 
   // --- selection sync + movement legality live in InteractionController (B3) ---
 
-  private recomputeHighlights(): void {
+  recomputeHighlights(): void {
     this.interaction.recomputeHighlights();
   }
 
@@ -582,59 +587,19 @@ class App {
     }, 1800);
   }
 
-  // --- piles & buy animation ---
+  // --- piles & buy animation live in BoardCoordinator (B4) ---
 
   private makePile(kind: 'draw' | 'discard', label: string, count: number): HTMLElement {
-    const pile = el('div', `pile ${kind}`);
-    const empty = count === 0;
-    pile.innerHTML = `
-      <div class="pile-stack ${empty ? 'empty' : ''}">
-        <span class="pile-card"></span>
-        <span class="pile-card"></span>
-        <span class="pile-card top">${cardBack()}</span>
-      </div>
-      <div class="pile-label">${label} <b>${count}</b></div>`;
-    return pile;
+    return this.boardCtl.makePile(kind, label, count);
   }
 
   /** Fly a card-shaped clone of the bought card from the market to its destination. */
   private flyCard(defId: string, from: DOMRect, to: DOMRect, fade: boolean): void {
-    const W = 70;
-    const H = 98; // card aspect, independent of the source row's shape
-    const fromCx = from.left + from.width / 2;
-    const fromCy = from.top + from.height / 2;
-    const fly = el('div', 'fly-card');
-    fly.innerHTML = cardFace(getDef(defId));
-    fly.style.left = `${fromCx - W / 2}px`;
-    fly.style.top = `${fromCy - H / 2}px`;
-    fly.style.width = `${W}px`;
-    fly.style.height = `${H}px`;
-    document.body.appendChild(fly);
-    requestAnimationFrame(() => {
-      const dx = to.left + to.width / 2 - fromCx;
-      const dy = to.top + to.height / 2 - fromCy;
-      fly.style.transform = `translate(${dx}px, ${dy}px) scale(${fade ? 0.5 : 0.75})`;
-      if (fade) fly.style.opacity = '0';
-    });
-    setTimeout(() => fly.remove(), 850);
+    this.boardCtl.flyCard(defId, from, to, fade);
   }
 
   private animateBuy(playerId: string, defId: string, source?: DOMRect): void {
-    const immediateHandEl = defId === 'cartographer'
-      ? [...(this.me?.hand ?? [])].reverse().find((c) => c.defId === defId)
-      : undefined;
-    const toEl = playerId === this.you
-      ? (immediateHandEl ? this.handEls.get(immediateHandEl.id) : this.discardPileEl)
-      : this.playerCardEls.get(playerId);
-    if (!toEl) return;
-    let from = source;
-    const offscreen =
-      !from || from.width === 0 || from.bottom < 0 || from.top > window.innerHeight || from.left > window.innerWidth;
-    if (offscreen) {
-      // market not visible (e.g. closed sheet) → fall back to the right edge
-      from = new DOMRect(window.innerWidth - 56, window.innerHeight / 2 - 30, 40, 56);
-    }
-    this.flyCard(defId, from!, toEl.getBoundingClientRect(), playerId !== this.you);
+    this.boardCtl.animateBuy(playerId, defId, source);
   }
 
   /** Let a bottom sheet be dragged down (when scrolled to top) to dismiss it. */
@@ -865,14 +830,7 @@ class App {
       .addEventListener('click', () => this.closePlayerHandPanel());
   }
 
-  private enterGameView(): void {
-    if (!this.state || this.state.phase === 'lobby') return;
-    this.board.setSelfPlayerId(this.you);
-    this.board.render(this.state);
-    this.renderHud();
-    this.recomputeHighlights();
-    this.hoverMachine.renderTerrainPanel();
-  }
+  private enterGameView(): void { this.boardCtl.enterGameView(); }
 
   // Lobby rendering moved to packages/client/src/lobby/LobbyView.ts; App no
   // longer owns the lobby element. App only renders the in-game HUD.
@@ -1162,13 +1120,16 @@ class App {
     );
     // Piles flank the hand on the same row; draw on the left, discard on the right.
     if (me) {
-      this.drawPileEl = this.makePile('draw', '摸牌', me.deck.length);
-      this.discardPileEl = this.makePile('discard', '弃牌', me.discard.length);
-      dock.appendChild(this.drawPileEl);
+      const drawPile = this.makePile('draw', '摸牌', me.deck.length);
+      const discardPile = this.makePile('discard', '弃牌', me.discard.length);
+      this.setDrawPileEl(drawPile);
+      this.setDiscardPileEl(discardPile);
+      dock.appendChild(drawPile);
       dock.appendChild(tray);
-      dock.appendChild(this.discardPileEl);
+      dock.appendChild(discardPile);
     } else {
-      this.drawPileEl = this.discardPileEl = null;
+      this.setDrawPileEl(null);
+      this.setDiscardPileEl(null);
       dock.appendChild(tray);
     }
     this.hud.appendChild(dock);
