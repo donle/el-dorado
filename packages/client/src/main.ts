@@ -43,6 +43,7 @@ type BoardConstructor = typeof import('./scene/Board.js').Board;
 type BoardInstance = InstanceType<BoardConstructor>;
 
 import { MobileLayoutProbe } from './controllers/MobileLayoutProbe.js';
+import { HoverStateMachine, type Mode } from './controllers/HoverStateMachine.js';
 
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
@@ -90,7 +91,6 @@ function sameCoord(a: Axial, b: Axial): boolean {
   return a.q === b.q && a.r === b.r;
 }
 
-type Mode = 'idle' | 'clear' | 'remove' | 'trim';
 type ActionLogSegment = { text: string; defId?: string; coord?: Axial; blockadeId?: string };
 type ActionLogEntry = {
   id: number;
@@ -115,6 +115,42 @@ class App {
   marketPreviewDefId: string | null = null;
   nativeActionCardId: string | null = null;
   clearTarget: Axial | null = null;
+
+  // --- HoverHost accessors (consumed by HoverStateMachine) ---
+  // Thin getters / module-helper wrappers so HoverStateMachine doesn't
+  // need direct access to private App fields or module-level functions.
+  // They migrate to InteractionController in Stage B3.
+  /** @internal HoverStateMachine */
+  getState(): GameState | null { return this.state; }
+  /** @internal HoverStateMachine */
+  getMobilePanel(): 'players' | 'market' | 'log' | null { return this.mobilePanel; }
+  /** @internal HoverStateMachine */
+  getMode(): Mode { return this.mode; }
+  /** @internal HoverStateMachine */
+  getSelected(): Set<string> { return this.selected; }
+  /** @internal HoverStateMachine */
+  getNativeActionCardId(): string | null { return this.nativeActionCardId; }
+  /** @internal HoverStateMachine */
+  terrainInfo(hex: Hex): TerrainInfo { return terrainInfo(hex); }
+  /** @internal HoverStateMachine */
+  blockadeInfo(blockade: Blockade): TerrainInfo { return blockadeInfo(blockade); }
+  /** @internal HoverStateMachine */
+  blockadeTerrain(blockade: Blockade): Terrain { return blockadeTerrain(blockade); }
+  /** @internal HoverStateMachine */
+  terrainCostText(hex: Hex): string { return terrainCostText(hex); }
+  /** @internal HoverStateMachine */
+  blockadeCostText(blockade: Blockade): string { return blockadeCostText(blockade); }
+  /** @internal HoverStateMachine */
+  blockadeRequiresDiscard(blockade: Blockade): boolean { return blockadeRequiresDiscard(blockade); }
+  /** @internal HoverStateMachine */
+  blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null { return blockadeMoveSymbol(blockade); }
+  /** @internal HoverStateMachine */
+  cardDefId(cardId: string, state: GameState): string { return cardDefId(cardId, state); }
+  /** @internal HoverStateMachine */
+  pickHandMover(req: MoveSymbol | null, cost: number, candidates: Array<{ id: string; defId: string }>) {
+    return pickHandMover(req, cost, candidates);
+  }
+
   clearBlockadeId: string | null = null;
   removeAfterDrawLimit = 0;
   viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
@@ -143,12 +179,7 @@ class App {
   private drawPileEl: HTMLElement | null = null;
   private discardPileEl: HTMLElement | null = null;
   private readonly mobileLayout = new MobileLayoutProbe();
-  private hoveredTerrain: Axial | null = null;
-  private pinnedTerrain: Axial | null = null;
-  private hoveredBlockadeId: string | null = null;
-  private pinnedBlockadeId: string | null = null;
-  private terrainPanelHovering = false;
-  private terrainHoverClearTimer: ReturnType<typeof setTimeout> | undefined;
+  private hoverMachine!: HoverStateMachine;
   private actionLog: ActionLogEntry[] = [];
   private actionLogSeq = 0;
   // 上次实际渲染过的最大 entry id。renderHud 会重建整个 panel，所以
@@ -178,10 +209,11 @@ class App {
     (window as unknown as { __board: BoardInstance }).__board = this.board;
     (window as unknown as { __app: App }).__app = this;
     this.board.setViewMode(this.viewMode);
-    this.board.onHexHover = (c) => this.onHexHover(c);
-    this.board.onHexClick = (c) => this.onHexClick(c);
-    this.board.onBlockadeHover = (id) => this.onBlockadeHover(id);
-    this.board.onBlockadeClick = (id) => this.onBlockadeClick(id);
+    this.hoverMachine = new HoverStateMachine(this.terrainPanel, this);
+    this.board.onHexHover = (c) => this.hoverMachine.onHexHover(c);
+    this.board.onHexClick = (c) => this.hoverMachine.onHexClick(c);
+    this.board.onBlockadeHover = (id) => this.hoverMachine.onBlockadeHover(id);
+    this.board.onBlockadeClick = (id) => this.hoverMachine.onBlockadeClick(id);
     this.net.on((e) => this.onSocketEvent(e));
     this.lobbyCtl.mount(document.getElementById('lobby') as HTMLDivElement);
   }
@@ -280,10 +312,15 @@ class App {
 
   // --- helpers ---
 
-  private get me() {
+  /** @internal App → HoverStateMachine */
+  get me() {
     return this.state?.players.find((p) => p.id === this.you) ?? null;
   }
-  private isMyTurn(): boolean {
+  // HoverStateMachine (controllers/HoverStateMachine.ts) reads these via
+  // the HoverHost interface. They migrate to InteractionController in B3;
+  // keeping the call sites stable is what matters.
+  /** @internal App → HoverStateMachine */
+  isMyTurn(): boolean {
     return !!this.state && this.state.phase === 'playing' && this.state.turn?.playerId === this.you;
   }
 
@@ -291,11 +328,13 @@ class App {
     const active = state.market.filter((m) => m.onBoard && m.count > 0).length;
     return active < 6 && state.market.some((m) => !m.onBoard && m.count > 0);
   }
-  private hexAt(c: Axial): Hex | undefined {
+  /** @internal App → HoverStateMachine */
+  hexAt(c: Axial): Hex | undefined {
     return this.state?.hexes.find((h) => h.q === c.q && h.r === c.r);
   }
 
-  private blockadeById(id: string | null): Blockade | undefined {
+  /** @internal App → HoverStateMachine */
+  blockadeById(id: string | null): Blockade | undefined {
     return id ? this.state?.blockades.find((b) => b.id === id) : undefined;
   }
 
@@ -338,7 +377,7 @@ class App {
     this.board.setBlockadeHighlights([]);
     this.board.setInspectedHex(null);
     this.board.setInspectedBlockade(null);
-    this.closeTerrainPanel();
+    this.hoverMachine.closeTerrainPanel();
   }
 
   private shouldShowTurnIntro(previousState: GameState | null, nextState: GameState, events: GameEvent[]): boolean {
@@ -717,11 +756,13 @@ class App {
     });
   }
 
-  private blockadeEdges(blockade: Blockade): Array<{ a: Axial; b: Axial }> {
+  /** @internal App → HoverStateMachine */
+  blockadeEdges(blockade: Blockade): Array<{ a: Axial; b: Axial }> {
     return blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
   }
 
-  private blockadeDestination(blockade: Blockade, symbol?: MoveSymbol, power?: number): Hex | undefined {
+  /** @internal App → HoverStateMachine */
+  blockadeDestination(blockade: Blockade, symbol?: MoveSymbol, power?: number): Hex | undefined {
     const me = this.me;
     if (!me) return undefined;
     for (const edge of this.blockadeEdges(blockade)) {
@@ -739,7 +780,8 @@ class App {
     return !blockade.claimedBy && blockadeRequiresDiscard(blockade) && !!this.blockadeDestination(blockade);
   }
 
-  private selectedHandCardIds(): string[] {
+  /** @internal App → HoverStateMachine */
+  selectedHandCardIds(): string[] {
     const handIds = new Set((this.me?.hand ?? []).map((c) => c.id));
     return [...this.selected].filter((id) => handIds.has(id));
   }
@@ -761,7 +803,8 @@ class App {
       && blockadeMoveSymbol(blockade) === symbol && power >= blockade.cost;
   }
 
-  private movementRequirement(
+  /** @internal App → HoverStateMachine */
+  movementRequirement(
     hex: Hex,
   ): { required: MoveSymbol | null; cost: number; blockade?: Blockade; discard?: boolean; destReq?: MoveSymbol | null } {
     const me = this.me;
@@ -780,7 +823,8 @@ class App {
   }
 
   /** Can a mover (symbol/power) enter this hex right now? */
-  private canEnter(hex: Hex, symbol: MoveSymbol, power: number): boolean {
+  /** @internal App → HoverStateMachine */
+  canEnter(hex: Hex, symbol: MoveSymbol, power: number): boolean {
     const me = this.me;
     if (!me || !isAdjacent(me.position, hex)) return false;
     if (hex.terrain === 'mountain') return false;
@@ -797,7 +841,8 @@ class App {
     return power >= requirement.cost;
   }
 
-  private canStepToEldorado(hex: Hex): boolean {
+  /** @internal App → HoverStateMachine */
+  canStepToEldorado(hex: Hex): boolean {
     const me = this.me;
     if (!me || hex.terrain !== 'eldorado') return false;
     if (!isAdjacent(me.position, hex)) return false;
@@ -808,7 +853,8 @@ class App {
     return !blockade || !!blockade.claimedBy;
   }
 
-  private canUseNativeOn(hex: Hex): boolean {
+  /** @internal App → HoverStateMachine */
+  canUseNativeOn(hex: Hex): boolean {
     const me = this.me;
     if (!me) return false;
     if (!isAdjacent(me.position, hex)) return false;
@@ -873,40 +919,13 @@ class App {
   }
 
   // --- input ---
+  // Board hover/click handlers now live in HoverStateMachine
+  // (controllers/HoverStateMachine.ts). This class retains tryActOnHex /
+  // tryActOnBlockade as interaction dispatches — those move to
+  // InteractionController in Stage B3.
 
-  private onHexHover(c: Axial | null): void {
-    this.cancelTerrainHoverClear();
-    if (!c && this.hoveredTerrain && !this.pinnedTerrain && !this.pinnedBlockadeId) {
-      this.scheduleTerrainHoverClear();
-      return;
-    }
-    this.hoveredTerrain = c;
-    if (c) this.hoveredBlockadeId = null;
-    this.renderTerrainPanel();
-    if (!c && !this.pinnedTerrain && !this.pinnedBlockadeId) this.refreshPinnedPreview();
-  }
-
-  private onHexClick(c: Axial): void {
-    if (this.tryActOnHex(c)) return;
-
-    if (this.pinnedTerrain && sameCoord(this.pinnedTerrain, c) && !this.pinnedBlockadeId) {
-      this.pinnedTerrain = null;
-      this.hoveredTerrain = null;
-      this.board.setInspectedHex(null);
-      this.board.clearHover();
-      this.renderTerrainPanel();
-      this.refreshPinnedPreview();
-      return;
-    }
-
-    this.pinnedTerrain = c;
-    this.pinnedBlockadeId = null;
-    this.board.setInspectedHex(c);
-    this.board.setInspectedBlockade(null);
-    this.renderTerrainPanel();
-  }
-
-  private tryActOnHex(c: Axial): boolean {
+  /** @internal App → HoverStateMachine */
+  tryActOnHex(c: Axial): boolean {
     if (!this.isMyTurn()) return false;
     if (this.mode === 'clear' || this.mode === 'remove') return false;
     const hex = this.hexAt(c);
@@ -973,39 +992,8 @@ class App {
     return false;
   }
 
-  private onBlockadeHover(id: string | null): void {
-    this.cancelTerrainHoverClear();
-    if (!id && this.hoveredBlockadeId && !this.pinnedTerrain && !this.pinnedBlockadeId) {
-      this.scheduleTerrainHoverClear();
-      return;
-    }
-    this.hoveredBlockadeId = id;
-    if (id) this.hoveredTerrain = null;
-    this.renderTerrainPanel();
-    if (!id && !this.pinnedTerrain && !this.pinnedBlockadeId) this.refreshPinnedPreview();
-  }
-
-  private onBlockadeClick(id: string): void {
-    if (this.tryActOnBlockade(id)) return;
-
-    if (this.pinnedBlockadeId === id && !this.pinnedTerrain) {
-      this.pinnedBlockadeId = null;
-      this.hoveredBlockadeId = null;
-      this.board.setInspectedBlockade(null);
-      this.board.clearHover();
-      this.renderTerrainPanel();
-      this.refreshPinnedPreview();
-      return;
-    }
-
-    this.pinnedBlockadeId = id;
-    this.pinnedTerrain = null;
-    this.board.setInspectedBlockade(id);
-    this.board.setInspectedHex(null);
-    this.renderTerrainPanel();
-  }
-
-  private tryActOnBlockade(id: string): boolean {
+  /** @internal App → HoverStateMachine */
+  tryActOnBlockade(id: string): boolean {
     if (!this.isMyTurn()) return false;
     if (this.mode === 'clear' || this.mode === 'remove') return false;
     const blockade = this.blockadeById(id);
@@ -1023,7 +1011,7 @@ class App {
         this.hint = `选 ${blockade.cost} 张牌弃掉，移除这块连接地形`;
         this.renderHud();
         this.recomputeHighlights();
-        this.renderTerrainPanel();
+        this.hoverMachine.renderTerrainPanel();
         return true;
       }
       const seamSym = blockadeMoveSymbol(blockade);
@@ -1087,7 +1075,7 @@ class App {
       else if (this.selectedHandCardIds().length < this.removeAfterDrawLimit) this.selected.add(cardId);
       else this.flash(`最多移除 ${this.removeAfterDrawLimit} 张手牌`);
       this.renderHud();
-      this.renderTerrainPanel();
+      this.hoverMachine.renderTerrainPanel();
       return;
     }
     if (this.mode === 'clear') {
@@ -1106,7 +1094,7 @@ class App {
         return;
       }
       this.renderHud();
-      this.renderTerrainPanel();
+      this.hoverMachine.renderTerrainPanel();
       return;
     }
     this.nativeActionCardId = null;
@@ -1122,7 +1110,7 @@ class App {
     if (action && action.def.ability !== 'take_free') this.buyTargetDefId = null;
     this.recomputeHighlights();
     this.renderHud();
-    this.renderTerrainPanel();
+    this.hoverMachine.renderTerrainPanel();
   }
 
   private onMarketClick(defId: string): void {
@@ -1672,7 +1660,8 @@ class App {
   }
 
   /** Show the preview for the currently-selected card, anchored to its element. */
-  private refreshPinnedPreview(): void {
+  /** @internal App → HoverStateMachine */
+  refreshPinnedPreview(): void {
     if (this.selected.size === 1 && this.state) {
       const id = [...this.selected][0];
       const node = this.handEls.get(id);
@@ -1752,7 +1741,8 @@ class App {
     this.preview.classList.remove('hidden');
   }
 
-  private hidePreview(): void {
+  /** @internal App → HoverStateMachine */
+  hidePreview(): void {
     this.preview.classList.add('hidden');
     this.preview.classList.remove('actionable');
     this.preview.classList.remove('from-log');
@@ -1849,7 +1839,7 @@ class App {
     this.board.render(this.state);
     this.renderHud();
     this.recomputeHighlights();
-    this.renderTerrainPanel();
+    this.hoverMachine.renderTerrainPanel();
   }
 
   // Lobby rendering moved to packages/client/src/lobby/LobbyView.ts; App no
@@ -1924,7 +1914,7 @@ class App {
               if (!this.mobileLayout.isMobileDevice()) return;
               ev.preventDefault();
               ev.stopPropagation();
-              this.showLogTerrainPreview(segment.coord ?? null, segment.blockadeId ?? null);
+              this.hoverMachine.showLogTerrainPreview(segment.coord ?? null, segment.blockadeId ?? null);
             });
           }
           if (classes.length) node.className = classes.join(' ');
@@ -1975,16 +1965,8 @@ class App {
     this.hud.appendChild(scrim);
   }
 
-  private showLogTerrainPreview(coord: Axial | null, blockadeId: string | null): void {
-    this.cancelTerrainHoverClear();
-    this.pinnedTerrain = null;
-    this.pinnedBlockadeId = null;
-    this.hoveredTerrain = coord ? { q: coord.q, r: coord.r } : null;
-    this.hoveredBlockadeId = blockadeId;
-    if (blockadeId) this.board.setInfoHoverBlockade(blockadeId);
-    else if (coord) this.board.setInfoHoverHex(coord);
-    this.renderTerrainPanel();
-  }
+  // showLogTerrainPreview moved to HoverStateMachine — call sites use
+  // `this.hoverMachine.showLogTerrainPreview(...)`.
 
   private renderHud(): void {
     this.hidePreview();
@@ -2249,7 +2231,7 @@ class App {
       this.hud.appendChild(t);
     }
     if (s.phase === 'finished') this.renderGameOverOverlay(s);
-    this.renderTerrainPanel();
+    this.hoverMachine.renderTerrainPanel();
     // 出牌 / 摸牌后手牌变了，pinned 玩家手牌面板要反映最新数据；
     // renderHud 已经重建了玩家卡 DOM（pinned-hand class 重新挂上），这里刷新 panel 内容
     if (this.pinnedPlayerId) this.renderPlayerHandPanel();
@@ -2266,226 +2248,7 @@ class App {
     this.hud.appendChild(overlay);
   }
 
-  private cancelTerrainHoverClear(): void {
-    clearTimeout(this.terrainHoverClearTimer);
-    this.terrainHoverClearTimer = undefined;
-  }
-
-  private scheduleTerrainHoverClear(): void {
-    this.cancelTerrainHoverClear();
-    this.terrainHoverClearTimer = setTimeout(() => {
-      this.terrainHoverClearTimer = undefined;
-      if (this.terrainPanelHovering) return;
-      this.hoveredTerrain = null;
-      this.hoveredBlockadeId = null;
-      this.board.clearInfoHover();
-      this.renderTerrainPanel();
-      if (!this.pinnedTerrain && !this.pinnedBlockadeId) this.refreshPinnedPreview();
-    }, 80);
-  }
-
-  private bindTerrainPanelHover(coord: Axial | null, blockadeId: string | null): void {
-    const enter = () => {
-      this.terrainPanelHovering = true;
-      this.cancelTerrainHoverClear();
-      if (blockadeId) this.board.setInfoHoverBlockade(blockadeId);
-      else if (coord) this.board.setInfoHoverHex(coord);
-    };
-    this.terrainPanel.onmouseenter = enter;
-    this.terrainPanel.onmouseleave = () => {
-      this.terrainPanelHovering = false;
-      this.board.clearInfoHover();
-      if (!this.pinnedTerrain && !this.pinnedBlockadeId) {
-        this.hoveredTerrain = null;
-        this.hoveredBlockadeId = null;
-        this.renderTerrainPanel();
-        this.refreshPinnedPreview();
-      }
-    };
-    if (this.terrainPanel.matches(':hover')) enter();
-  }
-
-  private closeTerrainPanel(): void {
-    this.cancelTerrainHoverClear();
-    this.terrainPanelHovering = false;
-    this.pinnedTerrain = null;
-    this.hoveredTerrain = null;
-    this.pinnedBlockadeId = null;
-    this.hoveredBlockadeId = null;
-    this.board.setInspectedHex(null);
-    this.board.setInspectedBlockade(null);
-    this.board.clearInfoHover();
-    this.renderTerrainPanel();
-    this.refreshPinnedPreview();
-  }
-
-  private renderTerrainPanel(): void {
-    if (this.pinnedTerrain && !this.hexAt(this.pinnedTerrain)) this.pinnedTerrain = null;
-    if (this.hoveredTerrain && !this.hexAt(this.hoveredTerrain)) this.hoveredTerrain = null;
-    if (this.pinnedBlockadeId && !this.blockadeById(this.pinnedBlockadeId)) {
-      this.pinnedBlockadeId = null;
-      this.board.setInspectedBlockade(null);
-    }
-    if (this.hoveredBlockadeId && !this.blockadeById(this.hoveredBlockadeId)) this.hoveredBlockadeId = null;
-
-    const activeBlockade = this.blockadeById(this.hoveredBlockadeId ?? this.pinnedBlockadeId);
-    const activeCoord = activeBlockade ? null : this.hoveredTerrain ?? this.pinnedTerrain;
-    const hex = activeCoord ? this.hexAt(activeCoord) : undefined;
-    if (!this.state || this.state.phase === 'lobby' || (!hex && !activeBlockade)) {
-      this.cancelTerrainHoverClear();
-      this.terrainPanelHovering = false;
-      this.terrainPanel.onmouseenter = null;
-      this.terrainPanel.onmouseleave = null;
-      this.terrainPanel.classList.add('hidden');
-      this.terrainPanel.classList.remove('from-log');
-      this.terrainPanel.innerHTML = '';
-      if (!hex) this.board.setInspectedHex(null);
-      if (!activeBlockade) this.board.setInspectedBlockade(null);
-      this.board.clearInfoHover();
-      return;
-    }
-
-    this.hidePreview();
-    if (activeBlockade) {
-      const terrain = blockadeTerrain(activeBlockade);
-      const info = blockadeInfo(activeBlockade);
-      const pinned = !!this.pinnedBlockadeId && !this.hoveredBlockadeId;
-      const owner = activeBlockade.claimedBy ? this.state.players.find((p) => p.id === activeBlockade.claimedBy) : null;
-      const ownerText = owner ? `归属：${playerDisplayName(owner)}` : '尚未被领取';
-      const edgeCount = this.blockadeEdges(activeBlockade).length;
-      this.terrainPanel.classList.remove('hidden');
-      this.terrainPanel.classList.toggle('from-log', this.mobilePanel === 'log');
-      this.terrainPanel.classList.toggle('pinned', pinned);
-      this.terrainPanel.innerHTML = `
-        <div class="terrain-head">
-          <div class="terrain-icon terrain-${terrain}">${info.icon}</div>
-          <div class="terrain-title-wrap">
-            <div class="terrain-kicker">${pinned ? '点击固定' : '悬浮查看'}</div>
-            <div class="terrain-title">${escapeHtml(info.name)}</div>
-          </div>
-          <button class="terrain-close" aria-label="关闭地形说明">×</button>
-        </div>
-        <div class="terrain-desc">${escapeHtml(info.description)}</div>
-        <div class="terrain-rule"><b>规则</b><span>${escapeHtml(info.rule)}</span></div>
-        <div class="terrain-meta">
-          <span>${escapeHtml(blockadeCostText(activeBlockade))}</span>
-          <span>${escapeHtml(ownerText)}</span>
-          <span>连接 ${edgeCount} 条边</span>
-        </div>
-        <div class="terrain-status">${escapeHtml(this.blockadeActionStatus(activeBlockade))}</div>`;
-      this.terrainPanel.querySelector<HTMLButtonElement>('.terrain-close')!.onclick = () => this.closeTerrainPanel();
-      this.bindTerrainPanelHover(null, activeBlockade.id);
-      return;
-    }
-    if (!hex) return;
-
-    const info = terrainInfo(hex);
-    const pinned = !!this.pinnedTerrain && !this.hoveredTerrain;
-    const occupant = hex.occupant ? this.state.players.find((p) => p.id === hex.occupant) : null;
-    const occupantText = occupant ? `占据：${playerDisplayName(occupant)}` : '未被占据';
-    const status = this.terrainActionStatus(hex);
-    this.terrainPanel.classList.remove('hidden');
-    this.terrainPanel.classList.toggle('from-log', this.mobilePanel === 'log');
-    this.terrainPanel.classList.toggle('pinned', pinned);
-    this.terrainPanel.innerHTML = `
-      <div class="terrain-head">
-        <div class="terrain-icon terrain-${hex.terrain}">${info.icon}</div>
-        <div class="terrain-title-wrap">
-          <div class="terrain-kicker">${pinned ? '点击固定' : '悬浮查看'}</div>
-          <div class="terrain-title">${escapeHtml(info.name)}</div>
-        </div>
-        <button class="terrain-close" aria-label="关闭地形说明">×</button>
-      </div>
-      <div class="terrain-desc">${escapeHtml(info.description)}</div>
-      <div class="terrain-rule"><b>规则</b><span>${escapeHtml(info.rule)}</span></div>
-      <div class="terrain-meta">
-        <span>${escapeHtml(terrainCostText(hex))}</span>
-        <span>${escapeHtml(occupantText)}</span>
-        <span>坐标 ${hex.q}, ${hex.r}</span>
-      </div>
-      <div class="terrain-status">${escapeHtml(status)}</div>`;
-    this.terrainPanel.querySelector<HTMLButtonElement>('.terrain-close')!.onclick = () => this.closeTerrainPanel();
-    this.bindTerrainPanelHover({ q: hex.q, r: hex.r }, null);
-  }
-
-  private blockadeActionStatus(blockade: Blockade): string {
-    if (!this.isMyTurn()) return '当前不是你的回合，可以查看说明，但不能执行地形行动。';
-    if (this.mode === 'clear') return '你正在清除地形，点击手牌支付费用。点击连接地形只会固定说明。';
-    if (this.mode === 'remove') return '正在处理行动牌摸牌后的移除选择，完成后才能继续执行地形行动。';
-    if (blockade.claimedBy) return '这块连接地形已经被领取，不再作为可领取阻挡物。';
-    if (!this.blockadeDestination(blockade)) return '当前棋子不在这块连接地形覆盖的边旁边，暂时不能行动。';
-
-    const requirementText = `连接地形需要 ${blockadeCostText(blockade)}；第一个移除的玩家会领取它，玩家信息中的阻挡物数量会增加。`;
-    if (blockadeRequiresDiscard(blockade)) {
-      return `${requirementText} 选 ${blockade.cost} 张手牌弃掉即可移除这块连接地形（棋子留在原地），之后再走到对面。`;
-    }
-    const mover = this.state!.turn?.activeMover;
-    if (mover) {
-      const dest = this.blockadeDestination(blockade, mover.symbol, mover.remaining);
-      return dest
-        ? `${requirementText} 当前移动力足够，点击会移除这块连接地形（棋子留在原地），之后再走到对面。`
-        : `${requirementText} 当前正在使用的移动力不足以移除这里的连接地形。`;
-    }
-
-    if (this.selected.size > 0) {
-      const seamSym = blockadeMoveSymbol(blockade);
-      const hand = this.me?.hand ?? [];
-      const candidates = [...this.selected]
-        .filter((id) => hand.some((h) => h.id === id))
-        .map((id) => ({ id, defId: cardDefId(id, this.state!) }));
-      const pick = pickHandMover(seamSym, blockade.cost, candidates);
-      return pick
-        ? `${requirementText} 已选可用移动牌，点击这块地形会打出对应资源并移除障碍（棋子留在原地），之后再走到对面。`
-        : `${requirementText} 已选 ${this.selected.size} 张手牌，但没有满足这块连接地形要求的移动牌。`;
-    }
-
-    return `${requirementText} 选择匹配的移动牌后，可以点击这块连接地形移除障碍（棋子留在原地），之后再走到对面。`;
-  }
-
-  private terrainActionStatus(hex: Hex): string {
-    if (!this.isMyTurn()) return '当前不是你的回合，可以查看说明，但不能执行地形行动。';
-    const me = this.me;
-    if (!me) return '没有找到你的棋子。';
-    if (this.mode === 'clear') return '你正在清除地形，点击手牌支付费用。点击地形只会固定说明。';
-    if (this.mode === 'remove') return '正在处理行动牌摸牌后的移除选择，完成后才能继续执行地形行动。';
-    if (this.nativeActionCardId) {
-      return this.canUseNativeOn(hex)
-        ? '原住民向导可以无视此格地形需求，点击即可移动到这里。'
-        : '原住民向导只能移动到可到达、未被其他玩家占用的相邻格；未移除的连接地形仍会阻挡。';
-    }
-    if (hex.terrain === 'mountain') return '山地不可进入，只能绕行。';
-    if (!isAdjacent(me.position, hex)) return '此格不与当前棋子相邻，暂时不能行动。';
-    const current = this.hexAt(me.position);
-    if (hex.terrain === 'eldorado' && !isFinishEntrance(current)) return '必须先进入相邻的黄金城入口，才能进入黄金城。';
-    if (hex.occupant && hex.occupant !== me.id) return '此格已有其他玩家，当前不能进入。';
-    if (this.canStepToEldorado(hex)) return '点击即可进入黄金城，无需出牌。';
-    if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') {
-      const selected = this.selectedHandCardIds().length;
-      const effect = hex.terrain === 'basecamp' ? '永久移出游戏' : '弃掉';
-      if (selected === hex.cost) return `已选择 ${selected} 张手牌，点击此格会清除并进入；这些牌会${effect}。`;
-      if (selected > 0) return `需要正好选择 ${hex.cost} 张手牌；当前选择了 ${selected} 张。`;
-      return `先选择 ${hex.cost} 张手牌，再点击此格清除并进入；这些牌会${effect}。`;
-    }
-
-    const requirement = this.movementRequirement(hex);
-    const requirementText = requirement.blockade && requirement.discard
-      ? `边界碎石路障需要弃 ${requirement.cost} 张手牌；成功通过后会收入你的玩家信息。`
-      : requirement.blockade && requirement.required
-      ? `跨越边界阻挡物并进入对岸地形共需 ${SYMBOL_GLYPH[requirement.required]}${SYMBOL_LABEL[requirement.required]} ${requirement.cost} 点（阻挡物 + 目的地地形，须同一种符号）；成功通过后阻挡物会收入你的玩家信息。`
-      : `此格需要 ${terrainCostText(hex)}。`;
-    const mover = this.state!.turn?.activeMover;
-    if (mover) {
-      return this.canEnter(hex, mover.symbol, mover.remaining)
-        ? `${requirementText} 当前移动力可以进入，进入后剩余 ${Math.max(0, mover.remaining - requirement.cost)} 点。`
-        : `${requirementText} 当前正在使用的移动力不能进入此处。`;
-    }
-
-    if (this.selected.size > 0) {
-      return `${requirementText} 已选 ${this.selected.size} 张手牌，点击此格会自动挑最省的一张打出并移动。`;
-    }
-
-    return `${requirementText} 选择匹配的移动牌后，点击相邻格即可移动。`;
-  }
+  // --- terrain / blockade hover & panel: see controllers/HoverStateMachine.ts
 }
 
 // --- small DOM helpers ---
