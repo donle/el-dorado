@@ -861,6 +861,20 @@ export class InteractionController {
     this.host.sendAction({ type: 'BuyCard', defId: this.buyTargetDefId, paymentCardIds: [...this.selected] });
   }
 
+  /** Cancel the drawer-buy / promote / market-preview flow without acting. */
+  cancelDrawerBuy(): void {
+    this.buyTargetDefId = null;
+    this.promoteTargetDefId = null;
+    this.marketPreviewDefId = null;
+    this.hint = '';
+    this.host.renderHud();
+  }
+
+  /** Clear just the market-preview flag (mobile toolbar wires this up). */
+  clearMarketPreview(): void {
+    this.marketPreviewDefId = null;
+  }
+
   confirmRemoveAfterDraw(): void {
     if (!this.host.isMyTurn() || this.mode !== 'remove') return;
     const cardIds = this.selectedHandCardIds();

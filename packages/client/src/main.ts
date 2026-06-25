@@ -4,30 +4,14 @@ import type { ISocketPort, SocketEvent } from './net/SocketPort.js';
 import { BootController } from './boot/BootController.js';
 import { LobbyController } from './lobby/LobbyController.js';
 import { GameStore } from './store/GameStore.js';
-import { KIND_LABEL, SYMBOL_GLYPH, SYMBOL_LABEL } from './views/common/iconMap.js';
-import { button, cardBack, colorHex, el, escapeHtml, playerDisplayName } from './views/common/dom.js';
-import { renderHandPanel } from './views/hand/HandPanel.js';
-import { renderMarketPanel } from './views/market/MarketPanel.js';
-import { renderPlayerBar } from './views/players/PlayerBar.js';
-import { renderTurnInfoPanel, type ActionCardPrompt } from './views/turn/TurnInfoPanel.js';
-import { buildGearDock, buildTopBar, buildMobileToolbar } from './views/hud/ChromeBars.js';
-import { previewHtml, marketInlineDetailHtml } from './views/cards/CardDescription.js';
+import { el } from './views/common/dom.js';
+// renderHud body lives in controllers/HudRenderer.ts (G4 extraction).
 import {
   clearTurnIntro as clearTurnIntroOverlay,
   showTurnIntro as showTurnIntroOverlay,
 } from './views/overlays/TurnIntroOverlay.js';
-// renderGameOverOverlayEl moved into OverlaysController (C2 extraction).
 import {
-  getDef,
-  CARD_DEFS,
-  HAND_SIZE,
-  movableSymbols,
-  coinValue,
-  neighbors,
-  isAdjacent,
   pickHandMover,
-  progressOf,
-  terrainSymbol,
   blockadeMoveSymbol,
   blockadeRequiresDiscard,
   cardDefId,
@@ -40,10 +24,8 @@ import {
   type Hex,
   type Axial,
   type MoveSymbol,
-  type Terrain,
   type Action,
   type Blockade,
-  type GameEvent,
 } from '@eldorado/core';
 
 type BoardConstructor = typeof import('./scene/Board.js').Board;
@@ -51,7 +33,7 @@ type BoardInstance = InstanceType<BoardConstructor>;
 
 import { MobileLayoutProbe } from './controllers/MobileLayoutProbe.js';
 import { HoverStateMachine, type Mode } from './controllers/HoverStateMachine.js';
-import { ActionLogPanel, type ActionLogEntry, type ActionLogSegment } from './controllers/ActionLogPanel.js';
+import { ActionLogPanel } from './controllers/ActionLogPanel.js';
 import { InteractionController } from './controllers/InteractionController.js';
 import { BoardCoordinator } from './controllers/BoardCoordinator.js';
 import { PlayerHandPanel } from './controllers/PlayerHandPanel.js';
@@ -59,6 +41,7 @@ import { OverlaysController } from './controllers/OverlaysController.js';
 import { SettingsMenuController } from './controllers/SettingsMenuController.js';
 import { SessionController } from './controllers/SessionController.js';
 import { CardPreviewController } from './controllers/CardPreviewController.js';
+import { HudRenderer, type HudDomRefs } from './controllers/HudRenderer.js';
 
 class App {
   net: ISocketPort = new WebSocketAdapter(WebSocketAdapter.defaultUrl());
@@ -85,7 +68,8 @@ class App {
   /** @internal SessionController + renderGameOverOverlay. */
   readonly overlays!: OverlaysController;
   // in-game settings menu (view mode + AI delay + exit) (C3 extraction)
-  private settingsCtl!: SettingsMenuController;
+  /** @internal HudRenderer + SettingsMenuController. */
+  readonly settingsCtl!: SettingsMenuController;
   // session lifecycle: socket events, leave/return, room reset (C4 extraction)
   private sessionCtl!: SessionController;
 
@@ -157,17 +141,16 @@ class App {
   // leaveRoom / onRoomClosed.
   readonly lobbyCtl = new LobbyController({ socket: this.net, store: this.store });
   private terrainPanel = el('div', 'terrain-panel inspector-popover panel hidden');
-  /** @internal BoardCoordinator reads these for animateBuy / refreshPinnedPreview. */
-  readonly handEls = new Map<string, HTMLElement>();
-  // `readonly` (not `private`) so SessionController can read the market
-  // slot DOM during onStateUpdate to capture source rects for buy animation.
-  readonly shopEls = new Map<string, HTMLElement>();
-  readonly playerCardEls = new Map<string, HTMLElement>();
+  /** @internal HudRenderer owns these; exposed here so CardPreviewController /
+   *  BoardCoordinator / SessionController can keep reading through `this.app`. */
+  get handEls(): Map<string, HTMLElement> { return this.dom.handEls; }
+  get shopEls(): Map<string, HTMLElement> { return this.dom.shopEls; }
+  get playerCardEls(): Map<string, HTMLElement> { return this.dom.playerCardEls; }
+  get drawPileEl(): HTMLElement | null { return this.dom.drawPileEl; }
+  set drawPileEl(el: HTMLElement | null) { this.dom.drawPileEl = el; }
+  get discardPileEl(): HTMLElement | null { return this.dom.discardPileEl; }
+  set discardPileEl(el: HTMLElement | null) { this.dom.discardPileEl = el; }
   // playerHandPanel + pinnedPlayerId live in PlayerHandPanel (C1 extraction).
-  /** @internal BoardCoordinator reads drawPileEl/discardPileEl for animateBuy. */
-  drawPileEl: HTMLElement | null = null;
-  /** @internal BoardCoordinator reads drawPileEl/discardPileEl for animateBuy. */
-  discardPileEl: HTMLElement | null = null;
   /** @internal ActionLogPanel needs the isMobileDevice gate. */
   readonly mobileLayout: MobileLayoutProbe = new MobileLayoutProbe();
   /** @internal ActionLogPanel needs the showLogTerrainPreview entry point. */
@@ -177,6 +160,16 @@ class App {
   readonly actionLogPanel!: ActionLogPanel;
   /** Card preview popover subsystem (G3 extraction). */
   readonly previewCtl: CardPreviewController = undefined!;
+  /** HUD composition pipeline (G4 extraction). */
+  readonly hudRenderer: HudRenderer = undefined!;
+  /** DOM maps the HudRenderer fills; BoardCoordinator reads them for buy animation. */
+  readonly dom: HudDomRefs = {
+    handEls: new Map<string, HTMLElement>(),
+    shopEls: new Map<string, HTMLElement>(),
+    playerCardEls: new Map<string, HTMLElement>(),
+    drawPileEl: null,
+    discardPileEl: null,
+  };
 
   constructor(BoardClass: BoardConstructor) {
     this.mobileLayout.setupMobileLayoutClasses();
@@ -194,6 +187,7 @@ class App {
     this.overlays = new OverlaysController(this);
     this.settingsCtl = new SettingsMenuController(this);
     this.sessionCtl = new SessionController(this);
+    this.hudRenderer = new HudRenderer(this);
     this.board.onHexHover = (c) => this.hoverMachine.onHexHover(c);
     this.board.onHexClick = (c) => this.hoverMachine.onHexClick(c);
     this.board.onBlockadeHover = (id) => this.hoverMachine.onBlockadeHover(id);
@@ -259,9 +253,9 @@ class App {
   /** @internal App → App.onMessage */
   syncSelectionToState(): void { this.interaction.syncSelectionToState(); }
   /** @internal BoardCoordinator */
-  setDrawPileEl(el: HTMLElement | null): void { this.drawPileEl = el; }
+  setDrawPileEl(el: HTMLElement | null): void { this.dom.drawPileEl = el; }
   /** @internal BoardCoordinator */
-  setDiscardPileEl(el: HTMLElement | null): void { this.discardPileEl = el; }
+  setDiscardPileEl(el: HTMLElement | null): void { this.dom.discardPileEl = el; }
   /** @internal App → HoverStateMachine */
   hexAt(c: Axial): Hex | undefined {
     return this.state?.hexes.find((h) => h.q === c.q && h.r === c.r);
@@ -327,7 +321,8 @@ class App {
 
   // --- piles & buy animation live in BoardCoordinator (B4) ---
 
-  private makePile(kind: 'draw' | 'discard', label: string, count: number): HTMLElement {
+  /** @internal HudRenderer builds draw/discard piles through this. */
+  makePile(kind: 'draw' | 'discard', label: string, count: number): HTMLElement {
     return this.boardCtl.makePile(kind, label, count);
   }
 
@@ -344,291 +339,12 @@ class App {
   // Lobby rendering moved to packages/client/src/lobby/LobbyView.ts; App no
   // longer owns the lobby element. App only renders the in-game HUD.
   // --- rendering: HUD ---
-
-  // progressOf is a pure helper that lives in @eldorado/core (C5 extraction).
-
-  // buildActionLogPanel moved to ActionLogPanel.buildPanel — see
-  // controllers/ActionLogPanel.ts. App's renderActionLog and
-  // renderMobileActionLogDialog below now just call it.
-
-  private renderActionLog(): void {
-    this.hud.appendChild(this.actionLogPanel.buildPanel());
-  }
-
-  private renderMobileActionLogDialog(): void {
-    const scrim = el('div', 'mobile-log-scrim');
-    scrim.onclick = () => this.closeMobilePanel();
-
-    const dialog = this.actionLogPanel.buildPanel('mobile-log-dialog');
-    dialog.setAttribute('role', 'dialog');
-    dialog.setAttribute('aria-modal', 'true');
-    dialog.addEventListener('click', (ev) => ev.stopPropagation());
-    const close = button('×', () => this.closeMobilePanel(), true);
-    close.className = 'mobile-log-close';
-    close.setAttribute('aria-label', '关闭行动日志');
-    dialog.appendChild(close);
-    scrim.appendChild(dialog);
-    this.hud.appendChild(scrim);
-  }
-
-  // showLogTerrainPreview moved to HoverStateMachine — call sites use
-  // `this.hoverMachine.showLogTerrainPreview(...)`.
+  // renderHud body lives in controllers/HudRenderer.ts (G4 extraction).
+  // Action-log desktop panel + mobile dialog live in ActionLogPanel
+  // (renderInto / renderMobileDialog).
 
   renderHud(): void {
-    this.previewCtl.hidePreview();
-    const previousMarketScrollTop = this.mobilePanel === 'market'
-      ? this.hud.querySelector<HTMLElement>('.market-panel.open')?.scrollTop ?? null
-      : null;
-    if (!this.state || this.state.phase === 'lobby') {
-      this.hud.innerHTML = '';
-      return;
-    }
-    const s = this.state;
-    const myTurn = this.isMyTurn();
-    const turnPlayer = s.players.find((p) => p.id === s.turn?.playerId);
-    const turnName = turnPlayer ? playerDisplayName(turnPlayer) : '';
-    this.hud.innerHTML = '';
-    this.handEls.clear();
-    this.shopEls.clear();
-
-    this.hud.appendChild(buildGearDock({
-      onToggle: () => this.settingsCtl.toggleSettings(),
-      isOpen: this.settingsCtl.isOpen(),
-    }));
-
-    // --- top bar ---
-    this.hud.appendChild(buildTopBar({
-      state: s,
-      myTurn,
-      roomCode: this.room?.code ?? null,
-      viewMode: this.viewMode,
-    }));
-
-    if (this.settingsCtl.isOpen()) this.settingsCtl.renderSettingsMenu(s);
-
-    // --- mobile toolbar (log + market sheet toggles) ---
-    this.hud.appendChild(buildMobileToolbar({
-      getOpen: () => this.mobilePanel,
-      toggle: (which) => {
-        this.mobilePanel = this.mobilePanel === which ? null : which;
-      },
-      clearMarketPreview: () => { this.interaction.marketPreviewDefId = null; },
-      renderHud: () => this.renderHud(),
-    }));
-
-    // --- top-centre: players as cards ---
-    this.playerCardEls.clear();
-    this.hud.appendChild(
-      renderPlayerBar(
-        {
-          players: s.players,
-          turnOrder: s.turnOrder,
-          turnPlayerId: s.turn?.playerId ?? null,
-          selfId: this.you,
-          pinnedPlayerId: this.playerHandCtl.getPinnedPlayerId(),
-          progressOf: (p) => progressOf(p, s),
-        },
-        {
-          onCardClick: (id) => this.playerHandCtl.toggle(id),
-          onCardRendered: (cardEl, id) => this.playerCardEls.set(id, cardEl),
-        },
-      ),
-    );
-
-    // --- right: market (all 18 cards; on-board buyable, others upcoming) ---
-    const onBoard = s.market.filter((m) => m.onBoard && m.count > 0);
-    const upcoming = s.market.filter((m) => !m.onBoard && m.count > 0);
-    const needsPromotion = onBoard.length < 6 && upcoming.length > 0;
-    const canPromote = myTurn && needsPromotion && !s.turn?.hasBought;
-    const freeTakeAction = this.interaction.selectedActionCard()?.def.ability === 'take_free';
-    const inlineMarketDetailDefId = this.interaction.usesMarketPreviewFlow()
-      ? this.interaction.marketPreviewDefId ?? this.interaction.buyTargetDefId ?? this.interaction.promoteTargetDefId
-      : null;
-    const selectedCoinSum = [...this.interaction.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-    const market = renderMarketPanel(
-      {
-        market: s.market,
-        myTurn,
-        phase: s.phase,
-        mobilePanelOpen: this.mobilePanel === 'market',
-        buyTargetDefId: this.interaction.buyTargetDefId,
-        promoteTargetDefId: this.interaction.promoteTargetDefId,
-        marketPreviewDefId: this.interaction.marketPreviewDefId,
-        usesMarketPreviewFlow: this.interaction.usesMarketPreviewFlow(),
-        canPromote,
-        needsPromotion,
-        freeTakeAction,
-        hasBought: !!s.turn?.hasBought,
-        selectedCoinSum,
-        inlineDetailDefId: inlineMarketDetailDefId,
-        previousScrollTop: previousMarketScrollTop,
-      },
-      {
-        onSlotRendered: (slotEl, defId) => this.shopEls.set(defId, slotEl),
-        onMarketClick: (defId) => this.interaction.onMarketClick(defId),
-        previewMarketCard: (defId) => this.interaction.previewMarketCard(defId),
-        confirmPromoteMarket: () => this.interaction.confirmPromoteMarket(),
-        confirmBuy: () => this.interaction.confirmBuy(),
-        cancelDrawerBuy: () => {
-          this.interaction.buyTargetDefId = null;
-          this.interaction.promoteTargetDefId = null;
-          this.interaction.marketPreviewDefId = null;
-          this.interaction.hint = '';
-          this.renderHud();
-        },
-        attachPreview: (node, defId) => this.previewCtl.attachPreview(node, defId),
-        attachSheetDismiss: (panel) => this.overlays.attachSheetDismiss(panel),
-        renderInlineDetail: (defId) => marketInlineDetailHtml(defId),
-        canSelectMarketPreview: (defId) => this.interaction.canSelectMarketPreview(defId),
-      },
-    );
-    this.hud.appendChild(market);
-
-    // Mobile: a tap-to-dismiss scrim on the open sheet (swipe-down is wired
-    // inside renderMarketPanel via attachSheetDismiss when the panel opens).
-    if (this.mobilePanel === 'market') {
-      const scrim = el('div', 'sheet-scrim');
-      scrim.onclick = () => this.closeMobilePanel();
-      this.hud.appendChild(scrim);
-    }
-    if (this.mobilePanel === 'log') {
-      this.renderMobileActionLogDialog();
-    }
-
-    this.renderActionLog();
-
-    // (draw/discard piles are built into the bottom dock, flanking the hand)
-
-    // --- bottom dock: hand + actions ---
-    const dock = el('div', 'dock');
-    const me = this.me;
-    const tray = renderHandPanel(
-      {
-        me,
-        myTurn,
-        phase: s.phase,
-        selectedIds: this.interaction.selected,
-        modeIsRemove: this.interaction.mode === 'remove',
-        useLabelFor: (defId) => this.interaction.handActionUseLabel(getDef(defId)),
-        defIdFor: (cardId) => cardDefId(cardId, s),
-        attachPreview: (node, defId) => this.previewCtl.attachPreview(node, defId),
-      },
-      {
-        onCardClick: (cardId) => this.interaction.onCardClick(cardId),
-        onUseClick: (cardId, ev) => {
-          ev.stopPropagation();
-          this.interaction.useActionCardFromHand(cardId);
-        },
-      },
-    );
-    this.handEls.clear();
-    if (me) {
-      for (const c of me.hand) this.handEls.set(c.id, tray.querySelector<HTMLElement>(`.card.${getDef(c.defId).kind}`) ?? tray);
-    }
-
-    const turnActionCards = this.interaction.selectedActionCards();
-    const turnActionCard = turnActionCards.length === 1 ? turnActionCards[0] : null;
-    const turnActionPrompt: ActionCardPrompt | null = turnActionCard
-      ? {
-          count: 1,
-          name: turnActionCard.def.name,
-          ability: turnActionCard.def.ability,
-          removeLimit: this.interaction.removeLimitForAbility(turnActionCard.def.ability),
-          removeSelectedCount: this.interaction.selectedActionRemoveIds(turnActionCard.id).length,
-        }
-      : turnActionCards.length > 1
-        ? { count: turnActionCards.length, name: '', ability: '', removeLimit: 0, removeSelectedCount: 0 }
-        : null;
-    const turnCost = this.interaction.buyTargetDefId ? getDef(this.interaction.buyTargetDefId).cost : null;
-    const turnCoinHave = [...this.interaction.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
-    const turnCompact = this.mobileLayout.isCompactCommandLayout();
-    const turnHasActionCards = turnActionCards.length > 0 || !!this.interaction.nativeActionCardId;
-    const turnUseLabel = this.interaction.nativeActionCardId
-      ? (turnCompact ? '选目标' : '选择向导目标')
-      : this.interaction.selectedActionUseLabel(turnCompact);
-    const turnRemoveCount = this.selectedHandCardIds().length;
-    const turnHandSize = me?.hand.length ?? 0;
-    const turnTrimMin = Math.max(0, turnHandSize - HAND_SIZE);
-    const turnTakeFree = this.interaction.selectedActionCard()?.def.ability === 'take_free';
-    const turnMarketNeedsPromotion = this.marketNeedsPromotion(s);
-    const turnClearCost = this.interaction.clearBlockadeId
-      ? this.blockadeById(this.interaction.clearBlockadeId)?.cost ?? 0
-      : this.interaction.clearTarget ? this.hexAt(this.interaction.clearTarget)?.cost ?? 0 : 0;
-    const bar = renderTurnInfoPanel(
-      {
-        myTurn,
-        phase: s.phase,
-        turnName,
-        me,
-        state: s,
-        mode: this.interaction.mode,
-        removeAfterDrawLimit: this.interaction.removeAfterDrawLimit,
-        pendingTrim: !!s.turn?.pendingTrim,
-        handSizeLimit: HAND_SIZE,
-        promoteTargetDefId: this.interaction.promoteTargetDefId,
-        buyTargetDefId: this.interaction.buyTargetDefId,
-        cost: turnCost,
-        coinHave: turnCoinHave,
-        hasActionCards: turnHasActionCards,
-        nativeActionCardId: this.interaction.nativeActionCardId,
-        takeFreeSelected: turnTakeFree,
-        actionPrompt: turnActionPrompt,
-        useLabel: turnUseLabel,
-        useDisabled: !!this.interaction.nativeActionCardId,
-        canUseAction: this.interaction.canUseSelectedAction(),
-        removeCount: turnRemoveCount,
-        trimSel: turnRemoveCount,
-        trimMin: turnTrimMin,
-        isCompact: turnCompact,
-        marketNeedsPromotion: turnMarketNeedsPromotion,
-        selectedCount: this.interaction.selected.size,
-        clearCost: turnClearCost,
-        clearIsBlockade: !!this.interaction.clearBlockadeId,
-      },
-      {
-        onConfirmRemove: () => this.interaction.confirmRemoveAfterDraw(),
-        onCancelMode: () => this.interaction.cancelMode(),
-        onConfirmTrim: () => this.interaction.confirmTrim(),
-        onConfirmPromote: () => this.interaction.confirmPromoteMarket(),
-        onConfirmBuy: () => this.interaction.confirmBuy(),
-        onUseAction: () => this.interaction.useSelectedAction(),
-        onEndTurn: () => this.act({ type: 'EndTurn' }),
-        onDiscard: () => {
-          if (this.interaction.selected.size === 0) return;
-          this.act({ type: 'DiscardCards', cardIds: [...this.interaction.selected] });
-        },
-      },
-    );
-    // Piles flank the hand on the same row; draw on the left, discard on the right.
-    if (me) {
-      const drawPile = this.makePile('draw', '摸牌', me.deck.length);
-      const discardPile = this.makePile('discard', '弃牌', me.discard.length);
-      this.setDrawPileEl(drawPile);
-      this.setDiscardPileEl(discardPile);
-      dock.appendChild(drawPile);
-      dock.appendChild(tray);
-      dock.appendChild(discardPile);
-    } else {
-      this.setDrawPileEl(null);
-      this.setDiscardPileEl(null);
-      dock.appendChild(tray);
-    }
-    this.hud.appendChild(dock);
-    this.hud.appendChild(bar); // floats bottom-right
-
-    // Keep the selected card's preview open (no hover needed — for touch).
-    this.previewCtl.refreshPinnedPreview();
-
-    if (this.error) {
-      const t = el('div', 'toast');
-      t.textContent = this.error;
-      this.hud.appendChild(t);
-    }
-    if (s.phase === 'finished') this.overlays.renderGameOverOverlay(s);
-    this.hoverMachine.renderTerrainPanel();
-    // 出牌 / 摸牌后手牌变了，pinned 玩家手牌面板要反映最新数据；
-    // renderHud 已经重建了玩家卡 DOM（pinned-hand class 重新挂上），这里刷新 panel 内容
-    if (this.playerHandCtl.getPinnedPlayerId()) this.playerHandCtl.refresh();
+    this.hudRenderer.render();
   }
 
   // renderGameOverOverlay lives in OverlaysController (C2 extraction).

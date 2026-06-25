@@ -59,6 +59,10 @@ export interface ActionLogHost {
   readonly board: BoardLike;
   readonly hoverMachine: HoverMachineLike;
   readonly mobileLayout: MobileLayoutLike;
+  /** Where `renderInto` and `renderMobileDialog` append their DOM. */
+  readonly hud: HTMLElement;
+  /** Close any open mobile sheet — used by the log dialog's scrim/×. */
+  closeMobilePanel(): void;
 
   /** Wrap a card chip with the standard hover/click preview behavior. */
   previewCtl: {
@@ -444,5 +448,27 @@ export class ActionLogPanel {
     if (lastEntry) this.actionLogLastRenderedId = lastEntry.id;
     this.hasRenderedLog = true;
     return panel;
+  }
+
+  /** Render the desktop panel straight into the host HUD. */
+  renderInto(): void {
+    this.host.hud.appendChild(this.buildPanel());
+  }
+
+  /** Render the mobile full-screen dialog (scrim + role=dialog + close ×). */
+  renderMobileDialog(): void {
+    const scrim = el('div', 'mobile-log-scrim');
+    scrim.onclick = () => this.host.closeMobilePanel();
+
+    const dialog = this.buildPanel('mobile-log-dialog');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.addEventListener('click', (ev) => ev.stopPropagation());
+    const close = button('×', () => this.host.closeMobilePanel(), true);
+    close.className = 'mobile-log-close';
+    close.setAttribute('aria-label', '关闭行动日志');
+    dialog.appendChild(close);
+    scrim.appendChild(dialog);
+    this.host.hud.appendChild(scrim);
   }
 }

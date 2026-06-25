@@ -24,6 +24,8 @@ export interface OverlaysHost {
   readonly hud: HTMLElement;
   /** Writable error slot the HUD renders; flash sets + clears this. */
   error: string;
+  /** Which mobile bottom sheet is open (null = none). Toggled by toolbar. */
+  mobilePanel: 'players' | 'market' | 'log' | null;
   /** Re-render the HUD (used after flash sets/clears `error`). */
   renderHud(): void;
   /** Re-render the lobby overlay (used after system dialog dismissal). */
@@ -41,6 +43,11 @@ export class OverlaysController {
   private systemDialog: HTMLElement | null = null;
 
   constructor(private readonly host: OverlaysHost) {}
+
+  /** Open `which` mobile sheet, or close it if it's already open. */
+  toggleMobilePanel(which: 'players' | 'market' | 'log'): void {
+    this.host.mobilePanel = this.host.mobilePanel === which ? null : which;
+  }
 
   // --- 1. flash toast ------------------------------------------------
 
