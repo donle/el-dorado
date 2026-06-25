@@ -14,7 +14,6 @@
  * the host interface.
  */
 import {
-  type Axial,
   type GameEvent,
   type GameState,
   type Player,
@@ -60,11 +59,6 @@ export interface BoardCoordinatorHost {
   readonly playerCardEls: Map<string, HTMLElement>;
   readonly drawPileEl: HTMLElement | null;
   readonly discardPileEl: HTMLElement | null;
-
-  // For makePile callers that want to keep a ref (renderHud needs
-  // the draw/discard pile pointer for the next animateBuy).
-  setDrawPileEl(el: HTMLElement | null): void;
-  setDiscardPileEl(el: HTMLElement | null): void;
 }
 
 export class BoardCoordinator {

@@ -11,10 +11,6 @@ import {
   showTurnIntro as showTurnIntroOverlay,
 } from './views/overlays/TurnIntroOverlay.js';
 import {
-  pickHandMover,
-  blockadeMoveSymbol,
-  blockadeRequiresDiscard,
-  cardDefId,
   findCardDefId,
   fallbackCardDefId,
   type GameState,
@@ -23,7 +19,6 @@ import {
   type ServerMessage,
   type Hex,
   type Axial,
-  type MoveSymbol,
   type Action,
   type Blockade,
 } from '@eldorado/core';
@@ -32,8 +27,9 @@ type BoardConstructor = typeof import('./scene/Board.js').Board;
 type BoardInstance = InstanceType<BoardConstructor>;
 
 import { MobileLayoutProbe } from './controllers/MobileLayoutProbe.js';
-import { HoverStateMachine, type Mode } from './controllers/HoverStateMachine.js';
+import { HoverStateMachine } from './controllers/HoverStateMachine.js';
 import { ActionLogPanel } from './controllers/ActionLogPanel.js';
+import { createHoverHost } from './controllers/HoverHost.js';
 import { InteractionController } from './controllers/InteractionController.js';
 import { BoardCoordinator } from './controllers/BoardCoordinator.js';
 import { PlayerHandPanel } from './controllers/PlayerHandPanel.js';
@@ -73,51 +69,9 @@ class App {
   // session lifecycle: socket events, leave/return, room reset (C4 extraction)
   private sessionCtl!: SessionController;
 
-  // --- HoverHost accessors (consumed by HoverStateMachine) ---
-  // Thin getters / module-helper wrappers so HoverStateMachine doesn't
-  // need direct access to private App fields or module-level functions.
-  /** @internal HoverStateMachine */
-  getState(): GameState | null { return this.state; }
-  /** @internal HoverStateMachine */
-  getMobilePanel(): 'players' | 'market' | 'log' | null { return this.mobilePanel; }
-  /** @internal HoverStateMachine */
-  getMode(): Mode { return this.interaction.mode; }
-  /** @internal HoverStateMachine */
-  getSelected(): Set<string> { return this.interaction.selected; }
-  /** @internal HoverStateMachine */
-  getNativeActionCardId(): string | null { return this.interaction.nativeActionCardId; }
-  /** @internal HoverStateMachine */
-  canEnter(hex: Hex, symbol: MoveSymbol, power: number): boolean { return this.interaction.canEnter(hex, symbol, power); }
-  /** @internal HoverStateMachine */
-  canStepToEldorado(hex: Hex): boolean { return this.interaction.canStepToEldorado(hex); }
-  /** @internal HoverStateMachine */
-  canUseNativeOn(hex: Hex): boolean { return this.interaction.canUseNativeOn(hex); }
-  /** @internal HoverStateMachine */
-  selectedHandCardIds(): string[] { return this.interaction.selectedHandCardIds(); }
-  /** @internal HoverStateMachine */
-  movementRequirement(hex: Hex) { return this.interaction.movementRequirement(hex); }
-  /** @internal HoverStateMachine */
-  tryActOnHex(c: Axial): boolean { return this.interaction.tryActOnHex(c); }
-  /** @internal HoverStateMachine */
-  tryActOnBlockade(id: string): boolean { return this.interaction.tryActOnBlockade(id); }
-  /** @internal HoverStateMachine */
-  blockadeDestination(blockade: Blockade, symbol?: MoveSymbol, power?: number): Hex | undefined {
-    return this.interaction.blockadeDestination(blockade, symbol, power);
-  }
-  /** @internal HoverStateMachine */
-  blockadeRequiresDiscard(blockade: Blockade): boolean { return blockadeRequiresDiscard(blockade); }
-  /** @internal HoverStateMachine */
-  blockadeMoveSymbol(blockade: Blockade): MoveSymbol | null { return blockadeMoveSymbol(blockade); }
-  /** @internal HoverStateMachine */
-  blockadeEdges(blockade: Blockade): Array<{ a: Axial; b: Axial }> {
-    return this.interaction.blockadeEdges(blockade);
-  }
-  /** @internal HoverStateMachine */
-  cardDefId(cardId: string, state: GameState): string { return cardDefId(cardId, state); }
-  /** @internal HoverStateMachine */
-  pickHandMover(req: MoveSymbol | null, cost: number, candidates: Array<{ id: string; defId: string }>) {
-    return pickHandMover(req, cost, candidates);
-  }
+  // HoverHost accessors (consumed by HoverStateMachine) live in
+  // controllers/HoverHost.ts — App just calls `createHoverHost(this)`
+  // and passes the result to `new HoverStateMachine(...)`.
 
   // --- ActionLogHost accessors (consumed by ActionLogPanel) ---
   /** @internal ActionLogPanel */
@@ -179,7 +133,7 @@ class App {
     (window as unknown as { __app: App }).__app = this;
     this.board.setViewMode(this.viewMode);
     this.previewCtl = new CardPreviewController(this);
-    this.hoverMachine = new HoverStateMachine(this.terrainPanel, this);
+    this.hoverMachine = new HoverStateMachine(this.terrainPanel, createHoverHost(this));
     this.actionLogPanel = new ActionLogPanel(this);
     this.interaction = new InteractionController(this);
     this.boardCtl = new BoardCoordinator(this);
@@ -252,10 +206,6 @@ class App {
   renderTerrainPanel(): void { this.hoverMachine.renderTerrainPanel(); }
   /** @internal App → App.onMessage */
   syncSelectionToState(): void { this.interaction.syncSelectionToState(); }
-  /** @internal BoardCoordinator */
-  setDrawPileEl(el: HTMLElement | null): void { this.dom.drawPileEl = el; }
-  /** @internal BoardCoordinator */
-  setDiscardPileEl(el: HTMLElement | null): void { this.dom.discardPileEl = el; }
   /** @internal App → HoverStateMachine */
   hexAt(c: Axial): Hex | undefined {
     return this.state?.hexes.find((h) => h.q === c.q && h.r === c.r);
