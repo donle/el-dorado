@@ -29,6 +29,7 @@ import {
   MAP_OPTIONS,
   type GameState,
   type RoomView,
+  type ClientMessage,
   type ServerMessage,
   type Hex,
   type Axial,
@@ -49,6 +50,7 @@ import { InteractionController } from './controllers/InteractionController.js';
 import { BoardCoordinator } from './controllers/BoardCoordinator.js';
 import { PlayerHandPanel } from './controllers/PlayerHandPanel.js';
 import { OverlaysController } from './controllers/OverlaysController.js';
+import { SettingsMenuController } from './controllers/SettingsMenuController.js';
 
 const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
 const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
@@ -112,6 +114,8 @@ class App {
   private playerHandCtl!: PlayerHandPanel;
   // transient-UI overlays: flash / system dialog / sheet dismiss / game-over (C2)
   private overlays!: OverlaysController;
+  // in-game settings menu (view mode + AI delay + exit) (C3 extraction)
+  private settingsCtl!: SettingsMenuController;
 
   // --- HoverHost accessors (consumed by HoverStateMachine) ---
   // Thin getters / module-helper wrappers so HoverStateMachine doesn't
@@ -176,13 +180,11 @@ class App {
   fallbackCardDefId(cardId: string): string { return fallbackCardDefId(cardId); }
 
   viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
-  /** Host's preferred per-action AI delay in ms (default 1s), persisted locally. */
-  aiDelay = Number(localStorage.getItem('eldorado.aiDelay')) || 1000;
+  /** Host's preferred per-action AI delay in ms lives in SettingsMenuController (C3). */
   error = '';
   /** Which mobile overlay is open (null = none). */
   mobilePanel: 'players' | 'market' | 'log' | null = null;
-  /** Whether the in-game settings dropdown is open. */
-  private settingsOpen = false;
+  // settingsOpen lives in SettingsMenuController (C3 extraction).
   // systemDialog moved to OverlaysController (C2 extraction).
 
   /** @internal OverlaysController reads `hud` to mount the game-over overlay. */
@@ -220,6 +222,7 @@ class App {
     this.boardCtl = new BoardCoordinator(this);
     this.playerHandCtl = new PlayerHandPanel(this);
     this.overlays = new OverlaysController(this);
+    this.settingsCtl = new SettingsMenuController(this);
     this.board.onHexHover = (c) => this.hoverMachine.onHexHover(c);
     this.board.onHexClick = (c) => this.hoverMachine.onHexClick(c);
     this.board.onBlockadeHover = (id) => this.hoverMachine.onBlockadeHover(id);
@@ -342,6 +345,8 @@ class App {
   setMobilePanel(p: 'players' | 'market' | 'log' | null): void { this.mobilePanel = p; }
   /** @internal InteractionController */
   sendAction(action: Action): void { this.act(action); }
+  /** @internal SettingsMenuController (setAiDelay) */
+  send(msg: ClientMessage): void { this.net.send(msg); }
   /** @internal InteractionController */
   renderTerrainPanel(): void { this.hoverMachine.renderTerrainPanel(); }
   /** @internal App → App.onMessage */
@@ -474,88 +479,7 @@ class App {
     this.renderHud();
   }
 
-  private toggleViewMode(): void {
-    this.viewMode = this.viewMode === '3d' ? '2d' : '3d';
-    localStorage.setItem('eldorado.viewMode', this.viewMode);
-    this.board.setViewMode(this.viewMode);
-    this.renderHud();
-  }
-
-  private setViewMode(mode: '3d' | '2d'): void {
-    if (mode === this.viewMode) return;
-    this.toggleViewMode(); // only two modes; flips and re-renders (keeps menu open)
-  }
-
-  private toggleSettings(): void {
-    this.settingsOpen = !this.settingsOpen;
-    this.renderHud();
-  }
-
-  /** In-game settings modal: view mode + exit, blocking game interaction behind it. */
-  private renderSettingsMenu(s: GameState): void {
-    const scrim = el('div', 'settings-scrim');
-    scrim.onclick = () => {
-      this.settingsOpen = false;
-      this.renderHud();
-    };
-    this.hud.appendChild(scrim);
-
-    const menu = el('div', 'settings-menu panel');
-    menu.innerHTML = `
-      <button class="settings-close" aria-label="关闭设置">×</button>
-      <div class="settings-head">探险设置</div>
-      <div class="settings-group">
-        <span class="settings-label">视图模式</span>
-        <div class="seg" role="group" aria-label="视图模式">
-          <button class="seg-btn ${this.viewMode === '3d' ? 'on' : ''}" data-v="3d">3D</button>
-          <button class="seg-btn ${this.viewMode === '2d' ? 'on' : ''}" data-v="2d">2D</button>
-        </div>
-      </div>
-      <div class="settings-group">
-        <span class="settings-label">AI 行动间隔</span>
-        <div class="settings-delay">
-          <input type="range" class="delay-range" min="0" max="10" step="0.5"
-                 value="${(((this.room?.aiDelayMs ?? 1000) / 1000)).toFixed(1)}"
-                 style="--fill:${(((this.room?.aiDelayMs ?? 1000) / 1000) / 10 * 100).toFixed(1)}%"
-                 ${this.room?.hostId === this.you ? '' : 'disabled'} />
-          <span class="delay-value">${(((this.room?.aiDelayMs ?? 1000) / 1000)).toFixed(1)}<i>s</i></span>
-        </div>
-        ${this.room?.hostId === this.you ? '' : '<span class="settings-hint">仅房主可调整</span>'}
-      </div>`;
-    menu.querySelector<HTMLButtonElement>('.settings-close')!.onclick = () => {
-      this.settingsOpen = false;
-      this.renderHud();
-    };
-    menu.querySelectorAll<HTMLButtonElement>('.seg-btn').forEach((b) => {
-      b.onclick = () => this.setViewMode(b.dataset.v as '3d' | '2d');
-    });
-    const range = menu.querySelector<HTMLInputElement>('.delay-range');
-    const valueLabel = menu.querySelector<HTMLSpanElement>('.delay-value');
-    if (range) {
-      range.oninput = () => {
-        const secs = Number(range.value);
-        range.style.setProperty('--fill', `${(secs / 10) * 100}%`);
-        if (valueLabel) valueLabel.innerHTML = `${secs.toFixed(1)}<i>s</i>`;
-      };
-      range.onchange = () => {
-        if (this.room?.hostId !== this.you) return;
-        const ms = Math.round(Number(range.value) * 1000);
-        this.aiDelay = ms;
-        localStorage.setItem('eldorado.aiDelay', String(ms));
-        this.net.send({ type: 'setAiDelay', ms });
-      };
-    }
-    if (s.phase === 'playing') {
-      const exit = button('退出游戏', () => {
-        this.settingsOpen = false;
-        this.leaveRoom();
-      });
-      exit.className = 'danger settings-exit';
-      exit.title = '退出本局，AI 将接管你的座位';
-      menu.appendChild(exit);
-    }
-    this.hud.appendChild(menu);
-  }
+  // toggleViewMode / setViewMode / toggleSettings / renderSettingsMenu live in SettingsMenuController (C3).
 
   // flash + flashTimer + attachSheetDismiss + renderGameOverOverlay live in OverlaysController (C2).
 
@@ -762,8 +686,8 @@ class App {
     this.shopEls.clear();
 
     const gearDock = el('div', 'settings-dock');
-    const gear = button('⚙', () => this.toggleSettings(), true);
-    gear.className = `settings-gear ${this.settingsOpen ? 'active' : ''}`;
+    const gear = button('⚙', () => this.settingsCtl.toggleSettings(), true);
+    gear.className = `settings-gear ${this.settingsCtl.isOpen() ? 'active' : ''}`;
     gear.title = '设置';
     gearDock.appendChild(gear);
     this.hud.appendChild(gearDock);
@@ -779,7 +703,7 @@ class App {
       <div class="hint-inline">${this.viewMode === '2d' ? '2D 俯视 · 拖拽平移 · 滚轮缩放' : '滚轮缩放 · 拖拽平移 · 右键转视角'}</div>`;
     this.hud.appendChild(top);
 
-    if (this.settingsOpen) this.renderSettingsMenu(s);
+    if (this.settingsCtl.isOpen()) this.settingsCtl.renderSettingsMenu(s);
 
     // --- mobile toolbar (log + market sheet toggles) ---
     const toolbar = el('div', 'mobile-toolbar');
