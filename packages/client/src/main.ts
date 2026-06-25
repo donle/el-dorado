@@ -33,7 +33,6 @@ import {
   cardDefId,
   findCardDefId,
   fallbackCardDefId,
-  MAP_OPTIONS,
   type GameState,
   type RoomView,
   type ClientMessage,
@@ -59,14 +58,6 @@ import { PlayerHandPanel } from './controllers/PlayerHandPanel.js';
 import { OverlaysController } from './controllers/OverlaysController.js';
 import { SettingsMenuController } from './controllers/SettingsMenuController.js';
 import { SessionController } from './controllers/SessionController.js';
-
-const MAP_OPTION_IDS = new Set(MAP_OPTIONS.map((m) => m.id));
-const DEFAULT_MAP_ID = MAP_OPTION_IDS.has('official-first') ? 'official-first' : 'classic';
-const START_COUNTDOWN_MS = 5000;
-
-function safeMapId(id: string | null): string {
-  return id && MAP_OPTION_IDS.has(id) ? id : DEFAULT_MAP_ID;
-}
 
 class App {
   net: ISocketPort = new WebSocketAdapter(WebSocketAdapter.defaultUrl());
@@ -329,39 +320,6 @@ class App {
 
   // --- selection / input dispatch lives in InteractionController (B3) ---
 
-  // Forwarders consumed by the renderer (renderHud) and external callers.
-  // Keeping them as thin wrappers avoids rewriting every call site that
-  // already says `this.onCardClick(...)` or `this.marketNeedsPromotion(s)`.
-  private onCardClick(cardId: string): void { this.interaction.onCardClick(cardId); }
-  private onMarketClick(defId: string): void { this.interaction.onMarketClick(defId); }
-  private usesMarketPreviewFlow(): boolean { return this.interaction.usesMarketPreviewFlow(); }
-  private previewMarketCard(defId: string): void { this.interaction.previewMarketCard(defId); }
-  private selectMarketPreviewCard(): void { this.interaction.selectMarketPreviewCard(); }
-  private canSelectMarketPreview(defId: string): boolean { return this.interaction.canSelectMarketPreview(defId); }
-  private selectedActionCards() { return this.interaction.selectedActionCards(); }
-  private selectedActionCard() { return this.interaction.selectedActionCard(); }
-  private selectedActionRemoveIds(actionCardId: string): string[] {
-    return this.interaction.selectedActionRemoveIds(actionCardId);
-  }
-  private removeLimitForAbility(ability: string | undefined): number {
-    return this.interaction.removeLimitForAbility(ability);
-  }
-  private selectedActionUseLabel(compact = false): string {
-    return this.interaction.selectedActionUseLabel(compact);
-  }
-  private handActionUseLabel(def: ReturnType<typeof getDef>): string {
-    return this.interaction.handActionUseLabel(def);
-  }
-  private canUseSelectedAction(): boolean { return this.interaction.canUseSelectedAction(); }
-  private useActionCardFromHand(cardId: string): void { this.interaction.useActionCardFromHand(cardId); }
-  private useSelectedAction(): void { this.interaction.useSelectedAction(); }
-  private promoteMarket(defId: string): void { this.interaction.promoteMarket(defId); }
-  private confirmPromoteMarket(): void { this.interaction.confirmPromoteMarket(); }
-  private confirmBuy(): void { this.interaction.confirmBuy(); }
-  private confirmRemoveAfterDraw(): void { this.interaction.confirmRemoveAfterDraw(); }
-  private confirmTrim(): void { this.interaction.confirmTrim(); }
-  private cancelMode(): void { this.interaction.cancelMode(); }
-
   /** @internal OverlaysController (sheet-dismiss) + renderHud (scrim click) — forwards. */
   closeMobilePanel(): void { this.sessionCtl.closeMobilePanel(); }
 
@@ -396,11 +354,11 @@ class App {
   /** @internal ActionLogPanel → preview card chip on hover/click. */
   attachPreview(node: HTMLElement, defId: string): void {
     node.addEventListener('mouseenter', () => {
-      if (this.usesMarketPreviewFlow()) return;
+      if (this.interaction.usesMarketPreviewFlow()) return;
       this.showPreview(node, defId);
     });
     node.addEventListener('mouseleave', () => {
-      if (this.usesMarketPreviewFlow()) return;
+      if (this.interaction.usesMarketPreviewFlow()) return;
       if (this.isPinned()) this.refreshPinnedPreview();
       else this.hidePreview();
     });
@@ -433,18 +391,18 @@ class App {
   /** @internal ActionLogPanel → mobile tap-to-preview. */
   showPreview(anchor: HTMLElement, defId: string): void {
     const compactLandscape = this.mobileLayout.isCompactLandscape();
-    const marketPreview = this.usesMarketPreviewFlow();
+    const marketPreview = this.interaction.usesMarketPreviewFlow();
 
     this.preview.innerHTML = previewHtml(defId);
     this.preview.classList.toggle('from-log', this.mobilePanel === 'log');
-    const actionableMarketPreview = marketPreview && this.interaction.marketPreviewDefId === defId && this.canSelectMarketPreview(defId);
+    const actionableMarketPreview = marketPreview && this.interaction.marketPreviewDefId === defId && this.interaction.canSelectMarketPreview(defId);
     this.preview.classList.toggle('actionable', actionableMarketPreview);
     if (actionableMarketPreview) {
       const pile = this.state?.market.find((m) => m.defId === defId);
       const promote = !!pile && !pile.onBoard && this.marketNeedsPromotion(this.state!) && !this.state!.turn?.hasBought;
       const def = getDef(defId);
       const label = promote ? `放入市场 · ${def.cost}💰` : `选为购买目标 · ${def.cost}💰`;
-      const select = button(label, () => this.selectMarketPreviewCard(), false);
+      const select = button(label, () => this.interaction.selectMarketPreviewCard(), false);
       select.className = 'preview-select-card';
       this.preview.appendChild(select);
     }
@@ -598,8 +556,8 @@ class App {
     const upcoming = s.market.filter((m) => !m.onBoard && m.count > 0);
     const needsPromotion = onBoard.length < 6 && upcoming.length > 0;
     const canPromote = myTurn && needsPromotion && !s.turn?.hasBought;
-    const freeTakeAction = this.selectedActionCard()?.def.ability === 'take_free';
-    const inlineMarketDetailDefId = this.usesMarketPreviewFlow()
+    const freeTakeAction = this.interaction.selectedActionCard()?.def.ability === 'take_free';
+    const inlineMarketDetailDefId = this.interaction.usesMarketPreviewFlow()
       ? this.interaction.marketPreviewDefId ?? this.interaction.buyTargetDefId ?? this.interaction.promoteTargetDefId
       : null;
     const selectedCoinSum = [...this.interaction.selected].reduce((sum, id) => sum + coinValue(cardDefId(id, s)), 0);
@@ -612,7 +570,7 @@ class App {
         buyTargetDefId: this.interaction.buyTargetDefId,
         promoteTargetDefId: this.interaction.promoteTargetDefId,
         marketPreviewDefId: this.interaction.marketPreviewDefId,
-        usesMarketPreviewFlow: this.usesMarketPreviewFlow(),
+        usesMarketPreviewFlow: this.interaction.usesMarketPreviewFlow(),
         canPromote,
         needsPromotion,
         freeTakeAction,
@@ -623,10 +581,10 @@ class App {
       },
       {
         onSlotRendered: (slotEl, defId) => this.shopEls.set(defId, slotEl),
-        onMarketClick: (defId) => this.onMarketClick(defId),
-        previewMarketCard: (defId) => this.previewMarketCard(defId),
-        confirmPromoteMarket: () => this.confirmPromoteMarket(),
-        confirmBuy: () => this.confirmBuy(),
+        onMarketClick: (defId) => this.interaction.onMarketClick(defId),
+        previewMarketCard: (defId) => this.interaction.previewMarketCard(defId),
+        confirmPromoteMarket: () => this.interaction.confirmPromoteMarket(),
+        confirmBuy: () => this.interaction.confirmBuy(),
         cancelDrawerBuy: () => {
           this.interaction.buyTargetDefId = null;
           this.interaction.promoteTargetDefId = null;
@@ -637,7 +595,7 @@ class App {
         attachPreview: (node, defId) => this.attachPreview(node, defId),
         attachSheetDismiss: (panel) => this.overlays.attachSheetDismiss(panel),
         renderInlineDetail: (defId) => marketInlineDetailHtml(defId),
-        canSelectMarketPreview: (defId) => this.canSelectMarketPreview(defId),
+        canSelectMarketPreview: (defId) => this.interaction.canSelectMarketPreview(defId),
       },
     );
     this.hud.appendChild(market);
@@ -667,15 +625,15 @@ class App {
         phase: s.phase,
         selectedIds: this.interaction.selected,
         modeIsRemove: this.interaction.mode === 'remove',
-        useLabelFor: (defId) => this.handActionUseLabel(getDef(defId)),
+        useLabelFor: (defId) => this.interaction.handActionUseLabel(getDef(defId)),
         defIdFor: (cardId) => cardDefId(cardId, s),
         attachPreview: (node, defId) => this.attachPreview(node, defId),
       },
       {
-        onCardClick: (cardId) => this.onCardClick(cardId),
+        onCardClick: (cardId) => this.interaction.onCardClick(cardId),
         onUseClick: (cardId, ev) => {
           ev.stopPropagation();
-          this.useActionCardFromHand(cardId);
+          this.interaction.useActionCardFromHand(cardId);
         },
       },
     );
@@ -684,15 +642,15 @@ class App {
       for (const c of me.hand) this.handEls.set(c.id, tray.querySelector<HTMLElement>(`.card.${getDef(c.defId).kind}`) ?? tray);
     }
 
-    const turnActionCards = this.selectedActionCards();
+    const turnActionCards = this.interaction.selectedActionCards();
     const turnActionCard = turnActionCards.length === 1 ? turnActionCards[0] : null;
     const turnActionPrompt: ActionCardPrompt | null = turnActionCard
       ? {
           count: 1,
           name: turnActionCard.def.name,
           ability: turnActionCard.def.ability,
-          removeLimit: this.removeLimitForAbility(turnActionCard.def.ability),
-          removeSelectedCount: this.selectedActionRemoveIds(turnActionCard.id).length,
+          removeLimit: this.interaction.removeLimitForAbility(turnActionCard.def.ability),
+          removeSelectedCount: this.interaction.selectedActionRemoveIds(turnActionCard.id).length,
         }
       : turnActionCards.length > 1
         ? { count: turnActionCards.length, name: '', ability: '', removeLimit: 0, removeSelectedCount: 0 }
@@ -703,11 +661,11 @@ class App {
     const turnHasActionCards = turnActionCards.length > 0 || !!this.interaction.nativeActionCardId;
     const turnUseLabel = this.interaction.nativeActionCardId
       ? (turnCompact ? '选目标' : '选择向导目标')
-      : this.selectedActionUseLabel(turnCompact);
+      : this.interaction.selectedActionUseLabel(turnCompact);
     const turnRemoveCount = this.selectedHandCardIds().length;
     const turnHandSize = me?.hand.length ?? 0;
     const turnTrimMin = Math.max(0, turnHandSize - HAND_SIZE);
-    const turnTakeFree = this.selectedActionCard()?.def.ability === 'take_free';
+    const turnTakeFree = this.interaction.selectedActionCard()?.def.ability === 'take_free';
     const turnMarketNeedsPromotion = this.marketNeedsPromotion(s);
     const turnClearCost = this.interaction.clearBlockadeId
       ? this.blockadeById(this.interaction.clearBlockadeId)?.cost ?? 0
@@ -733,7 +691,7 @@ class App {
         actionPrompt: turnActionPrompt,
         useLabel: turnUseLabel,
         useDisabled: !!this.interaction.nativeActionCardId,
-        canUseAction: this.canUseSelectedAction(),
+        canUseAction: this.interaction.canUseSelectedAction(),
         removeCount: turnRemoveCount,
         trimSel: turnRemoveCount,
         trimMin: turnTrimMin,
@@ -744,12 +702,12 @@ class App {
         clearIsBlockade: !!this.interaction.clearBlockadeId,
       },
       {
-        onConfirmRemove: () => this.confirmRemoveAfterDraw(),
-        onCancelMode: () => this.cancelMode(),
-        onConfirmTrim: () => this.confirmTrim(),
-        onConfirmPromote: () => this.confirmPromoteMarket(),
-        onConfirmBuy: () => this.confirmBuy(),
-        onUseAction: () => this.useSelectedAction(),
+        onConfirmRemove: () => this.interaction.confirmRemoveAfterDraw(),
+        onCancelMode: () => this.interaction.cancelMode(),
+        onConfirmTrim: () => this.interaction.confirmTrim(),
+        onConfirmPromote: () => this.interaction.confirmPromoteMarket(),
+        onConfirmBuy: () => this.interaction.confirmBuy(),
+        onUseAction: () => this.interaction.useSelectedAction(),
         onEndTurn: () => this.act({ type: 'EndTurn' }),
         onDiscard: () => {
           if (this.interaction.selected.size === 0) return;
