@@ -61,9 +61,10 @@ export interface ActionLogHost {
   readonly mobileLayout: MobileLayoutLike;
 
   /** Wrap a card chip with the standard hover/click preview behavior. */
-  attachPreview(node: HTMLElement, defId: string): void;
-  /** Force a preview popover to open on the given anchor. */
-  showPreview(anchor: HTMLElement, defId: string): void;
+  previewCtl: {
+    attachPreview(node: HTMLElement, defId: string): void;
+    showPreview(anchor: HTMLElement, defId: string): void;
+  };
 
   // Card def lookup — implementations of these helpers live in main.ts.
   findCardDefId(cardId: string, state: GameState): string | null;
@@ -396,12 +397,12 @@ export class ActionLogPanel {
           const classes: string[] = [];
           if (segment.defId) {
             classes.push('action-log-card');
-            this.host.attachPreview(node, segment.defId);
+            this.host.previewCtl.attachPreview(node, segment.defId);
             node.addEventListener('click', (ev) => {
               if (!this.host.mobileLayout.isMobileDevice()) return;
               ev.preventDefault();
               ev.stopPropagation();
-              this.host.showPreview(node, segment.defId!);
+              this.host.previewCtl.showPreview(node, segment.defId!);
             });
           }
           if (segment.coord || segment.blockadeId) {

@@ -94,8 +94,7 @@ export interface HoverHost {
   cardDefId(cardId: string, state: GameState): string;
 
   // --- UI coordination ---
-  hidePreview(): void;
-  refreshPinnedPreview(): void;
+  previewCtl: { hidePreview(): void; refreshPinnedPreview(): void };
 
   // --- action dispatch (B3 will own these) ---
   tryActOnHex(c: Axial): boolean;
@@ -135,7 +134,7 @@ export class HoverStateMachine {
     this.hoveredTerrain = c;
     if (c) this.hoveredBlockadeId = null;
     this.renderTerrainPanel();
-    if (!c && !this.pinnedTerrain && !this.pinnedBlockadeId) this.host.refreshPinnedPreview();
+    if (!c && !this.pinnedTerrain && !this.pinnedBlockadeId) this.host.previewCtl.refreshPinnedPreview();
   }
 
   onHexClick(c: Axial): void {
@@ -147,7 +146,7 @@ export class HoverStateMachine {
       this.host.board.setInspectedHex(null);
       this.host.board.clearHover();
       this.renderTerrainPanel();
-      this.host.refreshPinnedPreview();
+      this.host.previewCtl.refreshPinnedPreview();
       return;
     }
 
@@ -167,7 +166,7 @@ export class HoverStateMachine {
     this.hoveredBlockadeId = id;
     if (id) this.hoveredTerrain = null;
     this.renderTerrainPanel();
-    if (!id && !this.pinnedTerrain && !this.pinnedBlockadeId) this.host.refreshPinnedPreview();
+    if (!id && !this.pinnedTerrain && !this.pinnedBlockadeId) this.host.previewCtl.refreshPinnedPreview();
   }
 
   onBlockadeClick(id: string): void {
@@ -179,7 +178,7 @@ export class HoverStateMachine {
       this.host.board.setInspectedBlockade(null);
       this.host.board.clearHover();
       this.renderTerrainPanel();
-      this.host.refreshPinnedPreview();
+      this.host.previewCtl.refreshPinnedPreview();
       return;
     }
 
@@ -205,7 +204,7 @@ export class HoverStateMachine {
     this.host.board.setInspectedBlockade(null);
     this.host.board.clearInfoHover();
     this.renderTerrainPanel();
-    this.host.refreshPinnedPreview();
+    this.host.previewCtl.refreshPinnedPreview();
   }
 
   /** Click on a coord/blockade in the action log → preview it
@@ -237,7 +236,7 @@ export class HoverStateMachine {
       this.hoveredBlockadeId = null;
       this.host.board.clearInfoHover();
       this.renderTerrainPanel();
-      if (!this.pinnedTerrain && !this.pinnedBlockadeId) this.host.refreshPinnedPreview();
+      if (!this.pinnedTerrain && !this.pinnedBlockadeId) this.host.previewCtl.refreshPinnedPreview();
     }, 80);
   }
 
@@ -256,7 +255,7 @@ export class HoverStateMachine {
         this.hoveredTerrain = null;
         this.hoveredBlockadeId = null;
         this.renderTerrainPanel();
-        this.host.refreshPinnedPreview();
+        this.host.previewCtl.refreshPinnedPreview();
       }
     };
     if (this.panel.matches(':hover')) enter();
@@ -291,7 +290,7 @@ export class HoverStateMachine {
       return;
     }
 
-    this.host.hidePreview();
+    this.host.previewCtl.hidePreview();
     if (activeBlockade) {
       const terrain = blockadeTerrain(activeBlockade);
       const info = blockadeInfo(activeBlockade);

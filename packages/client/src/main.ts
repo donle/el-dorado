@@ -58,6 +58,7 @@ import { PlayerHandPanel } from './controllers/PlayerHandPanel.js';
 import { OverlaysController } from './controllers/OverlaysController.js';
 import { SettingsMenuController } from './controllers/SettingsMenuController.js';
 import { SessionController } from './controllers/SessionController.js';
+import { CardPreviewController } from './controllers/CardPreviewController.js';
 
 class App {
   net: ISocketPort = new WebSocketAdapter(WebSocketAdapter.defaultUrl());
@@ -155,7 +156,6 @@ class App {
   // can call `endStarting()` / `render()` / `notifyLeftRoom()` during
   // leaveRoom / onRoomClosed.
   readonly lobbyCtl = new LobbyController({ socket: this.net, store: this.store });
-  private preview = el('div', 'card-preview inspector-popover panel hidden');
   private terrainPanel = el('div', 'terrain-panel inspector-popover panel hidden');
   /** @internal BoardCoordinator reads these for animateBuy / refreshPinnedPreview. */
   readonly handEls = new Map<string, HTMLElement>();
@@ -175,15 +175,17 @@ class App {
   // `readonly` (not `private`) so SessionController's host interface
   // can call `resetActionLog()` during clearRoomState.
   readonly actionLogPanel!: ActionLogPanel;
+  /** Card preview popover subsystem (G3 extraction). */
+  readonly previewCtl: CardPreviewController = undefined!;
 
   constructor(BoardClass: BoardConstructor) {
     this.mobileLayout.setupMobileLayoutClasses();
-    document.body.appendChild(this.preview);
     document.body.appendChild(this.terrainPanel);
     this.board = new BoardClass(document.getElementById('board') as HTMLCanvasElement);
     (window as unknown as { __board: BoardInstance }).__board = this.board;
     (window as unknown as { __app: App }).__app = this;
     this.board.setViewMode(this.viewMode);
+    this.previewCtl = new CardPreviewController(this);
     this.hoverMachine = new HoverStateMachine(this.terrainPanel, this);
     this.actionLogPanel = new ActionLogPanel(this);
     this.interaction = new InteractionController(this);
@@ -242,7 +244,8 @@ class App {
     return !!this.state && this.state.phase === 'playing' && this.state.turn?.playerId === this.you;
   }
 
-  private marketNeedsPromotion(state: GameState): boolean {
+  /** @internal CardPreviewController uses this to branch actionable market preview. */
+  marketNeedsPromotion(state: GameState): boolean {
     return this.interaction.marketNeedsPromotion(state);
   }
   /** @internal InteractionController */
@@ -334,116 +337,7 @@ class App {
 
   // attachSheetDismiss lives in OverlaysController (C2 extraction).
 
-  // --- card preview (hover on desktop; pinned on selection for touch) ---
-
-  /** A card is "pinned" while it's selected — its preview stays open. */
-  private isPinned(): boolean {
-    return this.interaction.isPinned();
-  }
-
-  /** @internal ActionLogPanel → preview card chip on hover/click. */
-  attachPreview(node: HTMLElement, defId: string): void {
-    node.addEventListener('mouseenter', () => {
-      if (this.interaction.usesMarketPreviewFlow()) return;
-      this.showPreview(node, defId);
-    });
-    node.addEventListener('mouseleave', () => {
-      if (this.interaction.usesMarketPreviewFlow()) return;
-      if (this.isPinned()) this.refreshPinnedPreview();
-      else this.hidePreview();
-    });
-  }
-
-  /** Show the preview for the currently-selected card, anchored to its element. */
-  /** @internal App → HoverStateMachine */
-  refreshPinnedPreview(): void {
-    const ix = this.interaction;
-    if (ix.selected.size === 1 && this.state) {
-      const id = [...ix.selected][0];
-      const node = this.handEls.get(id);
-      if (node) return this.showPreview(node, cardDefId(id, this.state));
-    }
-    if (ix.buyTargetDefId) {
-      const node = this.shopEls.get(ix.buyTargetDefId);
-      if (node) return this.showPreview(node, ix.buyTargetDefId);
-    }
-    if (ix.promoteTargetDefId) {
-      const node = this.shopEls.get(ix.promoteTargetDefId);
-      if (node) return this.showPreview(node, ix.promoteTargetDefId);
-    }
-    if (ix.marketPreviewDefId) {
-      const node = this.shopEls.get(ix.marketPreviewDefId);
-      if (node) return this.showPreview(node, ix.marketPreviewDefId);
-    }
-    this.hidePreview();
-  }
-
-  /** @internal ActionLogPanel → mobile tap-to-preview. */
-  showPreview(anchor: HTMLElement, defId: string): void {
-    const compactLandscape = this.mobileLayout.isCompactLandscape();
-    const marketPreview = this.interaction.usesMarketPreviewFlow();
-
-    this.preview.innerHTML = previewHtml(defId);
-    this.preview.classList.toggle('from-log', this.mobilePanel === 'log');
-    const actionableMarketPreview = marketPreview && this.interaction.marketPreviewDefId === defId && this.interaction.canSelectMarketPreview(defId);
-    this.preview.classList.toggle('actionable', actionableMarketPreview);
-    if (actionableMarketPreview) {
-      const pile = this.state?.market.find((m) => m.defId === defId);
-      const promote = !!pile && !pile.onBoard && this.marketNeedsPromotion(this.state!) && !this.state!.turn?.hasBought;
-      const def = getDef(defId);
-      const label = promote ? `放入市场 · ${def.cost}💰` : `选为购买目标 · ${def.cost}💰`;
-      const select = button(label, () => this.interaction.selectMarketPreviewCard(), false);
-      select.className = 'preview-select-card';
-      this.preview.appendChild(select);
-    }
-    const pr = this.preview.getBoundingClientRect();
-    if (marketPreview) {
-      const marketRect = document.querySelector<HTMLElement>('.market-panel.open')?.getBoundingClientRect();
-      const actionRect = document.querySelector<HTMLElement>('.action-bar')?.getBoundingClientRect();
-      const marketIsDrawer = !!marketRect && marketRect.width < window.innerWidth * 0.7;
-      if (compactLandscape && marketIsDrawer) {
-        const leftLimit = (actionRect?.right ?? 0) + 8;
-        const rightLimit = marketRect.left - 8;
-        const available = Math.max(0, rightLimit - leftLimit);
-        const x = available >= pr.width ? rightLimit - pr.width : Math.max(8, rightLimit - pr.width);
-        const y = 48;
-        this.preview.style.left = `${Math.max(8, Math.min(x, window.innerWidth - pr.width - 8))}px`;
-        this.preview.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
-      } else {
-        const x = window.innerWidth / 2 - pr.width / 2;
-        const y = 12;
-        this.preview.style.left = `${Math.max(8, Math.min(x, window.innerWidth - pr.width - 8))}px`;
-        this.preview.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
-      }
-      this.preview.classList.remove('hidden');
-      return;
-    }
-    if (compactLandscape) {
-      const x = window.innerWidth - pr.width - 8;
-      const y = 48;
-      this.preview.style.left = `${Math.max(8, x)}px`;
-      this.preview.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
-      this.preview.classList.remove('hidden');
-      return;
-    }
-
-    // Dock every card preview (hand, market and action log) to the same left
-    // inspector position used by terrain hover details.
-    let x = 14;
-    let y = 76;
-    x = Math.max(10, Math.min(x, window.innerWidth - pr.width - 10));
-    y = Math.max(10, Math.min(y, window.innerHeight - pr.height - 10));
-    this.preview.style.left = `${x}px`;
-    this.preview.style.top = `${y}px`;
-    this.preview.classList.remove('hidden');
-  }
-
-  /** @internal App → HoverStateMachine */
-  hidePreview(): void {
-    this.preview.classList.add('hidden');
-    this.preview.classList.remove('actionable');
-    this.preview.classList.remove('from-log');
-  }
+  // --- card preview subsystem lives in CardPreviewController (G3 extraction) ---
 
   // --- player hand inspector lives in PlayerHandPanel (C1 extraction) ---
 
@@ -481,7 +375,7 @@ class App {
   // `this.hoverMachine.showLogTerrainPreview(...)`.
 
   renderHud(): void {
-    this.hidePreview();
+    this.previewCtl.hidePreview();
     const previousMarketScrollTop = this.mobilePanel === 'market'
       ? this.hud.querySelector<HTMLElement>('.market-panel.open')?.scrollTop ?? null
       : null;
@@ -582,7 +476,7 @@ class App {
           this.interaction.hint = '';
           this.renderHud();
         },
-        attachPreview: (node, defId) => this.attachPreview(node, defId),
+        attachPreview: (node, defId) => this.previewCtl.attachPreview(node, defId),
         attachSheetDismiss: (panel) => this.overlays.attachSheetDismiss(panel),
         renderInlineDetail: (defId) => marketInlineDetailHtml(defId),
         canSelectMarketPreview: (defId) => this.interaction.canSelectMarketPreview(defId),
@@ -617,7 +511,7 @@ class App {
         modeIsRemove: this.interaction.mode === 'remove',
         useLabelFor: (defId) => this.interaction.handActionUseLabel(getDef(defId)),
         defIdFor: (cardId) => cardDefId(cardId, s),
-        attachPreview: (node, defId) => this.attachPreview(node, defId),
+        attachPreview: (node, defId) => this.previewCtl.attachPreview(node, defId),
       },
       {
         onCardClick: (cardId) => this.interaction.onCardClick(cardId),
@@ -723,7 +617,7 @@ class App {
     this.hud.appendChild(bar); // floats bottom-right
 
     // Keep the selected card's preview open (no hover needed — for touch).
-    this.refreshPinnedPreview();
+    this.previewCtl.refreshPinnedPreview();
 
     if (this.error) {
       const t = el('div', 'toast');
