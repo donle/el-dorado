@@ -6,7 +6,7 @@ export * from './cards.js';
 export * from './setup.js';
 export * from './engine/index.js';
 export * from './protocol.js';
-export * from './ai.js';
+export * from './ai/index.js';
 export * from './movement.js';
 export * from './progress.js';
 export * from './terrain.js';

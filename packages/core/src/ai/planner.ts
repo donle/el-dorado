@@ -1,230 +1,31 @@
 /**
- * Greedy heuristic AI.
+ * ai/planner — turns a GameState + playerId into an ordered Action[] the
+ * server can apply through the same validated reducer humans use.
  *
- * 1. Pathfind to El Dorado minimising total terrain cost (Dijkstra), so the
- *    AI prefers cheap routes it can actually afford.
- * 2. Walk that path with the cheapest sufficient cards.
- * 3. If a hex blocks it, buy the cheapest market card that would let it enter
- *    (matching symbol / joker, power ≥ cost); otherwise build economy by
- *    buying the most valuable affordable card.
- *
- * `planTurn` returns a full action sequence (ending in EndTurn) that the
- * server applies through the same validated reducer humans use.
+ * Heuristic:
+ *   1. Pathfind to El Dorado minimising total terrain cost (Dijkstra).
+ *   2. Walk that path with the cheapest sufficient cards.
+ *   3. If a hex blocks it, buy the cheapest market card that would let it
+ *      enter (matching symbol / joker, power ≥ cost); otherwise build
+ *      economy by buying the most valuable affordable card.
  */
-import type { GameState, Player, Hex, MoveSymbol, Axial, Blockade, MarketPile, Terrain } from './types.js';
-import type { Action } from './actions.js';
-import { getDef, coinValue, movableSymbols, HAND_SIZE } from './cards.js';
-import { neighbors, key } from './hex.js';
-import { blockadeMoveSymbol, blockadeRequiresDiscard, isFinishEntrance, requiredFor, sameCoord } from './terrain.js';
-
-function enterCost(h: Hex): number {
-  if (h.terrain === 'start') return 1;
-  if (h.terrain === 'eldorado') return 0;
-  if (h.terrain === 'finish') return Math.max(h.cost, 1);
-  return h.cost;
-}
-
-function stepPathCost(h: Hex): number {
-  return h.terrain === 'eldorado' ? 0 : Math.max(enterCost(h), 1);
-}
-
-function crossesBlockadeEdge(blockade: Blockade, from: Axial, to: Axial): boolean {
-  const edges = blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
-  return edges.some(
-    (edge) =>
-      (sameCoord(edge.a, from) && sameCoord(edge.b, to)) || (sameCoord(edge.b, from) && sameCoord(edge.a, to)),
-  );
-}
-
-function blockadeBetween(state: GameState, from: Axial, to: Axial): Blockade | undefined {
-  return state.blockades.find((b) => crossesBlockadeEdge(b, from, to));
-}
-
-function hexAt(state: GameState, c: Axial): Hex | undefined {
-  return state.hexes.find((h) => h.q === c.q && h.r === c.r);
-}
-
-function isAdjacentCoord(a: Axial, b: Axial): boolean {
-  return neighbors(a).some((n) => sameCoord(n, b));
-}
-
-function canUseNativeBetween(
-  state: GameState,
-  p: Player,
-  from: Axial,
-  to: Hex,
-  openedBlockades: Set<string>,
-): boolean {
-  if (!isAdjacentCoord(from, to)) return false;
-  if (to.occupant && to.occupant !== p.id) return false;
-  const fromHex = hexAt(state, from);
-  if (to.terrain === 'eldorado' && !isFinishEntrance(fromHex ?? to)) return false;
-  const blockade = blockadeBetween(state, from, to);
-  return !blockade || !!blockade.claimedBy || openedBlockades.has(blockade.id);
-}
-
-type Capability = Record<MoveSymbol, number>;
-
-function isNativeCard(defId: string): boolean {
-  return getDef(defId).ability === 'native';
-}
-
-/** Best single-card power the player can field for each symbol (jokers count for all). */
-function capability(p: Player): Capability {
-  const cap: Capability = { machete: 0, paddle: 0, coin: 0 };
-  for (const c of [...p.deck, ...p.hand, ...p.discard]) {
-    const def = getDef(c.defId);
-    for (const s of movableSymbols(def.defId)) {
-      if (def.power > cap[s]) cap[s] = def.power;
-    }
-  }
-  return cap;
-}
-
-/** Whether the player could enter `h` at all given a capability + owned-card count. */
-function canTraverse(h: Hex, p: Player, cap: Capability, owned: number, hasNative: boolean): boolean {
-  if (h.occupant && h.occupant !== p.id) return false;
-  if (hasNative) return true;
-  if (h.terrain === 'mountain') return false;
-  if (h.terrain === 'eldorado') return true;
-  if (h.terrain === 'rubble' || h.terrain === 'basecamp') return owned >= h.cost;
-  if (h.terrain === 'green') return cap.machete >= h.cost;
-  if (h.terrain === 'blue') return cap.paddle >= h.cost;
-  if (h.terrain === 'yellow') return cap.coin >= h.cost;
-  if (h.terrain === 'finish') {
-    return h.reqSymbol ? cap[h.reqSymbol] >= Math.max(h.cost, 1) : cap.machete + cap.paddle + cap.coin > 0;
-  }
-  return cap.machete + cap.paddle + cap.coin > 0; // start
-}
-
-/** Lowest-cost hex path from start to El Dorado using a custom passability test. */
-export function pathToFinish(
-  state: GameState,
-  p: Player,
-  passable: (h: Hex) => boolean = (h) =>
-    h.terrain !== 'mountain' &&
-    (!h.occupant || h.occupant === p.id),
-  edgePassable: (from: Hex, to: Hex) => boolean = () => true,
-): Hex[] {
-  const targetTerrain: Terrain = state.hexes.some((h) => h.terrain === 'eldorado') ? 'eldorado' : 'finish';
-  const byKey = new Map(state.hexes.map((h) => [key(h), h]));
-  const blocked = (h: Hex) => !passable(h);
-
-  const startKey = key(p.position);
-  const dist = new Map<string, number>([[startKey, 0]]);
-  const prev = new Map<string, string | null>([[startKey, null]]);
-  const visited = new Set<string>();
-
-  let goal: string | null = null;
-  // Small graph → a simple O(V^2) Dijkstra is plenty.
-  while (true) {
-    let cur: string | null = null;
-    let best = Infinity;
-    for (const [k, d] of dist) {
-      if (!visited.has(k) && d < best) {
-        best = d;
-        cur = k;
-      }
-    }
-    if (cur === null) break;
-    visited.add(cur);
-    const curHex = byKey.get(cur)!;
-    if (curHex.terrain === targetTerrain) {
-      goal = cur;
-      break;
-    }
-    for (const n of neighbors(curHex)) {
-      const k = key(n);
-      const hex = byKey.get(k);
-      if (!hex || blocked(hex) || visited.has(k)) continue;
-      if (!edgePassable(curHex, hex)) continue;
-      if (hex.terrain === 'eldorado' && !isFinishEntrance(curHex)) continue;
-      const blockade = blockadeBetween(state, curHex, hex);
-      // First crossing of a symbol seam pays the seam AND the destination
-      // terrain; a discard seam pays only its discard; an open/absent seam pays
-      // the destination terrain alone.
-      let cost: number;
-      if (blockade && !blockade.claimedBy) {
-        cost = blockadeRequiresDiscard(blockade)
-          ? blockade.cost
-          : blockade.cost + stepPathCost(hex);
-      } else {
-        cost = stepPathCost(hex);
-      }
-      const nd = best + cost;
-      if (nd < (dist.get(k) ?? Infinity)) {
-        dist.set(k, nd);
-        prev.set(k, cur);
-      }
-    }
-  }
-  if (!goal) return [];
-
-  const path: Hex[] = [];
-  let at: string | null = goal;
-  while (at && at !== startKey) {
-    path.unshift(byKey.get(at)!);
-    at = prev.get(at) ?? null;
-  }
-  return path;
-}
-
-function declareSymbol(defId: string, required: MoveSymbol | null): MoveSymbol | null {
-  const can = movableSymbols(defId);
-  if (can.length === 0) return null;
-  if (required === null) return can[0];
-  return can.includes(required) ? required : null;
-}
-
-interface Need {
-  symbol: MoveSymbol | null;
-  cost: number;
-  ability?: 'native';
-}
-
-const MARKET_SLOTS = 6;
-
-function marketNeedsPromotion(state: GameState): boolean {
-  const active = state.market.filter((m) => m.onBoard && m.count > 0).length;
-  return active < MARKET_SLOTS && state.market.some((m) => !m.onBoard && m.count > 0);
-}
-
-function matchesNeed(defId: string, need: Need): boolean {
-  if (need.ability === 'native') return isNativeCard(defId);
-  const d = getDef(defId);
-  const syms = movableSymbols(d.defId);
-  const ok = need.symbol === null ? syms.length > 0 : syms.includes(need.symbol);
-  return ok && d.power >= need.cost;
-}
-
-function cheapestFirst(a: MarketPile, b: MarketPile): number {
-  return getDef(a.defId).cost - getDef(b.defId).cost;
-}
-
-function chooseMarketPromotion(state: GameState, coins: number, gap: Need | null): string | null {
-  if (!marketNeedsPromotion(state)) return null;
-  const reserve = state.market.filter((m) => !m.onBoard && m.count > 0);
-
-  if (gap) {
-    const useful = reserve.filter((m) => matchesNeed(m.defId, gap)).sort(cheapestFirst);
-    const affordableUseful = useful.filter((m) => getDef(m.defId).cost <= coins);
-    if (affordableUseful.length > 0) return affordableUseful[0].defId;
-    if (useful.length > 0) return useful[0].defId;
-  }
-
-  const affordable = reserve.filter((m) => getDef(m.defId).cost <= coins);
-  const econ = affordable
-    .filter((m) => coinValue(m.defId) >= 1)
-    .sort((a, b) => coinValue(b.defId) - coinValue(a.defId) || cheapestFirst(a, b));
-  if (econ.length > 0) return econ[0].defId;
-
-  const movement = affordable
-    .filter((m) => movableSymbols(m.defId).length > 0)
-    .sort(cheapestFirst);
-  if (movement.length > 0) return movement[0].defId;
-
-  return reserve.slice().sort(cheapestFirst)[0]?.defId ?? null;
-}
+import type { Axial, GameState, Hex, MoveSymbol } from '../types.js';
+import type { Action } from '../actions.js';
+import { coinValue, getDef, HAND_SIZE, movableSymbols } from '../cards.js';
+import { blockadeMoveSymbol, blockadeRequiresDiscard, requiredFor } from '../terrain.js';
+import {
+  blockadeBetween,
+  canTraverse,
+  canUseNativeBetween,
+  capability,
+  declareSymbol,
+  enterCost,
+  isNativeCard,
+  stepPathCost,
+  type Need,
+} from './helpers.js';
+import { pathToFinish } from './pathfinding.js';
+import { chooseMarketPromotion, matchesNeed } from './market.js';
 
 export function planTurn(state: GameState, playerId: string): Action[] {
   const p = state.players.find((x) => x.id === playerId);
