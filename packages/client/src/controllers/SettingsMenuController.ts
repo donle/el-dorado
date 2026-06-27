@@ -25,10 +25,10 @@ export interface SettingsMenuHost {
   readonly board: { setViewMode(mode: '3d' | '2d'): void };
   /** Re-render HUD after toggle / settings-open change. */
   renderHud(): void;
-  /** Exit current room (the "退出游戏" button calls this). */
-  leaveRoom(): void;
-  /** Send a client → server message (e.g. setAiDelay). */
-  send(message: ClientMessage): void;
+  /** Net adapter (settings "setAiDelay" message). */
+  readonly net: { send(msg: ClientMessage): void };
+  /** Session lifecycle (the "退出游戏" button calls leaveRoom). */
+  readonly sessionCtl: { leaveRoom(): void };
 }
 
 export class SettingsMenuController {
@@ -119,13 +119,13 @@ export class SettingsMenuController {
         const ms = Math.round(Number(range.value) * 1000);
         this.aiDelay = ms;
         localStorage.setItem('eldorado.aiDelay', String(ms));
-        this.host.send({ type: 'setAiDelay', ms });
+        this.host.net.send({ type: 'setAiDelay', ms });
       };
     }
     if (s.phase === 'playing') {
       const exit = button('退出游戏', () => {
         this.settingsOpen = false;
-        this.host.leaveRoom();
+        this.host.sessionCtl.leaveRoom();
       });
       exit.className = 'danger settings-exit';
       exit.title = '退出本局，AI 将接管你的座位';

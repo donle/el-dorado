@@ -30,9 +30,6 @@ export interface CardPreviewHost {
   readonly shopEls: Map<string, HTMLElement>;
   /** Mobile/orientation probe — used to branch preview positioning. */
   readonly mobileLayout: MobileLayoutProbe;
-  /** True when at least one market card is on the board and the current
-   *  player still needs to promote one to fill it. */
-  marketNeedsPromotion(state: GameState): boolean;
 }
 
 /** Subset of InteractionController the preview controller reaches for. */
@@ -43,6 +40,7 @@ export interface CardPreviewInteraction {
   readonly marketPreviewDefId: string | null;
   usesMarketPreviewFlow(): boolean;
   canSelectMarketPreview(defId: string): boolean;
+  marketNeedsPromotion(state: GameState): boolean;
   selectMarketPreviewCard(): void;
   isPinned(): boolean;
 }
@@ -115,7 +113,7 @@ export class CardPreviewController {
         !!state &&
         !!pile &&
         !pile.onBoard &&
-        this.host.marketNeedsPromotion(state) &&
+        this.host.interaction.marketNeedsPromotion(state) &&
         !state.turn?.hasBought;
       const def = getDef(defId);
       const label = promote ? `放入市场 · ${def.cost}💰` : `选为购买目标 · ${def.cost}💰`;

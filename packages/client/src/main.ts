@@ -1,26 +1,15 @@
 import './style.css';
 import { WebSocketAdapter } from './net/WebSocketAdapter.js';
-import type { ISocketPort, SocketEvent } from './net/SocketPort.js';
+import type { ISocketPort } from './net/SocketPort.js';
 import { BootController } from './boot/BootController.js';
 import { LobbyController } from './lobby/LobbyController.js';
 import { GameStore } from './store/GameStore.js';
 import { el } from './views/common/dom.js';
-// renderHud body lives in controllers/HudRenderer.ts (G4 extraction).
 import {
-  clearTurnIntro as clearTurnIntroOverlay,
-  showTurnIntro as showTurnIntroOverlay,
-} from './views/overlays/TurnIntroOverlay.js';
-import {
-  findCardDefId,
-  fallbackCardDefId,
+  type Action,
   type GameState,
   type RoomView,
-  type ClientMessage,
   type ServerMessage,
-  type Hex,
-  type Axial,
-  type Action,
-  type Blockade,
 } from '@eldorado/core';
 
 type BoardConstructor = typeof import('./scene/Board.js').Board;
@@ -67,17 +56,17 @@ class App {
   /** @internal HudRenderer + SettingsMenuController. */
   readonly settingsCtl!: SettingsMenuController;
   // session lifecycle: socket events, leave/return, room reset (C4 extraction)
-  private sessionCtl!: SessionController;
+  // `readonly` (not `private`) so other controllers' host interfaces
+  // (OverlaysHost / SettingsMenuHost / HudHost / ActionLogHost) can call
+  // closeMobilePanel / leaveRoom / returnToLobby directly.
+  readonly sessionCtl!: SessionController;
 
   // HoverHost accessors (consumed by HoverStateMachine) live in
   // controllers/HoverHost.ts — App just calls `createHoverHost(this)`
   // and passes the result to `new HoverStateMachine(...)`.
 
-  // --- ActionLogHost accessors (consumed by ActionLogPanel) ---
-  /** @internal ActionLogPanel */
-  findCardDefId(cardId: string, state: GameState): string | null { return findCardDefId(cardId, state); }
-  /** @internal ActionLogPanel */
-  fallbackCardDefId(cardId: string): string { return fallbackCardDefId(cardId); }
+  // card-def lookup for ActionLogPanel moved to @eldorado/core import
+  // (G6 — see ActionLogPanel.cardDefIdForLog).
 
   viewMode: '3d' | '2d' = localStorage.getItem('eldorado.viewMode') === '2d' ? '2d' : '3d';
   /** Host's preferred per-action AI delay in ms lives in SettingsMenuController (C3). */
@@ -180,115 +169,47 @@ class App {
 
   // --- helpers ---
 
-  /** @internal App → HoverStateMachine */
+  /** The current player (state lookup). Used by InteractionController + BoardCoordinator. */
   get me() {
     return this.state?.players.find((p) => p.id === this.you) ?? null;
   }
-  // HoverStateMachine (controllers/HoverStateMachine.ts) reads these via
-  // the HoverHost interface. They migrate to InteractionController in B3;
-  // keeping the call sites stable is what matters.
-  /** @internal App → HoverStateMachine */
+  /** Phase + turn gate. Used by InteractionController + ActionLogPanel. */
   isMyTurn(): boolean {
     return !!this.state && this.state.phase === 'playing' && this.state.turn?.playerId === this.you;
   }
 
-  /** @internal CardPreviewController uses this to branch actionable market preview. */
-  marketNeedsPromotion(state: GameState): boolean {
-    return this.interaction.marketNeedsPromotion(state);
-  }
-  /** @internal InteractionController */
-  setMobilePanel(p: 'players' | 'market' | 'log' | null): void { this.mobilePanel = p; }
-  /** @internal InteractionController */
-  sendAction(action: Action): void { this.act(action); }
-  /** @internal SettingsMenuController (setAiDelay) */
-  send(msg: ClientMessage): void { this.net.send(msg); }
-  /** @internal InteractionController */
-  renderTerrainPanel(): void { this.hoverMachine.renderTerrainPanel(); }
-  /** @internal App → App.onMessage */
-  syncSelectionToState(): void { this.interaction.syncSelectionToState(); }
-  /** @internal App → HoverStateMachine */
-  hexAt(c: Axial): Hex | undefined {
-    return this.state?.hexes.find((h) => h.q === c.q && h.r === c.r);
-  }
-
-  /** @internal App → HoverStateMachine */
-  blockadeById(id: string | null): Blockade | undefined {
-    return id ? this.state?.blockades.find((b) => b.id === id) : undefined;
-  }
-
-  /** @internal OverlaysController (game-over overlay button) — forwards to SessionController. */
-  leaveRoom(): void { this.sessionCtl.leaveRoom(); }
-
-  /** Expose the server-driven state slice for subscribers (other controllers, views). */
-  getStore(): GameStore {
-    return this.store;
-  }
-
-  // clearRoomState lives in SessionController (C4 extraction).
-  // shouldShowTurnIntro / showTurnIntro / clearTurnIntro / enterGameView /
-  // animateBuy / resetSelection / syncSelectionToState live in their
-  // respective controllers (C6 extraction — App.onMessage is a thin shell
-  // that dispatches to SessionController, which calls boardCtl /
-  // interaction directly through the host interface).
-
-  /** @internal OverlaysController (game-over overlay button) — forwards to SessionController. */
-  returnToLobby(): void { this.sessionCtl.returnToLobby(); }
-
-  /** @internal OverlaysController (after system dialog dismissal). */
-  renderLobby(): void {
-    this.lobbyCtl.render();
-  }
-
-  // onRoomClosed lives in SessionController (C4 extraction).
-
-  // --- action log: see controllers/ActionLogPanel.ts ---
-
-  // --- selection sync + movement legality live in InteractionController (B3) ---
-
-  recomputeHighlights(): void {
-    this.interaction.recomputeHighlights();
-  }
+  // Other small accessors that used to live here were inlined into the
+  // respective host adapters in Stage G6:
+  //   - HoverHost.ts reads `state` / `you` directly (hexAt / blockadeById
+  //     gone from App).
+  //   - InteractionController writes `host.mobilePanel = …` directly and
+  //     calls `host.act` / `host.hoverMachine.renderTerrainPanel` /
+  //     `host.overlays.flash` (setMobilePanel / sendAction /
+  //     renderTerrainPanel / flash gone from App).
+  //   - BoardCoordinator calls `host.interaction.recomputeHighlights()`
+  //     (recomputeHighlights gone from App).
+  //   - SessionController calls `host.interaction.syncSelectionToState()`
+  //     (syncSelectionToState gone from App).
+  //   - OverlaysController reaches `host.lobbyCtl.render()` and
+  //     `host.sessionCtl.{closeMobilePanel, leaveRoom, returnToLobby}`
+  //     (renderLobby / leaveRoom / returnToLobby / closeMobilePanel gone
+  //     from App).
+  //   - SettingsMenuController calls `host.net.send` and
+  //     `host.sessionCtl.leaveRoom` (send / leaveRoom gone from App).
+  //   - CardPreviewController reads `host.interaction.marketNeedsPromotion`
+  //     (marketNeedsPromotion gone from App).
+  //   - HudRenderer reads `host.boardCtl.makePile` /
+  //     `host.sessionCtl.closeMobilePanel` and computes isMyTurn / hexAt /
+  //     blockadeById inline from `state` / `you`.
+  //   - getStore / findCardDefId / fallbackCardDefId were removed because
+  //     they had no callers (or could be inlined from @eldorado/core).
 
   // --- input ---
   // Board hover/click handlers and all interaction dispatch (tryActOnHex,
   // tryActOnBlockade, onCardClick, onMarketClick, …) live in
-  // controllers/InteractionController.ts (B3 extraction). Thin forwarders
-  // are kept above for HoverStateMachine and the renderer.
+  // controllers/InteractionController.ts (B3 extraction).
 
-  // --- selection / input dispatch lives in InteractionController (B3) ---
-
-  /** @internal OverlaysController (sheet-dismiss) + renderHud (scrim click) — forwards. */
-  closeMobilePanel(): void { this.sessionCtl.closeMobilePanel(); }
-
-  // toggleViewMode / setViewMode / toggleSettings / renderSettingsMenu live in SettingsMenuController (C3).
-
-  // flash + flashTimer + attachSheetDismiss + renderGameOverOverlay live in OverlaysController (C2).
-
-  /** @internal InteractionController — forwards to OverlaysController. */
-  flash(msg: string): void {
-    this.overlays.flash(msg);
-  }
-
-  // --- piles & buy animation live in BoardCoordinator (B4) ---
-
-  /** @internal HudRenderer builds draw/discard piles through this. */
-  makePile(kind: 'draw' | 'discard', label: string, count: number): HTMLElement {
-    return this.boardCtl.makePile(kind, label, count);
-  }
-
-  // flyCard / animateBuy live in BoardCoordinator (B4). C6 — SessionController
-  // calls boardCtl.animateBuy directly through the host interface, so the
-  // App forwarders are no longer needed.
-
-  // attachSheetDismiss lives in OverlaysController (C2 extraction).
-
-  // --- card preview subsystem lives in CardPreviewController (G3 extraction) ---
-
-  // --- player hand inspector lives in PlayerHandPanel (C1 extraction) ---
-
-  // Lobby rendering moved to packages/client/src/lobby/LobbyView.ts; App no
-  // longer owns the lobby element. App only renders the in-game HUD.
-  // --- rendering: HUD ---
+  // --- HUD rendering ---
   // renderHud body lives in controllers/HudRenderer.ts (G4 extraction).
   // Action-log desktop panel + mobile dialog live in ActionLogPanel
   // (renderInto / renderMobileDialog).
@@ -296,10 +217,6 @@ class App {
   renderHud(): void {
     this.hudRenderer.render();
   }
-
-  // renderGameOverOverlay lives in OverlaysController (C2 extraction).
-
-  // --- terrain / blockade hover & panel: see controllers/HoverStateMachine.ts
 }
 
 // --- small DOM helpers ---

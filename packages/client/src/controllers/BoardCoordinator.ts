@@ -49,7 +49,7 @@ export interface BoardCoordinatorHost {
 
   // Render entry points
   renderHud(): void;
-  recomputeHighlights(): void;
+  readonly interaction: { recomputeHighlights(): void };
 
   // DOM refs the coordinator needs for the buy animation.
   // App writes them during renderHud; the coordinator reads them
@@ -72,7 +72,7 @@ export class BoardCoordinator {
     this.host.board.setSelfPlayerId(this.host.you);
     this.host.board.render(state);
     this.host.renderHud();
-    this.host.recomputeHighlights();
+    this.host.interaction.recomputeHighlights();
     this.host.hoverMachine.renderTerrainPanel();
   }
 

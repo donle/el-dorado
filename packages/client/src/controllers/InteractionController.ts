@@ -55,11 +55,7 @@ export interface InteractionHost {
   isMyTurn(): boolean;
 
   // Mobile panel state (controller writes when cancelling a market preview)
-  readonly mobilePanel: 'players' | 'market' | 'log' | null;
-  setMobilePanel(p: 'players' | 'market' | 'log' | null): void;
-
-  // Networking
-  sendAction(action: Action): void;
+  mobilePanel: 'players' | 'market' | 'log' | null;
 
   // Board scene
   readonly board: {
@@ -69,8 +65,9 @@ export interface InteractionHost {
 
   // Render & messages
   renderHud(): void;
-  renderTerrainPanel(): void;  // delegates to HoverStateMachine
-  flash(msg: string): void;
+  act(action: Action): void;
+  readonly hoverMachine: { renderTerrainPanel(): void };
+  readonly overlays: { flash(msg: string): void };
 
   // Layout (for usesMarketPreviewFlow)
   readonly mobileLayout: { isMobileDevice(): boolean };
@@ -361,24 +358,24 @@ export class InteractionController {
 
     const between = this.blockadeBetween(me.position, hex);
     if (between && !between.claimedBy) {
-      this.host.flash('先点连接地形移除障碍');
+      this.host.overlays.flash('先点连接地形移除障碍');
       return true;
     }
 
     if (this.nativeActionCardId) {
       if (!this.canUseNativeOn(hex)) {
-        this.host.flash('原住民向导只能移动到可进入的相邻地形');
+        this.host.overlays.flash('原住民向导只能移动到可进入的相邻地形');
         return true;
       }
       const cardId = this.nativeActionCardId;
       this.nativeActionCardId = null;
       this.selected.delete(cardId);
-      this.host.sendAction({ type: 'UseAbility', cardId, nativeTo: c });
+      this.host.act({ type: 'UseAbility', cardId, nativeTo: c });
       return true;
     }
 
     if (this.canStepToEldorado(hex)) {
-      this.host.sendAction({ type: 'StepTo', to: c });
+      this.host.act({ type: 'StepTo', to: c });
       return true;
     }
 
@@ -387,17 +384,17 @@ export class InteractionController {
       const cardIds = this.selectedHandCardIds();
       if (cardIds.length === 0) return false;
       if (cardIds.length !== hex.cost) {
-        this.host.flash(`需要正好选择 ${hex.cost} 张手牌`);
+        this.host.overlays.flash(`需要正好选择 ${hex.cost} 张手牌`);
         return true;
       }
-      this.host.sendAction({ type: 'ClearSpace', to: c, cardIds });
+      this.host.act({ type: 'ClearSpace', to: c, cardIds });
       return true;
     }
 
     const state = this.host.state!;
     const mover = state.turn?.activeMover;
     if (mover && this.canEnter(hex, mover.symbol, mover.remaining)) {
-      this.host.sendAction({ type: 'StepTo', to: c });
+      this.host.act({ type: 'StepTo', to: c });
       return true;
     }
     // 3) Pick least-waste card from selected that can pay this step.
@@ -411,8 +408,8 @@ export class InteractionController {
       const pickDefId = candidates.find((c) => c.id === pick.cardId)!.defId;
       if (this.canEnter(hex, pick.symbol, getDef(pickDefId).power)) {
         this.selected.delete(pick.cardId);
-        this.host.sendAction({ type: 'PlayMovementCard', cardId: pick.cardId, symbol: pick.symbol });
-        this.host.sendAction({ type: 'StepTo', to: c });
+        this.host.act({ type: 'PlayMovementCard', cardId: pick.cardId, symbol: pick.symbol });
+        this.host.act({ type: 'StepTo', to: c });
         return true;
       }
     }
@@ -439,13 +436,13 @@ export class InteractionController {
         this.hint = `选 ${blockade.cost} 张牌弃掉，移除这块连接地形`;
         this.host.renderHud();
         this.recomputeHighlights();
-        this.host.renderTerrainPanel();
+        this.host.hoverMachine.renderTerrainPanel();
         return true;
       }
       const seamSym = blockadeMoveSymbol(blockade);
       const mover = state.turn?.activeMover;
       if (seamSym && mover && mover.symbol === seamSym && mover.remaining >= blockade.cost) {
-        this.host.sendAction({ type: 'RemoveBlockade', blockadeId: blockade.id });
+        this.host.act({ type: 'RemoveBlockade', blockadeId: blockade.id });
         return true;
       }
       const hand = this.host.me?.hand ?? [];
@@ -455,7 +452,7 @@ export class InteractionController {
       const pick = pickHandMover(seamSym, blockade.cost, candidates);
       if (pick) {
         this.selected.delete(pick.cardId);
-        this.host.sendAction({ type: 'RemoveBlockade', blockadeId: blockade.id, cardId: pick.cardId, symbol: pick.symbol });
+        this.host.act({ type: 'RemoveBlockade', blockadeId: blockade.id, cardId: pick.cardId, symbol: pick.symbol });
         return true;
       }
       return false;
@@ -465,7 +462,7 @@ export class InteractionController {
     const mover = state.turn?.activeMover;
     if (mover && mover.remaining > 0) {
       const dest = this.blockadeDestination(blockade, mover.symbol, mover.remaining);
-      if (dest) { this.host.sendAction({ type: 'StepTo', to: { q: dest.q, r: dest.r } }); return true; }
+      if (dest) { this.host.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } }); return true; }
     }
     const destGeo = this.blockadeDestination(blockade);
     if (!destGeo) return false;
@@ -480,8 +477,8 @@ export class InteractionController {
       const dest = this.blockadeDestination(blockade, pick.symbol, getDef(pickDefId).power);
       if (!dest) return false;
       this.selected.delete(pick.cardId);
-      this.host.sendAction({ type: 'PlayMovementCard', cardId: pick.cardId, symbol: pick.symbol });
-      this.host.sendAction({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
+      this.host.act({ type: 'PlayMovementCard', cardId: pick.cardId, symbol: pick.symbol });
+      this.host.act({ type: 'StepTo', to: { q: dest.q, r: dest.r } });
       return true;
     }
     return false;
@@ -502,9 +499,9 @@ export class InteractionController {
       if (!handIds.has(cardId)) return;
       if (this.selected.has(cardId)) this.selected.delete(cardId);
       else if (this.selectedHandCardIds().length < this.removeAfterDrawLimit) this.selected.add(cardId);
-      else this.host.flash(`最多移除 ${this.removeAfterDrawLimit} 张手牌`);
+      else this.host.overlays.flash(`最多移除 ${this.removeAfterDrawLimit} 张手牌`);
       this.host.renderHud();
-      this.host.renderTerrainPanel();
+      this.host.hoverMachine.renderTerrainPanel();
       return;
     }
     if (this.mode === 'clear') {
@@ -513,17 +510,17 @@ export class InteractionController {
         : this.hexAt(this.clearTarget!)?.cost ?? 0;
       if (this.selected.has(cardId)) this.selected.delete(cardId);
       else if (this.selected.size < cost) this.selected.add(cardId);
-      else this.host.flash(`最多选择 ${cost} 张牌`);
+      else this.host.overlays.flash(`最多选择 ${cost} 张牌`);
       if (this.selected.size === cost) {
         if (this.clearBlockadeId) {
-          this.host.sendAction({ type: 'RemoveBlockade', blockadeId: this.clearBlockadeId, cardIds: [...this.selected] });
+          this.host.act({ type: 'RemoveBlockade', blockadeId: this.clearBlockadeId, cardIds: [...this.selected] });
         } else if (this.clearTarget) {
-          this.host.sendAction({ type: 'ClearSpace', to: this.clearTarget, cardIds: [...this.selected] });
+          this.host.act({ type: 'ClearSpace', to: this.clearTarget, cardIds: [...this.selected] });
         }
         return;
       }
       this.host.renderHud();
-      this.host.renderTerrainPanel();
+      this.host.hoverMachine.renderTerrainPanel();
       return;
     }
     this.nativeActionCardId = null;
@@ -539,7 +536,7 @@ export class InteractionController {
     if (action && action.def.ability !== 'take_free') this.buyTargetDefId = null;
     this.recomputeHighlights();
     this.host.renderHud();
-    this.host.renderTerrainPanel();
+    this.host.hoverMachine.renderTerrainPanel();
   }
 
   // --- market panel input -------------------------------------------
@@ -559,13 +556,13 @@ export class InteractionController {
       return;
     }
     if (this.mode === 'remove') {
-      this.host.flash('请先处理要移除的手牌');
+      this.host.overlays.flash('请先处理要移除的手牌');
       return;
     }
     this.marketPreviewDefId = null;
     const pile = state.market.find((m) => m.defId === defId);
     if (!pile || pile.count <= 0) {
-      this.host.flash('这张牌当前无法选择');
+      this.host.overlays.flash('这张牌当前无法选择');
       return;
     }
     // On mobile (preview flow) the drawer stays open after a buy/promote target
@@ -578,11 +575,11 @@ export class InteractionController {
       this.promoteTargetDefId = null;
       this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
       this.hint = this.buyTargetDefId ? '点击「免费获得」使用发报机' : '';
-      if (this.buyTargetDefId && !stayOpen) this.host.setMobilePanel(null);
+      if (this.buyTargetDefId && !stayOpen) this.host.mobilePanel = null;
       this.host.renderHud();
       return;
     }
-    if (state.turn?.hasBought) { this.host.flash('本回合已购买 · 每回合限买 1 张'); return; }
+    if (state.turn?.hasBought) { this.host.overlays.flash('本回合已购买 · 每回合限买 1 张'); return; }
     if (!pile.onBoard) {
       this.buyTargetDefId = null;
       if (!this.marketNeedsPromotion(state)) {
@@ -593,14 +590,14 @@ export class InteractionController {
       }
       this.promoteTargetDefId = this.promoteTargetDefId === defId ? null : defId;
       this.hint = this.promoteTargetDefId ? '点击「放入市场」补位' : '';
-      if (this.promoteTargetDefId && !stayOpen) this.host.setMobilePanel(null);
+      if (this.promoteTargetDefId && !stayOpen) this.host.mobilePanel = null;
       this.host.renderHud();
       return;
     }
     this.promoteTargetDefId = null;
     this.buyTargetDefId = this.buyTargetDefId === defId ? null : defId;
     this.hint = this.buyTargetDefId ? '选手牌支付，然后点「确认购买」' : '';
-    if (this.buyTargetDefId && !stayOpen) this.host.setMobilePanel(null);
+    if (this.buyTargetDefId && !stayOpen) this.host.mobilePanel = null;
     this.host.renderHud();
   }
 
@@ -621,7 +618,7 @@ export class InteractionController {
     const pile = state.market.find((m) => m.defId === defId);
     this.marketPreviewDefId = null;
     if (!pile || pile.count <= 0) {
-      this.host.flash('这张牌当前无法选择');
+      this.host.overlays.flash('这张牌当前无法选择');
       return;
     }
 
@@ -734,7 +731,7 @@ export class InteractionController {
   useActionCardFromHand(cardId: string): void {
     if (!this.host.isMyTurn()) return;
     if (this.mode === 'remove') {
-      this.host.flash('请先处理要移除的手牌');
+      this.host.overlays.flash('请先处理要移除的手牌');
       return;
     }
     const hand = this.host.me?.hand ?? [];
@@ -769,16 +766,16 @@ export class InteractionController {
 
   useSelectedAction(): void {
     if (this.mode === 'remove') {
-      this.host.flash('请先处理要移除的手牌');
+      this.host.overlays.flash('请先处理要移除的手牌');
       return;
     }
     const actions = this.selectedActionCards();
     if (actions.length === 0) {
-      this.host.flash('先选择一张行动牌');
+      this.host.overlays.flash('先选择一张行动牌');
       return;
     }
     if (actions.length > 1) {
-      this.host.flash('一次只能使用一张行动牌');
+      this.host.overlays.flash('一次只能使用一张行动牌');
       return;
     }
     const action = actions[0];
@@ -788,28 +785,28 @@ export class InteractionController {
       case 'draw2':
       case 'draw3':
         if (removeCardIds.length > 0) {
-          this.host.flash('这张行动牌不需要选择其他手牌');
+          this.host.overlays.flash('这张行动牌不需要选择其他手牌');
           return;
         }
-        this.host.sendAction({ type: 'UseAbility', cardId: action.id });
+        this.host.act({ type: 'UseAbility', cardId: action.id });
         return;
       case 'draw1_remove1':
       case 'draw2_remove2': {
         if (removeCardIds.length > 0) {
-          this.host.flash('先使用行动牌，摸牌后再选择要移除的手牌');
+          this.host.overlays.flash('先使用行动牌，摸牌后再选择要移除的手牌');
           return;
         }
-        this.host.sendAction({ type: 'UseAbility', cardId: action.id });
+        this.host.act({ type: 'UseAbility', cardId: action.id });
         return;
       }
       case 'take_free':
         if (!this.buyTargetDefId) {
-          this.host.setMobilePanel('market');
-          this.host.flash('先选择一张市场卡');
+          this.host.mobilePanel = 'market';
+          this.host.overlays.flash('先选择一张市场卡');
           this.host.renderHud();
           return;
         }
-        this.host.sendAction({ type: 'UseAbility', cardId: action.id, takeDefId: this.buyTargetDefId });
+        this.host.act({ type: 'UseAbility', cardId: action.id, takeDefId: this.buyTargetDefId });
         this.buyTargetDefId = null;
         return;
       case 'native':
@@ -819,7 +816,7 @@ export class InteractionController {
         this.host.renderHud();
         return;
       default:
-        this.host.flash('这个行动牌能力尚未实现');
+        this.host.overlays.flash('这个行动牌能力尚未实现');
     }
   }
 
@@ -829,22 +826,22 @@ export class InteractionController {
     const state = this.host.state!;
     if (!this.host.isMyTurn()) return;
     if (this.mode === 'remove') {
-      this.host.flash('请先处理要移除的手牌');
+      this.host.overlays.flash('请先处理要移除的手牌');
       return;
     }
     if (state.turn?.hasBought) {
-      this.host.flash('购买后不能补位 · 由下一位玩家选择');
+      this.host.overlays.flash('购买后不能补位 · 由下一位玩家选择');
       return;
     }
     if (!this.marketNeedsPromotion(state)) {
-      this.host.flash('当前市场没有空位');
+      this.host.overlays.flash('当前市场没有空位');
       return;
     }
     this.buyTargetDefId = null;
     this.promoteTargetDefId = null;
     this.marketPreviewDefId = null;
     this.hint = '';
-    this.host.sendAction({ type: 'PromoteMarket', defId });
+    this.host.act({ type: 'PromoteMarket', defId });
   }
 
   confirmPromoteMarket(): void {
@@ -855,10 +852,10 @@ export class InteractionController {
   confirmBuy(): void {
     if (!this.buyTargetDefId) return;
     if (this.mode === 'remove') {
-      this.host.flash('请先处理要移除的手牌');
+      this.host.overlays.flash('请先处理要移除的手牌');
       return;
     }
-    this.host.sendAction({ type: 'BuyCard', defId: this.buyTargetDefId, paymentCardIds: [...this.selected] });
+    this.host.act({ type: 'BuyCard', defId: this.buyTargetDefId, paymentCardIds: [...this.selected] });
   }
 
   /** Cancel the drawer-buy / promote / market-preview flow without acting. */
@@ -879,15 +876,15 @@ export class InteractionController {
     if (!this.host.isMyTurn() || this.mode !== 'remove') return;
     const cardIds = this.selectedHandCardIds();
     if (cardIds.length > this.removeAfterDrawLimit) {
-      this.host.flash(`最多移除 ${this.removeAfterDrawLimit} 张手牌`);
+      this.host.overlays.flash(`最多移除 ${this.removeAfterDrawLimit} 张手牌`);
       return;
     }
-    this.host.sendAction({ type: 'RemoveCards', cardIds });
+    this.host.act({ type: 'RemoveCards', cardIds });
   }
 
   confirmTrim(): void {
     if (this.mode !== 'trim') return;
-    this.host.sendAction({
+    this.host.act({
       type: 'DiscardCards',
       cardIds: [...this.selected],
     });

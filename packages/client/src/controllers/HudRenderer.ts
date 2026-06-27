@@ -24,9 +24,7 @@ import {
   progressOf,
   type Axial,
   type GameState,
-  type Hex,
   type RoomView,
-  type Blockade,
   type Action,
 } from '@eldorado/core';
 import { el, playerDisplayName } from '../views/common/dom.js';
@@ -109,12 +107,8 @@ export interface HudHost {
   readonly playerHandCtl: PlayerHandPanel;
   readonly actionLogPanel: ActionLogPanel;
   readonly dom: HudDomRefs;
-
-  isMyTurn(): boolean;
-  closeMobilePanel(): void;
-  hexAt(c: Axial): Hex | undefined;
-  blockadeById(id: string | null): Blockade | undefined;
-  makePile(kind: 'draw' | 'discard', label: string, count: number): HTMLElement;
+  readonly boardCtl: { makePile(kind: 'draw' | 'discard', label: string, count: number): HTMLElement };
+  readonly sessionCtl: { closeMobilePanel(): void };
   /** Send a game action to the server. */
   act(action: Action): void;
 }
@@ -133,7 +127,7 @@ export class HudRenderer {
       return;
     }
     const s = state;
-    const myTurn = this.host.isMyTurn();
+    const myTurn = s.phase === 'playing' && s.turn?.playerId === this.host.you;
     const turnPlayer = s.players.find((p) => p.id === s.turn?.playerId);
     const turnName = turnPlayer ? playerDisplayName(turnPlayer) : '';
     this.host.hud.innerHTML = '';
@@ -232,7 +226,7 @@ export class HudRenderer {
     // inside renderMarketPanel via attachSheetDismiss when the panel opens).
     if (this.host.mobilePanel === 'market') {
       const scrim = el('div', 'sheet-scrim');
-      scrim.onclick = () => this.host.closeMobilePanel();
+      scrim.onclick = () => this.host.sessionCtl.closeMobilePanel();
       this.host.hud.appendChild(scrim);
     }
     if (this.host.mobilePanel === 'log') {
@@ -300,9 +294,9 @@ export class HudRenderer {
     const turnTakeFree = this.host.interaction.selectedActionCard()?.def.ability === 'take_free';
     const turnMarketNeedsPromotion = onBoard.length < 6 && upcoming.length > 0;
     const turnClearCost = this.host.interaction.clearBlockadeId
-      ? this.host.blockadeById(this.host.interaction.clearBlockadeId)?.cost ?? 0
+      ? s.blockades.find((b) => b.id === this.host.interaction.clearBlockadeId)?.cost ?? 0
       : this.host.interaction.clearTarget
-        ? this.host.hexAt(this.host.interaction.clearTarget)?.cost ?? 0
+        ? s.hexes.find((h) => h.q === this.host.interaction.clearTarget!.q && h.r === this.host.interaction.clearTarget!.r)?.cost ?? 0
         : 0;
     const bar = renderTurnInfoPanel(
       {
@@ -351,8 +345,8 @@ export class HudRenderer {
     );
     // Piles flank the hand on the same row; draw on the left, discard on the right.
     if (me) {
-      const drawPile = this.host.makePile('draw', '摸牌', me.deck.length);
-      const discardPile = this.host.makePile('discard', '弃牌', me.discard.length);
+      const drawPile = this.host.boardCtl.makePile('draw', '摸牌', me.deck.length);
+      const discardPile = this.host.boardCtl.makePile('discard', '弃牌', me.discard.length);
       this.host.dom.drawPileEl = drawPile;
       this.host.dom.discardPileEl = discardPile;
       dock.appendChild(drawPile);

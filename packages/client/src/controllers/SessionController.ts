@@ -76,9 +76,8 @@ export interface SessionHost {
   // --- Entry points -------------------------------------------------
   /** Forwarded by the App's thin `onMessage` shell (C6). */
   onMessage(m: ServerMessage): void;
-  /** Re-render HUD + Lobby. */
+  /** Re-render HUD. Lobby re-render goes through `lobbyCtl.render()` directly. */
   renderHud(): void;
-  renderLobby(): void;
 }
 
 export class SessionController {

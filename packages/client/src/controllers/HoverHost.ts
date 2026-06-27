@@ -24,14 +24,13 @@ import {
   type GameState,
   type Hex,
   type MoveSymbol,
-  type Player,
 } from '@eldorado/core';
 import type { HoverHost } from './HoverStateMachine.js';
 
 /** Minimal App surface the adapter needs. */
 export interface HoverHostSource {
   readonly state: GameState | null;
-  readonly me: Player | null;
+  readonly you: string | null;
   readonly mobilePanel: 'players' | 'market' | 'log' | null;
   readonly board: HoverHost['board'];
   readonly previewCtl: HoverHost['previewCtl'];
@@ -49,22 +48,20 @@ export interface HoverHostSource {
     blockadeDestination(b: Blockade, sym?: MoveSymbol, power?: number): Hex | undefined;
     blockadeEdges(b: Blockade): Array<{ a: Axial; b: Axial }>;
   };
-  isMyTurn(): boolean;
-  hexAt(c: Axial): Hex | undefined;
-  blockadeById(id: string | null): Blockade | undefined;
 }
 
 export function createHoverHost(app: HoverHostSource): HoverHost {
   const ix = app.interaction;
+  const state = app.state;
   return {
     board: app.board,
     previewCtl: app.previewCtl,
     getState: () => app.state,
     getMobilePanel: () => app.mobilePanel,
-    isMyTurn: () => app.isMyTurn(),
-    get me() { return app.me; },
-    hexAt: (c) => app.hexAt(c),
-    blockadeById: (id) => app.blockadeById(id),
+    isMyTurn: () => !!state && state.phase === 'playing' && state.turn?.playerId === app.you,
+    get me() { return state?.players.find((p) => p.id === app.you) ?? null; },
+    hexAt: (c) => state?.hexes.find((h) => h.q === c.q && h.r === c.r),
+    blockadeById: (id) => id ? state?.blockades.find((b) => b.id === id) : undefined,
     blockadeEdges: (b) => ix.blockadeEdges(b),
     blockadeDestination: (b, sym, power) => ix.blockadeDestination(b, sym, power),
     getMode: () => ix.mode,

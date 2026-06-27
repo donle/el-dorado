@@ -28,14 +28,12 @@ export interface OverlaysHost {
   mobilePanel: 'players' | 'market' | 'log' | null;
   /** Re-render the HUD (used after flash sets/clears `error`). */
   renderHud(): void;
-  /** Re-render the lobby overlay (used after system dialog dismissal). */
-  renderLobby(): void;
-  /** Close any open mobile bottom sheet (called by sheet-drag-dismiss). */
-  closeMobilePanel(): void;
-  /** Leave the current room (used by game-over overlay's leave button). */
-  leaveRoom(): void;
-  /** Return to the lobby view (used by game-over overlay's lobby button). */
-  returnToLobby(): void;
+  readonly lobbyCtl: { render(): void };
+  readonly sessionCtl: {
+    closeMobilePanel(): void;
+    leaveRoom(): void;
+    returnToLobby(): void;
+  };
 }
 
 export class OverlaysController {
@@ -76,7 +74,7 @@ export class OverlaysController {
     scrim.querySelector<HTMLButtonElement>('button')!.onclick = () => {
       scrim.remove();
       if (this.systemDialog === scrim) this.systemDialog = null;
-      this.host.renderLobby();
+      this.host.lobbyCtl.render();
       this.host.renderHud();
     };
     document.body.appendChild(scrim);
@@ -116,7 +114,7 @@ export class OverlaysController {
       panel.style.transition = '';
       panel.style.transform = '';
       dragging = false;
-      if (dy > 70) this.host.closeMobilePanel();
+      if (dy > 70) this.host.sessionCtl.closeMobilePanel();
     });
   }
 
@@ -126,8 +124,8 @@ export class OverlaysController {
     const overlay = renderGameOverOverlayEl(
       { players: s.players, winnerId: s.winnerId },
       {
-        onReturnToLobby: () => this.host.returnToLobby(),
-        onLeaveRoom: () => this.host.leaveRoom(),
+        onReturnToLobby: () => this.host.sessionCtl.returnToLobby(),
+        onLeaveRoom: () => this.host.sessionCtl.leaveRoom(),
       },
     );
     this.host.hud.appendChild(overlay);

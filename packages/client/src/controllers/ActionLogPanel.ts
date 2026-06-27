@@ -19,7 +19,7 @@ import type {
   GameState,
   MoveSymbol,
 } from '@eldorado/core';
-import { CARD_DEFS, getDef } from '@eldorado/core';
+import { CARD_DEFS, fallbackCardDefId, findCardDefId, getDef } from '@eldorado/core';
 import { SYMBOL_LABEL } from '../views/common/iconMap.js';
 import { button, colorHex, el, playerDisplayName } from '../views/common/dom.js';
 import { terrainInfo } from './TerrainInfo.js';
@@ -62,7 +62,7 @@ export interface ActionLogHost {
   /** Where `renderInto` and `renderMobileDialog` append their DOM. */
   readonly hud: HTMLElement;
   /** Close any open mobile sheet — used by the log dialog's scrim/×. */
-  closeMobilePanel(): void;
+  readonly sessionCtl: { closeMobilePanel(): void };
 
   /** Wrap a card chip with the standard hover/click preview behavior. */
   previewCtl: {
@@ -70,9 +70,8 @@ export interface ActionLogHost {
     showPreview(anchor: HTMLElement, defId: string): void;
   };
 
-  // Card def lookup — implementations of these helpers live in main.ts.
-  findCardDefId(cardId: string, state: GameState): string | null;
-  fallbackCardDefId(cardId: string): string;
+  // Card def lookup is now imported directly from @eldorado/core
+  // (G6 — see `cardDefIdForLog` below).
 }
 
 const MAX_LOG_ENTRIES = 60;
@@ -122,10 +121,10 @@ export class ActionLogPanel {
   // --- segment builders ----------------------------------------------
 
   private cardDefIdForLog(cardId: string, state: GameState, previousState: GameState | null): string {
-    return this.host.findCardDefId(cardId, state)
-      ?? (previousState ? this.host.findCardDefId(cardId, previousState) : null)
+    return findCardDefId(cardId, state)
+      ?? (previousState ? findCardDefId(cardId, previousState) : null)
       ?? this.knownCardDefs.get(cardId)
-      ?? this.host.fallbackCardDefId(cardId);
+      ?? fallbackCardDefId(cardId);
   }
 
   private cardSegmentByDefId(defId: string): ActionLogSegment {
@@ -458,13 +457,13 @@ export class ActionLogPanel {
   /** Render the mobile full-screen dialog (scrim + role=dialog + close ×). */
   renderMobileDialog(): void {
     const scrim = el('div', 'mobile-log-scrim');
-    scrim.onclick = () => this.host.closeMobilePanel();
+    scrim.onclick = () => this.host.sessionCtl.closeMobilePanel();
 
     const dialog = this.buildPanel('mobile-log-dialog');
     dialog.setAttribute('role', 'dialog');
     dialog.setAttribute('aria-modal', 'true');
     dialog.addEventListener('click', (ev) => ev.stopPropagation());
-    const close = button('×', () => this.host.closeMobilePanel(), true);
+    const close = button('×', () => this.host.sessionCtl.closeMobilePanel(), true);
     close.className = 'mobile-log-close';
     close.setAttribute('aria-label', '关闭行动日志');
     dialog.appendChild(close);
