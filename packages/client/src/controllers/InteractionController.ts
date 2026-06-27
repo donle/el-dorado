@@ -18,10 +18,6 @@ import {
   pickHandMover,
   blockadeMoveSymbol,
   blockadeRequiresDiscard,
-  isFinishEntrance,
-  requiredFor,
-  stepCost,
-  sameCoord,
   cardDefId,
   type Action,
   type Axial,
@@ -36,6 +32,7 @@ import {
   movableSymbols,
 } from '@eldorado/core';
 import type { Mode } from './HoverStateMachine.js';
+import { LegalityHelper } from './interaction/legality.js';
 
 // --- pure helpers ---
 //
@@ -92,16 +89,21 @@ export class InteractionController {
   /** Transient hint shown in the action bar. */
   hint = '';
 
-  constructor(private readonly host: InteractionHost) {}
+  /** Pure legality lookups + decision tables extracted for testability. */
+  readonly legality: LegalityHelper;
 
-  // --- pure lookups ---------------------------------------------------
+  constructor(private readonly host: InteractionHost) {
+    this.legality = new LegalityHelper(this.host);
+  }
+
+  // --- pure lookups (delegated to LegalityHelper) -------------------------
 
   private hexAt(c: Axial): Hex | undefined {
-    return this.host.state?.hexes.find((h) => h.q === c.q && h.r === c.r);
+    return this.legality.hexAt(c);
   }
 
   private blockadeById(id: string | null): Blockade | undefined {
-    return id ? this.host.state?.blockades.find((b) => b.id === id) : undefined;
+    return this.legality.blockadeById(id);
   }
 
   private handCardIds(): Set<string> {
@@ -119,111 +121,53 @@ export class InteractionController {
   }
 
   private blockadeBetween(from: Axial, to: Axial): Blockade | undefined {
-    return this.host.state?.blockades.find((blockade) => {
-      const edges = blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
-      return edges.some(
-        (edge) =>
-          (sameCoord(edge.a, from) && sameCoord(edge.b, to)) || (sameCoord(edge.b, from) && sameCoord(edge.a, to)),
-      );
-    });
+    return this.legality.blockadeBetween(from, to);
   }
 
   /** @internal App → HoverStateMachine */
   blockadeEdges(blockade: Blockade): Array<{ a: Axial; b: Axial }> {
-    return blockade.edges?.length ? blockade.edges : [{ a: blockade.a, b: blockade.b }];
+    return this.legality.blockadeEdges(blockade);
   }
 
   /** @internal App → HoverStateMachine */
   blockadeDestination(blockade: Blockade, symbol?: MoveSymbol, power?: number): Hex | undefined {
-    const me = this.host.me;
-    if (!me) return undefined;
-    for (const edge of this.blockadeEdges(blockade)) {
-      const to = sameCoord(edge.a, me.position) ? edge.b : sameCoord(edge.b, me.position) ? edge.a : null;
-      if (!to) continue;
-      const hex = this.hexAt(to);
-      if (!hex) continue;
-      if (symbol && power !== undefined && !this.canEnter(hex, symbol, power)) continue;
-      return hex;
-    }
-    return undefined;
+    return this.legality.blockadeDestination(blockade, symbol, power);
   }
 
-  // --- movement legality (pure given me + state) ---------------------
+  // --- movement legality (delegated to LegalityHelper) -----------------
 
   /** @internal App → HoverStateMachine */
   movementRequirement(
     hex: Hex,
   ): { required: MoveSymbol | null; cost: number; blockade?: Blockade; discard?: boolean; destReq?: MoveSymbol | null } {
-    const me = this.host.me;
-    const blockade = me ? this.blockadeBetween(me.position, hex) : undefined;
-    if (blockade && !blockade.claimedBy) {
-      const seamSym = blockadeMoveSymbol(blockade);
-      if (seamSym === null) {
-        return { required: null, cost: blockade.cost, blockade, discard: true };
-      }
-      return { required: seamSym, cost: blockade.cost + stepCost(hex), blockade, destReq: requiredFor(hex) };
-    }
-    return { required: requiredFor(hex), cost: stepCost(hex) };
+    return this.legality.movementRequirement(hex);
   }
 
   /** @internal App → HoverStateMachine */
   canEnter(hex: Hex, symbol: MoveSymbol, power: number): boolean {
-    const me = this.host.me;
-    if (!me || !isAdjacent(me.position, hex)) return false;
-    if (hex.terrain === 'mountain') return false;
-    const current = this.hexAt(me.position);
-    if (hex.terrain === 'eldorado' && !isFinishEntrance(current)) return false;
-    if (hex.occupant && hex.occupant !== me.id) return false;
-    if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') return false;
-    const requirement = this.movementRequirement(hex);
-    if (requirement.discard) return false;
-    if (requirement.required !== null && requirement.required !== symbol) return false;
-    if (requirement.destReq != null && requirement.destReq !== symbol) return false;
-    return power >= requirement.cost;
+    return this.legality.canEnter(hex, symbol, power);
   }
 
   /** @internal App → HoverStateMachine */
   canStepToEldorado(hex: Hex): boolean {
-    const me = this.host.me;
-    if (!me || hex.terrain !== 'eldorado') return false;
-    if (!isAdjacent(me.position, hex)) return false;
-    const current = this.hexAt(me.position);
-    if (!isFinishEntrance(current)) return false;
-    if (hex.occupant && hex.occupant !== me.id) return false;
-    const blockade = this.blockadeBetween(me.position, hex);
-    return !blockade || !!blockade.claimedBy;
+    return this.legality.canStepToEldorado(hex);
   }
 
   /** @internal App → HoverStateMachine */
   canUseNativeOn(hex: Hex): boolean {
-    const me = this.host.me;
-    if (!me) return false;
-    if (!isAdjacent(me.position, hex)) return false;
-    if (hex.terrain === 'eldorado' && !isFinishEntrance(this.hexAt(me.position))) return false;
-    if (hex.occupant && hex.occupant !== me.id) return false;
-    const blockade = this.blockadeBetween(me.position, hex);
-    return !blockade || !!blockade.claimedBy;
+    return this.legality.canUseNativeOn(hex);
   }
 
   canClearBlockade(blockade: Blockade): boolean {
-    return !blockade.claimedBy && blockadeRequiresDiscard(blockade) && !!this.blockadeDestination(blockade);
+    return this.legality.canClearBlockade(blockade);
   }
 
   canClearSpaceWithSelection(hex: Hex): boolean {
-    const me = this.host.me;
-    if (!me) return false;
-    if (hex.terrain !== 'rubble' && hex.terrain !== 'basecamp') return false;
-    if (!isAdjacent(me.position, hex)) return false;
-    if (hex.occupant && hex.occupant !== me.id) return false;
-    const blockade = this.blockadeBetween(me.position, hex);
-    if (blockade && !blockade.claimedBy) return false;
-    return this.selectedHandCardIds().length === hex.cost;
+    return this.legality.canClearSpaceWithSelection(hex, this.selectedHandCardIds());
   }
 
   canRemoveBlockade(blockade: Blockade, symbol: MoveSymbol, power: number): boolean {
-    return !blockade.claimedBy && !blockadeRequiresDiscard(blockade)
-      && !!this.blockadeDestination(blockade)
-      && blockadeMoveSymbol(blockade) === symbol && power >= blockade.cost;
+    return this.legality.canRemoveBlockade(blockade, symbol, power);
   }
 
   // --- selection lifecycle -------------------------------------------
