@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createGame } from '../src/setup.js';
-import { applyAction } from '../src/engine.js';
+import { applyAction } from '../src/engine/index.js';
 import { isAdjacent, key, neighbors } from '../src/hex.js';
 import { getDef } from '../src/cards.js';
 import type { GameState, Axial, Card, Hex, MoveSymbol, Terrain, Blockade } from '../src/types.js';

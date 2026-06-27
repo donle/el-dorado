@@ -4,7 +4,7 @@ export * from './hex.js';
 export * from './rng.js';
 export * from './cards.js';
 export * from './setup.js';
-export * from './engine.js';
+export * from './engine/index.js';
 export * from './protocol.js';
 export * from './ai.js';
 export * from './movement.js';

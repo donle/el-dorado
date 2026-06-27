@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createGame } from '../src/setup.js';
-import { applyAction } from '../src/engine.js';
+import { applyAction } from '../src/engine/index.js';
 import { planTurn } from '../src/ai.js';
 import type { GameState } from '../src/types.js';
 
