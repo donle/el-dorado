@@ -33,6 +33,7 @@ import {
 } from '@eldorado/core';
 import type { Mode } from './HoverStateMachine.js';
 import { LegalityHelper } from './interaction/legality.js';
+import { ActionCardHelper } from './interaction/actionCards.js';
 
 // --- pure helpers ---
 //
@@ -91,9 +92,12 @@ export class InteractionController {
 
   /** Pure legality lookups + decision tables extracted for testability. */
   readonly legality: LegalityHelper;
+  /** Pure action-card query helpers extracted for testability. */
+  readonly actionCards: ActionCardHelper;
 
   constructor(private readonly host: InteractionHost) {
     this.legality = new LegalityHelper(this.host);
+    this.actionCards = new ActionCardHelper();
   }
 
   // --- pure lookups (delegated to LegalityHelper) -------------------------
@@ -588,88 +592,36 @@ export class InteractionController {
     return this.marketNeedsPromotion(state);
   }
 
-  // --- action card helpers ------------------------------------------
+  // --- action card helpers (delegated to ActionCardHelper) --------------
 
   selectedActionCards(): Array<{ id: string; defId: string; def: ReturnType<typeof getDef> }> {
-    const hand = this.host.me?.hand ?? [];
-    return [...this.selected]
-      .map((id) => {
-        const card = hand.find((h) => h.id === id);
-        if (!card) return null;
-        const def = getDef(card.defId);
-        return def.kind === 'action' ? { id, defId: card.defId, def } : null;
-      })
-      .filter((x): x is { id: string; defId: string; def: ReturnType<typeof getDef> } => !!x);
+    return this.actionCards.selectedActionCards(this.host.me?.hand ?? [], this.selected);
   }
 
   selectedActionCard(): { id: string; defId: string; def: ReturnType<typeof getDef> } | null {
-    const actions = this.selectedActionCards();
-    return actions.length === 1 ? actions[0] : null;
+    return this.actionCards.selectedActionCard(this.host.me?.hand ?? [], this.selected);
   }
 
   selectedActionRemoveIds(actionCardId: string): string[] {
-    const handIds = this.handCardIds();
-    return [...this.selected].filter((id) => id !== actionCardId && handIds.has(id));
+    return this.actionCards.selectedActionRemoveIds(actionCardId, this.host.me?.hand ?? [], this.selected);
   }
 
   removeLimitForAbility(ability: string | undefined): number {
-    if (ability === 'draw1_remove1') return 1;
-    if (ability === 'draw2_remove2') return 2;
-    return 0;
+    return this.actionCards.removeLimitForAbility(ability);
   }
 
   selectedActionUseLabel(compact = false): string {
-    const action = this.selectedActionCard();
-    if (!action) return compact ? '使用' : '使用行动牌';
-    switch (action.def.ability) {
-      case 'draw2':
-      case 'draw3':
-        return compact ? '摸牌' : `使用${action.def.name}`;
-      case 'draw1_remove1':
-      case 'draw2_remove2':
-        return compact ? '使用' : `使用${action.def.name}`;
-      case 'take_free':
-        return compact ? '免费拿' : (this.buyTargetDefId ? `免费获得${getDef(this.buyTargetDefId).name}` : '选择市场卡');
-      case 'native':
-        return compact ? '向导' : '使用原住民向导';
-      default:
-        return compact ? '使用' : `使用${action.def.name}`;
-    }
+    return this.actionCards.selectedActionUseLabel(this.selectedActionCard(), this.buyTargetDefId, compact);
   }
 
   handActionUseLabel(def: ReturnType<typeof getDef>): string {
-    switch (def.ability) {
-      case 'draw2':
-      case 'draw3':
-        return '摸牌';
-      case 'take_free':
-        return '免费拿';
-      case 'native':
-        return '向导';
-      default:
-        return '使用';
-    }
+    return this.actionCards.handActionUseLabel(def);
   }
 
   canUseSelectedAction(): boolean {
-    const actions = this.selectedActionCards();
-    if (actions.length !== 1) return false;
-    const action = actions[0];
-    const removeIds = this.selectedActionRemoveIds(action.id);
-    switch (action.def.ability) {
-      case 'draw2':
-      case 'draw3':
-        return removeIds.length === 0;
-      case 'draw1_remove1':
-      case 'draw2_remove2':
-        return removeIds.length === 0;
-      case 'take_free':
-        return !!this.buyTargetDefId;
-      case 'native':
-        return true;
-      default:
-        return false;
-    }
+    const action = this.selectedActionCard();
+    const removeIds = action ? this.selectedActionRemoveIds(action.id) : [];
+    return this.actionCards.canUseSelectedAction(action, removeIds, this.buyTargetDefId);
   }
 
   useActionCardFromHand(cardId: string): void {
