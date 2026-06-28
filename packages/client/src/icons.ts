@@ -2,7 +2,7 @@
  * Original, code-drawn SVG card illustrations — concrete little pictures, no
  * external or copyrighted artwork. viewBox is 0 0 64 64.
  */
-import { getDef, type CardDef } from '@eldorado/core';
+import { getDef, type CardDef, type CaveTokenKind, getCaveToken } from '@eldorado/core';
 
 const TINT: Record<string, string> = {
   green: '#2f7a45',
@@ -107,4 +107,86 @@ export function cardIcon(defOrId: CardDef | string): string {
   else if (def.kind === 'action') key = (def.ability && ABILITY_ART[def.ability]) || 'gear';
   else if (def.symbol) key = def.symbol;
   return frame(ART[key] ?? ART.gear, tint);
+}
+
+/** Caves-variant icon palette (mirrors the procedural mountain-mouth
+ *  decal drawn in `textures.ts`).  Eight effects × distinct glyphs. */
+const CAVE_TINT = '#6fdada';
+const CAVE_FRAME_TINT = '#3a6b6b';
+
+const CAVE_TOKEN_ART: Record<CaveTokenKind, string> = {
+  // Movement tokens borrow the card symbol art; the power number is added
+  // by the caller (caveTokenIcon).
+  move_machete_1: ART.machete,
+  move_machete_2: ART.machete,
+  move_machete_3: ART.machete,
+  move_coin_1: ART.coin,
+  move_coin_2: ART.coin,
+  move_coin_3: ART.coin,
+  move_paddle_1: ART.paddle,
+  move_paddle_2: ART.paddle,
+  move_paddle_3: ART.paddle,
+  draw_play: `
+    <rect x="14" y="14" width="36" height="40" rx="5" fill="#dff2ff" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <text x="32" y="40" text-anchor="middle" font-size="22" font-weight="700" fill="${CAVE_TINT}">+1</text>
+    <path d="M19 50 L26 50 M38 50 L45 50" stroke="${CAVE_TINT}" stroke-width="2" stroke-linecap="round"/>`,
+  remove_hand: `
+    <rect x="14" y="18" width="28" height="36" rx="4" fill="#dff2ff" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <line x1="14" y1="18" x2="46" y2="56" stroke="#e0567f" stroke-width="4" stroke-linecap="round"/>
+    <line x1="46" y1="18" x2="14" y2="56" stroke="#e0567f" stroke-width="4" stroke-linecap="round"/>`,
+  swap_hand: `
+    <rect x="10" y="20" width="20" height="28" rx="3" fill="#dff2ff" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <rect x="34" y="20" width="20" height="28" rx="3" fill="#dff2ff" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <path d="M30 28 L36 28 M30 28 L33 25 M30 28 L33 31" stroke="${CAVE_TINT}" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M34 40 L28 40 M34 40 L31 37 M34 40 L31 43" stroke="${CAVE_TINT}" stroke-width="2" fill="none" stroke-linecap="round"/>`,
+  preserve_item: `
+    <rect x="14" y="16" width="36" height="32" rx="4" fill="#dff2ff" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <path d="M20 16 L20 12 Q32 18 44 12 L44 16" stroke="${CAVE_TINT}" stroke-width="2" fill="none"/>
+    <path d="M22 40 L22 30 L30 36 L38 28 L38 40 Z" fill="${CAVE_TINT}" opacity="0.7"/>
+    <circle cx="48" cy="48" r="8" fill="#f4c64a" stroke="#c79a2e" stroke-width="1.5"/>
+    <path d="M48 44 L48 52 M44 48 L52 48" stroke="#c79a2e" stroke-width="1.4"/>`,
+  pass_through: `
+    <rect x="6" y="28" width="14" height="20" rx="2" fill="#a8c8a8" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <rect x="44" y="28" width="14" height="20" rx="2" fill="#a8c8a8" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <path d="M20 38 L44 38 M40 34 L44 38 L40 42" stroke="${CAVE_TINT}" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
+  native: `
+    <path d="M48 12 L48 56" stroke="#9c6b3f" stroke-width="3" stroke-linecap="round"/>
+    <path d="M48 10 L44 17 L52 17 Z" fill="${CAVE_TINT}"/>
+    <circle cx="22" cy="30" r="7" fill="#d8a06a" stroke="#9c6b3f" stroke-width="1.5"/>
+    <path d="M10 56 C10 40 34 40 34 56 Z" fill="#3fa65a" stroke="#2c7a42" stroke-width="1.5"/>
+    <path d="M14 50 C20 46 26 46 30 50" stroke="#dff2ff" stroke-width="1.6" fill="none"/>`,
+  symbol_swap: `
+    <circle cx="20" cy="32" r="11" fill="#dff2ff" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <text x="20" y="38" text-anchor="middle" font-size="16" font-weight="700" fill="${CAVE_TINT}">A</text>
+    <circle cx="44" cy="32" r="11" fill="#dff2ff" stroke="${CAVE_TINT}" stroke-width="2"/>
+    <text x="44" y="38" text-anchor="middle" font-size="16" font-weight="700" fill="${CAVE_TINT}">B</text>
+    <path d="M31 32 L33 32 M31 32 L33 30 M31 32 L33 34" stroke="${CAVE_TINT}" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M33 32 L31 32 M33 32 L31 30 M33 32 L31 34" stroke="${CAVE_TINT}" stroke-width="2" fill="none" stroke-linecap="round"/>`,
+};
+
+/** SVG markup illustrating a cave token (the entrance decal glyph).  The
+ *  the token id is used to look up the kind and power (for movement tokens
+ *  we render the symbol plus a corner badge showing the power). */
+export function caveTokenIcon(tokenId: string): string {
+  const def = getCaveToken(tokenId);
+  const base = CAVE_TOKEN_ART[def.kind] ?? ART.gear;
+  const body = `<g transform="scale(0.95) translate(2 2)">${base}</g>`;
+  let badge = '';
+  if (def.kind.startsWith('move_')) {
+    badge = `<g><circle cx="52" cy="52" r="9" fill="#0a0e16" stroke="${CAVE_TINT}" stroke-width="2"/><text x="52" y="56" text-anchor="middle" font-size="11" font-weight="700" fill="${CAVE_TINT}">${def.power}</text></g>`;
+  }
+  return frame(body + badge, CAVE_FRAME_TINT);
+}
+
+/** SVG markup for the cave-entrance symbol — used as a UI marker (e.g. on
+ *  the pinned hand panel and the cave-tokens list). Mirrors the canvas
+ *  texture in `textures.ts`: dark mouth with a faint teal rim. */
+export function caveEntranceIcon(): string {
+  return `<svg viewBox="0 0 64 64" width="100%" height="100%">
+    <rect x="3" y="3" width="58" height="58" rx="13" fill="#3a3f4c" opacity="0.4"/>
+    <rect x="3" y="3" width="58" height="58" rx="13" fill="none" stroke="${CAVE_TINT}" stroke-opacity="0.6"/>
+    <path d="M14 52 Q14 32 32 28 Q50 32 50 52 Z" fill="#0a0e16"/>
+    <path d="M14 52 Q14 32 32 28 Q50 32 50 52" fill="none" stroke="${CAVE_TINT}" stroke-width="2" stroke-opacity="0.6"/>
+    <circle cx="32" cy="42" r="1.8" fill="${CAVE_TINT}" opacity="0.7"/>
+  </svg>`;
 }

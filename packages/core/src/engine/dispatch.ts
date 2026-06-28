@@ -13,6 +13,7 @@ import { promoteMarket, buyCard } from './buying.js';
 import { discardCards } from './discard.js';
 import { removeCards } from './hand.js';
 import { useAbility } from './abilities.js';
+import { playCaveToken } from './cave.js';
 import { endTurn } from './turn.js';
 
 /**
@@ -67,6 +68,8 @@ function dispatch(state: GameState, playerId: string, action: Action, events: Ga
       return removeCards(state, playerId, action.cardIds, events);
     case 'UseAbility':
       return useAbility(state, playerId, action, events);
+    case 'PlayCaveToken':
+      return playCaveToken(state, playerId, action, events);
     case 'EndTurn':
       return endTurn(state, playerId, events);
   }

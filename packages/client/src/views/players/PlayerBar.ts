@@ -54,6 +54,7 @@ export function renderPlayerBar(state: PlayerBarState, env: PlayerBarEnv): HTMLE
         <span><b>牌库</b>${p.deck.length + p.hand.length}</span>
         <span><b>弃牌</b>${p.discard.length}</span>
         <span><b>阻挡物</b>${p.blockades}</span>
+        <span title="洞穴指示物（通过洞穴抽取获得）"><b>洞穴</b>${p.caveTokens.length}</span>
       </div>
       <div class="pc-progress"><span style="width:${Math.round(state.progressOf(p) * 100)}%"></span></div>`;
     card.addEventListener('click', () => env.onCardClick(p.id));

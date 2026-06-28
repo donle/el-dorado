@@ -80,6 +80,14 @@ export interface Hex {
   occupant?: string;
   /** Index of a start hex (1–4) or finish hex, for setup/ordering. */
   slot?: number;
+  /**
+   * True if this mountain hex bears a cave-entrance icon (Caves variant).
+   * Mountain hexes are normally impassable; a cave hex still cannot be
+   * entered, but tokens may be drawn from it by stopping adjacent.
+   */
+  cave?: boolean;
+  /** Stable id of this cave's token pile; set when `cave` is true. */
+  caveId?: string;
 }
 
 export interface BlockadeEdge {
@@ -143,6 +151,14 @@ export interface Player {
   claimedBlockades: string[];
   /** Number of blockades collected (tie-breaker). */
   blockades: number;
+  /** Cave token ids held by this player (Caves variant). */
+  caveTokens: string[];
+  /**
+   * Cave id whose token was just drawn into `caveTokens`. Used to enforce
+   * the "leave the cave and return" anti-loop rule. `null` when not next
+   * to any cave.
+   */
+  lastCaveId: string | null;
 }
 
 /** A market pile: copies of one card def. */
@@ -151,6 +167,57 @@ export interface MarketPile {
   count: number;
   /** True if this pile is one of the 6 on-board buyable slots. */
   onBoard: boolean;
+}
+
+/**
+ * Effect category of a cave token. The 36-token pool is partitioned into
+ * eight kinds; the official rulebook counts are mirrored in `cave.ts`.
+ *
+ * - `move_<sym>_<n>`: play as a movement card with symbol/symbol and power n.
+ *   `coin` tokens may also be used to buy a market card.
+ * - `draw_play`: draw 1 extra card from the deck and play it this turn
+ *   (Cartographer-style immediate use).
+ * - `remove_hand`: permanently remove any one card from hand.
+ * - `swap_hand`: exchange 1–4 hand cards for the same number drawn from the
+ *   deck (Travel Log-style).
+ * - `preserve_item`: after using a single-use action card this turn, send
+ *   it to the discard pile instead of removing it from the game.
+ * - `pass_through`: for the rest of the turn, moving through or onto a hex
+ *   occupied by another player is allowed (mountains still block).
+ * - `native`: move to any adjacent hex ignoring its requirements (same as
+ *   the Native card's ability).
+ * - `symbol_swap`: change the symbol of the next movement card you play
+ *   (e.g. use a machete-3 as coin-3 or paddle-3).
+ */
+export type CaveTokenKind =
+  | 'move_machete_1'
+  | 'move_machete_2'
+  | 'move_machete_3'
+  | 'move_coin_1'
+  | 'move_coin_2'
+  | 'move_coin_3'
+  | 'move_paddle_1'
+  | 'move_paddle_2'
+  | 'move_paddle_3'
+  | 'draw_play'
+  | 'remove_hand'
+  | 'swap_hand'
+  | 'preserve_item'
+  | 'pass_through'
+  | 'native'
+  | 'symbol_swap';
+
+/** A single cave token instance. */
+export interface CaveToken {
+  /** Stable id, e.g. `cave#m2-3`. */
+  id: string;
+  kind: CaveTokenKind;
+  /** Movement power for `move_*` kinds; 0 for non-movement kinds. */
+  power: number;
+  /** For `move_*` kinds: the symbol the token plays as. */
+  symbol?: MoveSymbol;
+  /** Chinese display name. */
+  name: string;
 }
 
 export type Phase = 'lobby' | 'playing' | 'finished';
@@ -192,7 +259,13 @@ export type ErrorCode = typeof ERROR_CODES[number];
 export interface TurnState {
   playerId: string;
   /** The currently-active movement card with leftover power, if any. */
-  activeMover?: { cardId: string; symbol: MoveSymbol; remaining: number };
+  activeMover?: {
+    cardId: string;
+    symbol: MoveSymbol;
+    remaining: number;
+    /** True when the mover was created by a cave token (no hand card). */
+    fromCave?: boolean;
+  };
   /** Cards played this turn awaiting discard at end of turn. */
   inPlay: Card[];
   /** Cards removed from the game this turn (go to player's removed pile). */
@@ -205,6 +278,14 @@ export interface TurnState {
   hasBought: boolean;
   /** Whether the player has used the discard skill at least once this turn. */
   hasDiscarded: boolean;
+  /** Cave token `draw_play` armed: drawn card must be played this turn. */
+  drawPlayTokenActive?: boolean;
+  /** Cave token `preserve_item` armed: next single-use action goes to discard. */
+  preserveItemActive?: boolean;
+  /** Cave token `pass_through` armed: can pass through occupied hexes this turn. */
+  passThroughActive?: boolean;
+  /** Cave token `symbol_swap` armed: next movement card uses this symbol. */
+  symbolSwap?: MoveSymbol;
 }
 
 export interface GameState {
@@ -228,4 +309,21 @@ export interface GameState {
   winnerId: string | null;
   /** Seed state for deterministic shuffles. */
   rngState: number;
+  /**
+   * Per-cave face-down token pile, keyed by stable cave id (e.g. `cave-1`).
+   * The first id in the array is the top of the pile. The Caves variant
+   * uses 4 tokens per cave; clients use this list length to render a stack.
+   */
+  cavePiles: Record<string, string[]>;
+  /**
+   * Per-player cave token stash, keyed by player id. The player's own
+   * `CaveToken` ids; tokens removed after use never re-enter any pile.
+   */
+  playerCaveTokens: Record<string, string[]>;
+  /**
+   * Per-player anti-loop marker: id of the cave the player last explored
+   * (`null` when the player is not currently next to a cave). Used to
+   * prevent re-drawing from the same cave without first stepping away.
+   */
+  lastExploredCave: Record<string, string | null>;
 }

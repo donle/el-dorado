@@ -11,6 +11,12 @@ export interface PlateDef {
   id: string;
   theme: string; // 仅用于贴图/视觉
   rows: string[];
+  /**
+   * Cave-bearing mountain cells, identified by zero-based (row, col) in
+   * `rows`. Cells here MUST be mountain tokens; any non-mountain cell in
+   * the list is rejected at parse time. Used by the Caves variant.
+   */
+  caves?: Array<[number, number]>;
 }
 
 export interface PlateCell {
@@ -18,6 +24,8 @@ export interface PlateCell {
   terrain: Terrain;
   cost: number;
   slot?: number; // 起点槽位 1..4（terrain === 'start' 时）
+  /** Caves variant: this mountain cell bears a cave icon. */
+  cave?: boolean;
 }
 
 export interface ParsedPlate {
@@ -64,6 +72,20 @@ export function parsePlate(def: PlateDef): ParsedPlate {
   if (def.rows.length !== PLATE_ROW_WIDTHS.length) {
     throw new Error(`板块 ${def.id} 必须为 ${PLATE_ROW_WIDTHS.length} 行`);
   }
+  const caveSet = new Set<string>();
+  for (const [row, col] of def.caves ?? []) {
+    if (
+      !Number.isInteger(row) || row < 0 || row >= PLATE_ROW_WIDTHS.length ||
+      !Number.isInteger(col) || col < 0 || col >= PLATE_ROW_WIDTHS[row]
+    ) {
+      throw new Error(`板块 ${def.id} 洞穴位置 (${row}, ${col}) 超出范围`);
+    }
+    const tok = def.rows[row].trim().split(/\s+/)[col];
+    if (tok !== 'MM') {
+      throw new Error(`板块 ${def.id} 洞穴位置 (${row}, ${col}) 不是山地（${tok}）`);
+    }
+    caveSet.add(`${row},${col}`);
+  }
   const cells: PlateCell[] = [];
   def.rows.forEach((line, row) => {
     const tokens = line.trim().split(/\s+/);
@@ -76,6 +98,7 @@ export function parsePlate(def: PlateDef): ParsedPlate {
       const spec = cellFromToken(tok, def.id);
       const cell: PlateCell = { local: localFromRowCol(row, col), terrain: spec.terrain, cost: spec.cost };
       if (spec.slot !== undefined) cell.slot = spec.slot;
+      if (caveSet.has(`${row},${col}`)) cell.cave = true;
       cells.push(cell);
     });
   });

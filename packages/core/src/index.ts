@@ -10,4 +10,5 @@ export * from './ai/index.js';
 export * from './movement.js';
 export * from './progress.js';
 export * from './terrain.js';
+export * from './cave.js';
 export { getMap, MAPS, MAP_OPTIONS, PLAYABLE_MAP_IDS, CLASSIC_MAP, OFFICIAL_MAPS, parseGrid } from './maps/index.js';

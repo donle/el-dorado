@@ -230,6 +230,62 @@ export function terrainTexture(terrain: Terrain): THREE.Texture {
   return tex;
 }
 
+/** Caves variant: a dark cave-mouth graphic used as the entrance decal on
+ *  mountain hexes flagged with `hex.cave`. Procedurally drawn so the game
+ *  ships with the same style as the rest of the canvas-fallback textures.
+ *  The entrance is a rounded arch fading to pure black, with a faint
+ *  teal rim so the opening reads against the dark mountain rock. */
+const CAVE_SIZE = 96;
+const caveTextureCache: { tex: THREE.CanvasTexture | null } = { tex: null };
+export function caveEntranceTexture(): THREE.CanvasTexture {
+  if (caveTextureCache.tex) return caveTextureCache.tex;
+  const c = document.createElement('canvas');
+  c.width = c.height = CAVE_SIZE;
+  const ctx = c.getContext('2d')!;
+  ctx.clearRect(0, 0, CAVE_SIZE, CAVE_SIZE);
+  // Outer shadow halo: a soft dark disk to seat the cave against the rock.
+  const halo = ctx.createRadialGradient(
+    CAVE_SIZE / 2, CAVE_SIZE / 2, 6,
+    CAVE_SIZE / 2, CAVE_SIZE / 2, CAVE_SIZE / 2 - 4,
+  );
+  halo.addColorStop(0, 'rgba(0,0,0,0.55)');
+  halo.addColorStop(0.7, 'rgba(0,0,0,0.18)');
+  halo.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, CAVE_SIZE, CAVE_SIZE);
+  // Arch shape: a half-rounded dark mouth (pointy-top hex-friendly).
+  const cx = CAVE_SIZE / 2;
+  const cy = CAVE_SIZE * 0.62;
+  const w = CAVE_SIZE * 0.42;
+  const h = CAVE_SIZE * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - w, cy + h * 0.05);
+  ctx.lineTo(cx - w, cy - h * 0.45);
+  ctx.quadraticCurveTo(cx, cy - h * 1.05, cx + w, cy - h * 0.45);
+  ctx.lineTo(cx + w, cy + h * 0.05);
+  ctx.closePath();
+  const mouth = ctx.createRadialGradient(cx, cy - h * 0.2, 2, cx, cy - h * 0.2, w);
+  mouth.addColorStop(0, '#000');
+  mouth.addColorStop(0.7, '#0a0e16');
+  mouth.addColorStop(1, 'rgba(15,22,32,0.85)');
+  ctx.fillStyle = mouth;
+  ctx.fill();
+  // Faint teal rim — gives the opening a hint of glow so it pops.
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(110,210,210,0.45)';
+  ctx.stroke();
+  // A tiny shimmer near the top of the mouth, suggesting depth.
+  ctx.fillStyle = 'rgba(160,235,235,0.35)';
+  ctx.beginPath();
+  ctx.arc(cx, cy - h * 0.55, 2.2, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  caveTextureCache.tex = tex;
+  return tex;
+}
+
 /** A large parchment-ish ground texture for the backdrop plane. */
 export function groundTexture(): THREE.Texture {
   const c = document.createElement('canvas');

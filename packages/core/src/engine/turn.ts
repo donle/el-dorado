@@ -13,9 +13,12 @@ export function endTurn(state: GameState, playerId: string, events: GameEvent[])
   const p = player(state, playerId);
   const turn = state.turn!;
 
-  // Resolve cards played this turn.
+  // Resolve cards played this turn. A `preserve_item` cave token armed
+  // this turn keeps single-use action cards in the discard pile instead
+  // of removing them from the game.
   for (const card of turn.inPlay) {
-    if (getDef(card.defId).singleUse) p.removed.push(card);
+    const def = getDef(card.defId);
+    if (def.singleUse && !turn.preserveItemActive) p.removed.push(card);
     else p.discard.push(card);
   }
   for (const card of turn.removedThisTurn) p.removed.push(card);

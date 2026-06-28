@@ -18,7 +18,7 @@ const PLATE_LIBRARY: Record<string, PlateDef> = {
   'river-a': riverA as PlateDef,
   'village-a': villageA as PlateDef,
   'end-a': endA as PlateDef,
-  ...(officialPlates as Record<string, PlateDef>),
+  ...(officialPlates as unknown as Record<string, PlateDef>),
 };
 
 /**

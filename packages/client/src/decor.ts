@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Hex } from '@eldorado/core';
-import { terrainTexture } from './textures.js';
+import { caveEntranceTexture, terrainTexture } from './textures.js';
 
 /** A hex positioned in world space, with the height of its top face. */
 export interface Placed {
@@ -231,6 +231,27 @@ export class Decorations {
       boulder.rotation.set((rand() - 0.5) * 0.35, rand() * Math.PI * 2, (rand() - 0.5) * 0.35);
       boulder.scale.set(0.9 + rand() * 0.45, 0.28 + rand() * 0.16, 0.55 + rand() * 0.32);
       group.add(boulder);
+    }
+
+    // Caves variant: overlay a dark cave-mouth decal on the front face of
+    // mountain hexes that the map JSON has flagged as cave-bearing.
+    if (p.hex.cave) {
+      const entranceTex = caveEntranceTexture();
+      const decal = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.78, 0.78),
+        new THREE.MeshBasicMaterial({ map: entranceTex, transparent: true, depthWrite: false }),
+      );
+      // Sit the decal on the front slope of the mountain, slightly tilted to
+      // face the camera. Offset is in the group's local frame (Y up).
+      decal.position.set(0, 0.32, 0.42);
+      decal.rotation.x = -0.25;
+      group.add(decal);
+      // A small pulse light inside the mouth so a player can see it from a
+      // distance; the AnimationDirector modulates the intensity each frame.
+      const glow = new THREE.PointLight(0x6fdada, 0.7, 2.4, 2);
+      glow.position.set(0, 0.32, 0.42);
+      this.fires.push({ light: glow, base: 0.7, phase: rand() * 6.28 });
+      group.add(glow);
     }
 
     group.position.set(p.x, p.top + 0.02, p.z);

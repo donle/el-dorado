@@ -180,6 +180,7 @@ function materialize(placed: PlacedPlate[]): { hexes: Hex[]; startHexes: Axial[]
       if (hexByKey.has(k)) continue; // shared-seam dedupe (safety net)
       const hex: Hex = { q, r, terrain: c.terrain, cost: c.cost };
       if (c.slot !== undefined) hex.slot = c.slot;
+      if (c.cave) hex.cave = true;
       hexByKey.set(k, hex);
       if (c.terrain === 'start' && c.slot !== undefined) starts.push({ slot: c.slot, coord: { q, r } });
     }

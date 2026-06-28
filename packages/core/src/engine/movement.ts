@@ -5,7 +5,7 @@
  */
 import type { Action, GameEvent } from '../actions.js';
 import type { Axial, GameState, Hex, MoveSymbol, Player } from '../types.js';
-import { isAdjacent } from '../hex.js';
+import { isAdjacent, neighbors } from '../hex.js';
 import { getDef, movableSymbols } from '../cards.js';
 import {
   blockadeBetween,
@@ -60,6 +60,53 @@ export function moveTo(state: GameState, p: Player, to: Hex, events: GameEvent[]
       state.finalTurnsRemaining = finalTurnsAfter(state, p.id);
     }
   }
+
+  // Caves variant: if the player stopped next to a cave-bearing mountain
+  // hex that they did NOT just leave from, draw the top token from that
+  // cave's pile into their stash. Anti-loop marker is updated below.
+  drawCaveTokenIfAdjacent(state, p, events);
+}
+
+/**
+ * Caves variant trigger. Called from `moveTo` after a piece lands on a
+ * destination hex. Scans the 6 neighbours of `p.position` for a cave hex
+ * (`caveId` set by setup), respects the anti-loop marker
+ * (`p.lastCaveId`), and on a fresh cave draws the top of that pile.
+ *
+ * The first such cave found (deterministic neighbour order) is used when
+ * multiple caves touch the destination, matching the rulebook example.
+ */
+function drawCaveTokenIfAdjacent(state: GameState, p: Player, events: GameEvent[]): void {
+  const adjacentCaves = neighbors(p.position)
+    .map((n) => state.hexes.find((h) => h.q === n.q && h.r === n.r))
+    .filter((h): h is Hex & { caveId: string } => !!h && !!h.cave && !!h.caveId);
+  if (adjacentCaves.length === 0) {
+    // No cave adjacent: clear the marker so the next return is treated as
+    // a fresh exploration.
+    p.lastCaveId = null;
+    state.lastExploredCave[p.id] = null;
+    return;
+  }
+  const target = adjacentCaves[0];
+  if (p.lastCaveId === target.caveId) {
+    // Anti-loop: same cave as last draw. Skip.
+    return;
+  }
+  const pile = state.cavePiles[target.caveId];
+  if (!pile || pile.length === 0) {
+    // Exhausted cave: still mark so the player can't farm an empty pile
+    // by stepping on and off adjacent hexes.
+    p.lastCaveId = target.caveId;
+    state.lastExploredCave[p.id] = target.caveId;
+    return;
+  }
+  const tokenId = pile.shift();
+  if (tokenId) p.caveTokens.push(tokenId);
+  p.lastCaveId = target.caveId;
+  state.lastExploredCave[p.id] = target.caveId;
+  if (tokenId) {
+    events.push({ type: 'caveTokenDrawn', playerId: p.id, caveId: target.caveId, tokenId });
+  }
 }
 
 export function finalTurnsAfter(state: GameState, playerId: string): number {
@@ -72,14 +119,16 @@ export function assertEnterable(
   state: GameState,
   p: Player,
   to: Hex,
-  opts: { allowMountain?: boolean } = {},
+  opts: { allowMountain?: boolean; allowOccupied?: boolean } = {},
 ): void {
   if (to.terrain === 'mountain' && !opts.allowMountain) throw new RuleError('不能进入山地');
   const from = hexAt(state, p.position);
   if (to.terrain === 'eldorado' && !isFinishEntrance(from)) {
     throw new RuleError('必须先进入黄金城入口，才能进入黄金城');
   }
-  if (to.occupant && to.occupant !== p.id) throw new RuleError('该地格已被占用');
+  if (to.occupant && to.occupant !== p.id && !opts.allowOccupied) {
+    throw new RuleError('该地格已被占用');
+  }
   if (!isAdjacent(p.position, to)) throw new RuleError('只能移动到相邻地格');
 }
 
@@ -87,7 +136,7 @@ export function stepTo(state: GameState, playerId: string, to: Axial, events: Ga
   const p = player(state, playerId);
   const hex = hexAt(state, to);
   if (!hex) throw new RuleError('没有这个地格');
-  assertEnterable(state, p, hex);
+  assertEnterable(state, p, hex, { allowOccupied: state.turn?.passThroughActive === true });
 
   if (hex.terrain === 'rubble' || hex.terrain === 'basecamp') {
     throw new RuleError('需要弃牌清除此格后才能进入');
@@ -131,11 +180,19 @@ export function stepTo(state: GameState, playerId: string, to: Axial, events: Ga
   if (!mover || mover.remaining <= 0) throw new RuleError('没有可用的移动牌');
   const required = destRequired;
   const deduct = destDeduct;
-  if (required !== null && required !== mover.symbol) {
+  // Cave `symbol_swap` armed on this turn: the next movement card plays
+  // as the chosen symbol instead of its own. Cleared after the first
+  // step consumes it.
+  const effectiveSymbol = turn.symbolSwap ?? mover.symbol;
+  if (required !== null && required !== effectiveSymbol) {
     throw new RuleError(`需要${symbolLabel(required)}才能进入`);
   }
   if (mover.remaining < deduct) throw new RuleError('移动力量不足');
 
+  if (turn.symbolSwap) {
+    mover.symbol = turn.symbolSwap;
+    turn.symbolSwap = undefined;
+  }
   mover.remaining -= deduct;
   claimBlockade(p, blockade, events);
   moveTo(state, p, hex, events);
