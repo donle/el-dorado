@@ -272,6 +272,25 @@ describe('Game-start sync barrier', () => {
     expect(last.pendingPlayers).toEqual([]);
   });
 
+  it('broadcasts initial game state only after every human is ready', async () => {
+    const messages: ServerMessage[] = [];
+    const room = new Room('TEST', () => Promise.resolve());
+    room.addHuman('Alice', (m) => messages.push(m));
+    room.addHuman('Bob', (m) => messages.push(m));
+    room.start('classic', 1);
+    room.armReadyTimeout();
+
+    expect(messages.some((m) => m.type === 'state')).toBe(false);
+
+    const [a, b] = room.members;
+    room.markReady(a.id);
+    expect(messages.some((m) => m.type === 'state')).toBe(false);
+
+    room.markReady(b.id);
+
+    expect(messages.some((m) => m.type === 'state')).toBe(true);
+  });
+
   it('all-AI game skips the barrier and runs AI immediately', async () => {
     const room = new Room('TEST', () => Promise.resolve());
     room.addHuman('Host', () => {});

@@ -8,7 +8,6 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServerMessage } from '@eldorado/core';
-import { Room, type Send } from './room.js';
 import { WebSocketServer as Transport } from './transport/WebSocketServer.js';
 import { MessageRouter } from './transport/MessageRouter.js';
 import { StaticFileServer } from './transport/StaticFileServer.js';
@@ -43,7 +42,6 @@ const registry = new RoomRegistry();
 const lobby = new LobbyService({
   registry,
   sendTo: sendToConn,
-  makeBroadcastSend,
 });
 
 const router = new MessageRouter({
@@ -61,13 +59,13 @@ const router = new MessageRouter({
 
 const transport = new Transport(httpServer, router, new SystemClock(), {
   onOpen(connId: string): void {
-    registry.setSession(connId, { room: null, playerId: null });
+    registry.setSession(connId, { room: null, playerId: null, send: null });
   },
   onClose(connId: string): void {
     const session = registry.getSession(connId);
     if (!session) return;
     if (session.room && session.playerId && !session.room.closed) {
-      const changed = session.room.disconnect(session.playerId, makeBroadcastSend(session.room));
+      const changed = session.room.disconnect(session.playerId, session.send ?? undefined);
       if (changed) {
         session.room.broadcastRoom();
         session.room.broadcastState();
@@ -135,18 +133,6 @@ router.on('ready', (connId, _msg) => {
   if (session.room.phase !== 'playing') return;
   session.room.markReady(session.playerId);
 });
-
-/**
- * Stage 1 shim: `Room` is given a `Send` that broadcasts to every connection
- * currently mapped to that room. Stage 7's IMessageBus replaces this.
- */
-function makeBroadcastSend(room: Room): Send {
-  return (msg: ServerMessage): void => {
-    for (const [connId] of registry.connectionsInRoom(room)) {
-      sendToConn(connId, msg);
-    }
-  };
-}
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`[el-dorado] http://localhost:${PORT}`);

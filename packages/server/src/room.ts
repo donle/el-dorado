@@ -205,7 +205,10 @@ export class Room {
       },
       broadcastStarting: () => this.broadcastStarting(),
       broadcastRoom: () => this.broadcastRoom(),
-      runGame: () => { void this.runAITurns(); },
+      runGame: () => {
+        this.broadcastState();
+        void this.runAITurns();
+      },
     };
   }
 

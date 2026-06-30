@@ -123,15 +123,17 @@ export class LobbyController {
         return;
       case 'starting':
         this.state.startingPendingPlayers = m.pendingPlayers;
+        if (this.state.isLaunching && this.state.isStartingDone && m.pendingPlayers.length === 0) {
+          this.finishStarting();
+          return;
+        }
         this.render();
         return;
       case 'state':
-        // When the server pushes the first game-state while we're still in
-        // the launch countdown, mirror the legacy `endStarting(true)` path.
-        if (this.state.isLaunching && this.state.isStartingDone) {
-          clearLaunchTimers();
-          this.state.isLaunching = false;
-          this.state.isStartingDone = false;
+        // Once the server pushes game state, the ready barrier has cleared and
+        // the launch overlay must stop intercepting game input.
+        if (this.state.isLaunching) {
+          this.finishStarting();
         }
         return;
       case 'roomClosed':
@@ -159,11 +161,10 @@ export class LobbyController {
   }
 
   private applyRoom(room: RoomView): void {
-    const previousPhase = this.state.roomCode && this.state.players.length === 0
-      ? 'playing'
-      : this.isLobbyPhase(room)
-        ? 'lobby'
-        : 'playing';
+    const wasLobbyRoom =
+      this.state.roomCode === room.code &&
+      this.state.players.length > 0 &&
+      !this.state.isLaunching;
     const nextPhase = room.phase;
 
     this.state.selfId = this.state.selfId ?? sessionPlayerId();
@@ -188,7 +189,7 @@ export class LobbyController {
       this.state.isEntry = false;
       this.state.startingPendingPlayers = [];
       this.render();
-    } else if (nextPhase === 'playing' && previousPhase === 'lobby') {
+    } else if (nextPhase === 'playing' && wasLobbyRoom) {
       // First time we see 'playing' after being in the lobby: enter launch
       // countdown. Mirror the legacy `beginStarting()` flow.
       this.beginStarting();
@@ -225,6 +226,15 @@ export class LobbyController {
     this.state.isLaunching = true;
     this.state.isStartingDone = false;
     this.state.startingPendingPlayers = [];
+    this.render();
+  }
+
+  private finishStarting(): void {
+    clearLaunchTimers();
+    this.state.isLaunching = false;
+    this.state.isStartingDone = false;
+    this.state.startingPendingPlayers = [];
+    this.state.players = [];
     this.render();
   }
 
@@ -280,6 +290,7 @@ export class LobbyController {
         return;
       }
       case 'launchComplete': {
+        clearLaunchTimers();
         this.state.isStartingDone = true;
         // Send the ready message so the server can clear the barrier.
         this.socket.send({ type: 'ready' });

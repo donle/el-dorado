@@ -1,4 +1,4 @@
-import { Room, RoomManager } from '../room.js';
+import { Room, RoomManager, type Send } from '../room.js';
 
 /**
  * Per-connection lobby session.
@@ -10,6 +10,7 @@ import { Room, RoomManager } from '../room.js';
 export interface Session {
   room: Room | null;
   playerId: string | null;
+  send: Send | null;
 }
 
 /**

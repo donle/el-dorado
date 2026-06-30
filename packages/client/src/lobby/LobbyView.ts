@@ -85,18 +85,16 @@ export function renderLobby(root: HTMLElement, state: LobbyViewState, env: Lobby
   // also guard here to mirror legacy behavior).
   if (state.isLaunching) {
     root.classList.remove('hidden');
+    renderLaunching(root, state, env);
+    return;
   } else if (state.roomCode && state.players.length === 0) {
     // Game in progress and no lobby state — keep hidden.
     root.classList.add('hidden');
   } else {
     root.classList.remove('hidden');
   }
+  root.classList.remove('launching');
   root.innerHTML = '';
-
-  if (state.isLaunching) {
-    renderLaunching(root, state, env);
-    return;
-  }
 
   const modal = el('div', 'modal lobby-modal');
   modal.classList.add(state.isEntry ? 'entry-modal' : 'room-modal');
@@ -274,10 +272,15 @@ let launchCountdownEndsAt = 0;
 
 const START_COUNTDOWN_MS = 5000;
 
+export function shouldArmLaunchCountdown(state: Pick<LobbyViewState, 'isLaunching' | 'isStartingDone'>): boolean {
+  return state.isLaunching && !state.isStartingDone;
+}
+
 function renderLaunching(root: HTMLElement, state: LobbyViewState, env: LobbyViewEnv): void {
   root.classList.add('launching');
   let crest = root.querySelector<HTMLElement>('.lobby-launch');
   if (!crest) {
+    root.innerHTML = '';
     crest = el('div', 'lobby-launch');
     crest.innerHTML = `
       <div class="lobby-launch-crest">
@@ -316,7 +319,10 @@ function renderLaunching(root: HTMLElement, state: LobbyViewState, env: LobbyVie
   };
 
   // (Re)arm the timer if we don't have one running.
-  if (launchTimer === undefined) {
+  if (!shouldArmLaunchCountdown(state)) {
+    clearLaunchTimers();
+    updateCountdown();
+  } else if (launchTimer === undefined) {
     launchCountdownEndsAt = performance.now() + START_COUNTDOWN_MS;
     if (launchTickTimer !== undefined) clearInterval(launchTickTimer);
     updateCountdown();

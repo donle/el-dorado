@@ -51,32 +51,30 @@ export interface HoverHostSource {
 }
 
 export function createHoverHost(app: HoverHostSource): HoverHost {
-  const ix = app.interaction;
-  const state = app.state;
   return {
     board: app.board,
     previewCtl: app.previewCtl,
     getState: () => app.state,
     getMobilePanel: () => app.mobilePanel,
-    isMyTurn: () => !!state && state.phase === 'playing' && state.turn?.playerId === app.you,
-    get me() { return state?.players.find((p) => p.id === app.you) ?? null; },
-    hexAt: (c) => state?.hexes.find((h) => h.q === c.q && h.r === c.r),
-    blockadeById: (id) => id ? state?.blockades.find((b) => b.id === id) : undefined,
-    blockadeEdges: (b) => ix.blockadeEdges(b),
-    blockadeDestination: (b, sym, power) => ix.blockadeDestination(b, sym, power),
-    getMode: () => ix.mode,
-    getSelected: () => ix.selected,
-    getNativeActionCardId: () => ix.nativeActionCardId,
-    selectedHandCardIds: () => ix.selectedHandCardIds(),
-    movementRequirement: (hex) => ix.movementRequirement(hex),
-    canEnter: (hex, symbol, power) => ix.canEnter(hex, symbol, power),
-    canStepToEldorado: (hex) => ix.canStepToEldorado(hex),
-    canUseNativeOn: (hex) => ix.canUseNativeOn(hex),
+    isMyTurn: () => !!app.state && app.state.phase === 'playing' && app.state.turn?.playerId === app.you,
+    get me() { return app.state?.players.find((p) => p.id === app.you) ?? null; },
+    hexAt: (c) => app.state?.hexes.find((h) => h.q === c.q && h.r === c.r),
+    blockadeById: (id) => id ? app.state?.blockades.find((b) => b.id === id) : undefined,
+    blockadeEdges: (b) => app.interaction.blockadeEdges(b),
+    blockadeDestination: (b, sym, power) => app.interaction.blockadeDestination(b, sym, power),
+    getMode: () => app.interaction.mode,
+    getSelected: () => app.interaction.selected,
+    getNativeActionCardId: () => app.interaction.nativeActionCardId,
+    selectedHandCardIds: () => app.interaction.selectedHandCardIds(),
+    movementRequirement: (hex) => app.interaction.movementRequirement(hex),
+    canEnter: (hex, symbol, power) => app.interaction.canEnter(hex, symbol, power),
+    canStepToEldorado: (hex) => app.interaction.canStepToEldorado(hex),
+    canUseNativeOn: (hex) => app.interaction.canUseNativeOn(hex),
     pickHandMover: (req, cost, candidates) => pickHandMover(req, cost, candidates),
     blockadeRequiresDiscard: (b) => blockadeRequiresDiscard(b),
     blockadeMoveSymbol: (b) => blockadeMoveSymbol(b),
     cardDefId: (cardId, state) => cardDefId(cardId, state),
-    tryActOnHex: (c) => ix.tryActOnHex(c),
-    tryActOnBlockade: (id) => ix.tryActOnBlockade(id),
+    tryActOnHex: (c) => app.interaction.tryActOnHex(c),
+    tryActOnBlockade: (id) => app.interaction.tryActOnBlockade(id),
   };
 }

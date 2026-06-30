@@ -242,12 +242,13 @@ export class Board {
     const pawnsMoving = this.pawnLayer.step(dt);
     const cameraMoving = this.cameraCtrl.step(time);
     const animatingSelf = this.pawnLayer.animate(time);
+    const decorAnimating = this.hexBoard.updateDecorations(time / 1000);
     this.renderer.clear();
     this.renderer.render(this.scene, this.cameraCtrl.camera);
     this.renderer.clearDepth();
     this.renderer.render(this.overlayScene, this.cameraCtrl.camera);
     if (pawnsMoving || cameraMoving) this.requestFrame();
-    else if (animatingSelf.selfMarkerMoving || animatingSelf.turnGlowMoving) {
+    else if (animatingSelf.selfMarkerMoving || animatingSelf.turnGlowMoving || decorAnimating) {
       this.requestFrame(document.hidden ? HIDDEN_TAB_FRAME_MS : IDLE_ANIMATION_FRAME_MS);
     }
   }

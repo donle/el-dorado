@@ -6,7 +6,7 @@
  * move to `game/ActionDispatcher` in Stage 7.
  */
 import type { ClientMessage, ServerMessage } from '@eldorado/core';
-import { Room, type Send } from '../room.js';
+import type { Send } from '../room.js';
 import type { RoomRegistry, Session } from './RoomRegistry.js';
 import { validateMapId } from './mapSelection.js';
 
@@ -27,8 +27,6 @@ type LobbyMessage = Extract<
 export interface LobbyServiceDeps {
   registry: RoomRegistry;
   sendTo: (connId: string, msg: ServerMessage) => void;
-  /** Build a `Send` closure for a given room that broadcasts to its connections. */
-  makeBroadcastSend: (room: Room) => Send;
 }
 
 export class LobbyService {
@@ -60,8 +58,9 @@ export class LobbyService {
 
   private createRoom(connId: string, name: string): void {
     const room = this.deps.registry.createRoom();
-    const me = room.addHuman(name, this.deps.makeBroadcastSend(room));
-    this.deps.registry.setSession(connId, { room, playerId: me.id });
+    const send = this.connectionSend(connId);
+    const me = room.addHuman(name, send);
+    this.deps.registry.setSession(connId, { room, playerId: me.id, send });
     this.deps.sendTo(connId, { type: 'joined', code: room.code, playerId: me.id });
     room.broadcastRoom();
   }
@@ -72,8 +71,9 @@ export class LobbyService {
       this.deps.sendTo(connId, { type: 'error', message: '没有找到这个房间' });
       return;
     }
-    const me = room.addHuman(name, this.deps.makeBroadcastSend(room));
-    this.deps.registry.setSession(connId, { room, playerId: me.id });
+    const send = this.connectionSend(connId);
+    const me = room.addHuman(name, send);
+    this.deps.registry.setSession(connId, { room, playerId: me.id, send });
     this.deps.sendTo(connId, { type: 'joined', code: room.code, playerId: me.id });
     room.broadcastRoom();
   }
@@ -84,12 +84,13 @@ export class LobbyService {
       this.deps.sendTo(connId, { type: 'error', message: '没有找到这个房间' });
       return;
     }
-    const me = room.reconnect(playerId, this.deps.makeBroadcastSend(room));
+    const send = this.connectionSend(connId);
+    const me = room.reconnect(playerId, send);
     if (!me) {
       this.deps.sendTo(connId, { type: 'error', message: '玩家不在这个房间里' });
       return;
     }
-    this.deps.registry.setSession(connId, { room, playerId: me.id });
+    this.deps.registry.setSession(connId, { room, playerId: me.id, send });
     this.deps.sendTo(connId, { type: 'joined', code: room.code, playerId: me.id });
     room.broadcastRoom();
     if (room.game) this.deps.sendTo(connId, { type: 'state', state: room.game });
@@ -121,7 +122,7 @@ export class LobbyService {
     if (!session || !session.room || !session.playerId) return;
     const { room, playerId } = session;
     if (room.phase === 'playing') {
-      const changed = room.disconnect(playerId, this.deps.makeBroadcastSend(room));
+      const changed = room.disconnect(playerId, session.send ?? undefined);
       if (changed) {
         room.broadcastRoom();
         room.broadcastState();
@@ -157,7 +158,6 @@ export class LobbyService {
     const room = session.room!;
     room.start(mapId ?? room.mapId);
     room.broadcastRoom();
-    room.broadcastState();
     room.broadcastStarting();
     room.armReadyTimeout();
   }
@@ -171,5 +171,9 @@ export class LobbyService {
   private requireHost(session: Session): void {
     if (!session.room || !session.playerId) throw new Error('你还没有进入房间');
     if (session.room.hostId !== session.playerId) throw new Error('只有房主可以这样做');
+  }
+
+  private connectionSend(connId: string): Send {
+    return (msg) => this.deps.sendTo(connId, msg);
   }
 }

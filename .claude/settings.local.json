@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p docs/superpowers/plans/)",
+      "Bash(awk '/^class App \\\\{/{flag=1; next} flag && /^}$/{flag=0} flag' packages/client/src/main.ts)",
+      "Bash(awk '/^export class Board \\\\{/{flag=1; next} flag && /^}$/{flag=0} flag' packages/client/src/board.ts)",
+      "Bash(awk '/^export class Board \\\\{/{flag=1; next} flag && /^}$/{flag=0; print NR; exit}' packages/client/src/board.ts)",
+      "Bash(awk '/^export class Board \\\\{/{flag=1} flag && /^}$/{flag=0; next} !flag && /^\\(export\\\\s+\\)?function\\\\s/{print NR\": \"$0}' packages/client/src/board.ts)",
+      "Bash(git push *)"
+    ]
+  }
+}

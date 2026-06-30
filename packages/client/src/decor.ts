@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Hex } from '@eldorado/core';
-import { caveEntranceTexture, terrainTexture } from './textures.js';
+import { terrainTexture } from './textures.js';
 
 /** A hex positioned in world space, with the height of its top face. */
 export interface Placed {
@@ -53,6 +53,14 @@ const VERTEX_MAT = () =>
 
 const MOUNTAIN_BOULDER_GEO = new THREE.DodecahedronGeometry(0.34, 1);
 let mountainMat: THREE.MeshStandardMaterial | null = null;
+let caveMouthGeo: THREE.ShapeGeometry | null = null;
+let caveGlowGeo: THREE.ShapeGeometry | null = null;
+let caveFrameGeo: THREE.ExtrudeGeometry | null = null;
+let caveHaloGeo: THREE.PlaneGeometry | null = null;
+let caveHaloTex: THREE.CanvasTexture | null = null;
+let caveGlowMat: THREE.MeshBasicMaterial | null = null;
+let caveHaloMat: THREE.MeshBasicMaterial | null = null;
+let caveFrameMat: THREE.MeshStandardMaterial | null = null;
 
 function mountainMaterial(): THREE.MeshStandardMaterial {
   if (!mountainMat) {
@@ -66,13 +74,136 @@ function mountainMaterial(): THREE.MeshStandardMaterial {
   return mountainMat;
 }
 
+function caveFrameMaterial(): THREE.MeshStandardMaterial {
+  if (!caveFrameMat) {
+    caveFrameMat = new THREE.MeshStandardMaterial({
+      color: 0x555c5d,
+      emissive: 0x231407,
+      emissiveIntensity: 0.04,
+      roughness: 0.96,
+      metalness: 0.02,
+      flatShading: true,
+    });
+  }
+  return caveFrameMat;
+}
+
+function archedPath(width: number, height: number): THREE.Path {
+  const sideH = height * 0.42;
+  const halfW = width / 2;
+  const baseY = -height / 2;
+  const shoulderY = baseY + sideH;
+  const path = new THREE.Path();
+  path.moveTo(-halfW, baseY);
+  path.lineTo(-halfW, shoulderY);
+  path.quadraticCurveTo(-halfW * 0.86, height * 0.5, 0, height * 0.5);
+  path.quadraticCurveTo(halfW * 0.86, height * 0.5, halfW, shoulderY);
+  path.lineTo(halfW, baseY);
+  path.lineTo(-halfW, baseY);
+  return path;
+}
+
+function archedShapeGeometry(width: number, height: number): THREE.ShapeGeometry {
+  return new THREE.ShapeGeometry(new THREE.Shape(archedPath(width, height).getPoints(22)), 18);
+}
+
+function archedFrameGeometry(outerWidth: number, outerHeight: number, innerWidth: number, innerHeight: number): THREE.ExtrudeGeometry {
+  const shape = new THREE.Shape(archedPath(outerWidth, outerHeight).getPoints(30));
+  shape.holes.push(archedPath(innerWidth, innerHeight));
+  return new THREE.ExtrudeGeometry(shape, {
+    depth: 0.1,
+    bevelEnabled: true,
+    bevelSize: 0.025,
+    bevelThickness: 0.02,
+    bevelSegments: 1,
+    curveSegments: 2,
+  });
+}
+
+function caveMouthGeometry(): THREE.ShapeGeometry {
+  if (!caveMouthGeo) caveMouthGeo = archedShapeGeometry(0.58, 0.44);
+  return caveMouthGeo;
+}
+
+function caveInnerGlowGeometry(): THREE.ShapeGeometry {
+  if (!caveGlowGeo) caveGlowGeo = archedShapeGeometry(0.44, 0.3);
+  return caveGlowGeo;
+}
+
+function caveFrameGeometry(): THREE.ExtrudeGeometry {
+  if (!caveFrameGeo) caveFrameGeo = archedFrameGeometry(0.88, 0.68, 0.58, 0.44);
+  return caveFrameGeo;
+}
+
+function caveHaloGeometry(): THREE.PlaneGeometry {
+  if (!caveHaloGeo) caveHaloGeo = new THREE.PlaneGeometry(1.08, 0.8);
+  return caveHaloGeo;
+}
+
+function caveHaloTexture(): THREE.CanvasTexture {
+  if (caveHaloTex) return caveHaloTex;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  const g = ctx.createRadialGradient(64, 72, 5, 64, 72, 58);
+  g.addColorStop(0, 'rgba(255,220,145,0.95)');
+  g.addColorStop(0.28, 'rgba(255,190,90,0.52)');
+  g.addColorStop(0.58, 'rgba(110,230,220,0.22)');
+  g.addColorStop(1, 'rgba(110,230,220,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  caveHaloTex = new THREE.CanvasTexture(canvas);
+  caveHaloTex.colorSpace = THREE.SRGBColorSpace;
+  caveHaloTex.generateMipmaps = false;
+  caveHaloTex.minFilter = THREE.LinearFilter;
+  caveHaloTex.magFilter = THREE.LinearFilter;
+  return caveHaloTex;
+}
+
+function caveHaloMaterial(): THREE.MeshBasicMaterial {
+  if (!caveHaloMat) {
+    caveHaloMat = new THREE.MeshBasicMaterial({
+      map: caveHaloTexture(),
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.28,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+    });
+  }
+  return caveHaloMat;
+}
+
+function caveInnerGlowMaterial(): THREE.MeshBasicMaterial {
+  if (!caveGlowMat) {
+    caveGlowMat = new THREE.MeshBasicMaterial({
+      color: 0xffd088,
+      transparent: true,
+      opacity: 0.48,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+  }
+  return caveGlowMat;
+}
+
 function hexBoundaryRadius(angle: number, radius: number): number {
   const sector = Math.PI / 3;
   const a = ((((angle + sector / 2) % sector) + sector) % sector) - sector / 2;
   return (radius * Math.cos(Math.PI / 6)) / Math.cos(a);
 }
 
-function mountainGeometry(rand: () => number): THREE.BufferGeometry {
+function caveCutInfluence(x: number, z: number): number {
+  const mouth = Math.exp(-((x * x) / (0.5 * 0.5) + ((z - 0.6) * (z - 0.6)) / (0.36 * 0.36)));
+  const throat = Math.exp(-((x * x) / (0.34 * 0.34) + ((z - 0.82) * (z - 0.82)) / (0.2 * 0.2)));
+  const frontGate = THREE.MathUtils.smoothstep(z, 0.04, 0.7);
+  return Math.min(1, (mouth * 1.05 + throat * 1.25) * frontGate);
+}
+
+function mountainGeometry(rand: () => number, cave = false): THREE.BufferGeometry {
   const radius = 0.92;
   const segments = 30;
   const rings = 7;
@@ -103,7 +234,16 @@ function mountainGeometry(rand: () => number): THREE.BufferGeometry {
     }
     h += (Math.sin((x * cr + z * sr) * 7.2) * 0.035 + Math.sin((x * sr - z * cr) * 5.4) * 0.025) * taper;
     h += (rand() - 0.5) * 0.045 * taper;
-    const softened = h > 0.52 ? 0.52 + (h - 0.52) * 0.42 : h;
+    let softened = h > 0.52 ? 0.52 + (h - 0.52) * 0.42 : h;
+    if (cave) {
+      const cut = caveCutInfluence(x, z);
+      if (cut > 0.02) {
+        const sideLift = Math.min(1, Math.abs(x) / 0.46);
+        const carvedFloor = 0.025 + sideLift * 0.24 + Math.max(0, 0.52 - z) * 0.05;
+        softened = THREE.MathUtils.lerp(softened, Math.min(softened, carvedFloor), cut * 0.95);
+        softened -= 0.28 * cut * (1 - sideLift);
+      }
+    }
     return Math.max(0, Math.min(softened, 0.82));
   };
 
@@ -149,7 +289,7 @@ function mountainGeometry(rand: () => number): THREE.BufferGeometry {
 export class Decorations {
   readonly group = new THREE.Group();
   private fires: { light: THREE.PointLight; base: number; phase: number }[] = [];
-  private glows: THREE.Mesh[] = [];
+  private glows: { mesh: THREE.Mesh; base: number; amp: number; phase: number }[] = [];
 
   build(placed: Placed[]): void {
     this.group.clear();
@@ -185,6 +325,8 @@ export class Decorations {
           // visual benefit in the current render-on-demand board.
           break;
         case 'mountain':
+          // Cave hexes keep the mountain terrain top and get a carved,
+          // glowing cave mouth set into the front slope.
           this.addMountain(p, rand);
           break;
         case 'basecamp':
@@ -219,7 +361,8 @@ export class Decorations {
   private addMountain(p: Placed, rand: () => number): void {
     const group = new THREE.Group();
     const mat = mountainMaterial();
-    const mountain = new THREE.Mesh(mountainGeometry(rand), mat);
+    const isCave = !!p.hex.cave;
+    const mountain = new THREE.Mesh(mountainGeometry(rand, isCave), mat);
     group.add(mountain);
 
     const count = 2 + Math.floor(rand() * 2);
@@ -233,30 +376,86 @@ export class Decorations {
       group.add(boulder);
     }
 
-    // Caves variant: overlay a dark cave-mouth decal on the front face of
-    // mountain hexes that the map JSON has flagged as cave-bearing.
-    if (p.hex.cave) {
-      const entranceTex = caveEntranceTexture();
-      const decal = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.78, 0.78),
-        new THREE.MeshBasicMaterial({ map: entranceTex, transparent: true, depthWrite: false }),
+    group.position.set(p.x, p.top + 0.02, p.z);
+    group.rotation.y = isCave ? 0 : rand() * Math.PI * 2;
+    if (isCave) group.add(this.buildCaveMouth(rand));
+    this.group.add(group);
+  }
+
+  private buildCaveMouth(rand: () => number): THREE.Group {
+    const group = new THREE.Group();
+    group.position.set(0, 0.28, 0.58);
+    group.rotation.x = -0.54;
+
+    const halo = new THREE.Mesh(caveHaloGeometry(), caveHaloMaterial());
+    halo.position.set(0, -0.1, 0.018);
+    halo.renderOrder = 1.01;
+    this.glows.push({ mesh: halo, base: 0.28, amp: 0.08, phase: rand() * 6.28 });
+    group.add(halo);
+
+    const mouth = new THREE.Mesh(
+      caveMouthGeometry(),
+      new THREE.MeshBasicMaterial({
+        color: 0x020304,
+        transparent: true,
+        opacity: 0.96,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -3,
+        side: THREE.DoubleSide,
+      }),
+    );
+    mouth.position.z = 0.05;
+    mouth.renderOrder = 1.08;
+    group.add(mouth);
+
+    const glowFace = new THREE.Mesh(caveInnerGlowGeometry(), caveInnerGlowMaterial());
+    glowFace.position.set(0, -0.18, 0.065);
+    glowFace.scale.set(0.72, 0.45, 1);
+    glowFace.renderOrder = 1.09;
+    this.glows.push({ mesh: glowFace, base: 0.46, amp: 0.12, phase: rand() * 6.28 });
+    group.add(glowFace);
+
+    const rimMat = caveFrameMaterial();
+    const frame = new THREE.Mesh(caveFrameGeometry(), rimMat);
+    frame.position.set(0, 0, 0.055);
+    frame.renderOrder = 1.12;
+    group.add(frame);
+
+    const chipPoints = [
+      [-0.46, -0.28, 0.12, 0.09, 0.06],
+      [-0.48, -0.1, 0.11, 0.14, 0.07],
+      [-0.39, 0.08, 0.1, 0.14, 0.07],
+      [-0.27, 0.24, 0.12, 0.09, 0.06],
+      [-0.08, 0.32, 0.13, 0.08, 0.06],
+      [0.11, 0.32, 0.13, 0.08, 0.06],
+      [0.29, 0.23, 0.12, 0.09, 0.06],
+      [0.4, 0.07, 0.1, 0.14, 0.07],
+      [0.48, -0.12, 0.11, 0.14, 0.07],
+      [0.46, -0.29, 0.12, 0.09, 0.06],
+      [-0.24, -0.37, 0.15, 0.055, 0.055],
+      [0.02, -0.39, 0.17, 0.055, 0.055],
+      [0.27, -0.36, 0.15, 0.055, 0.055],
+    ] as const;
+    for (const [x, y, sx, sy, sz] of chipPoints) {
+      const rock = new THREE.Mesh(MOUNTAIN_BOULDER_GEO, caveFrameMaterial());
+      rock.position.set(
+        x + (rand() - 0.5) * 0.02,
+        y + (rand() - 0.5) * 0.02,
+        0.22 + rand() * 0.025,
       );
-      // Sit the decal on the front slope of the mountain, slightly tilted to
-      // face the camera. Offset is in the group's local frame (Y up).
-      decal.position.set(0, 0.32, 0.42);
-      decal.rotation.x = -0.25;
-      group.add(decal);
-      // A small pulse light inside the mouth so a player can see it from a
-      // distance; the AnimationDirector modulates the intensity each frame.
-      const glow = new THREE.PointLight(0x6fdada, 0.7, 2.4, 2);
-      glow.position.set(0, 0.32, 0.42);
-      this.fires.push({ light: glow, base: 0.7, phase: rand() * 6.28 });
-      group.add(glow);
+      rock.scale.set(sx, sy, sz);
+      rock.rotation.set((rand() - 0.5) * 0.45, rand() * Math.PI * 2, (rand() - 0.5) * 0.45);
+      rock.renderOrder = 1.16;
+      group.add(rock);
     }
 
-    group.position.set(p.x, p.top + 0.02, p.z);
-    group.rotation.y = rand() * Math.PI * 2;
-    this.group.add(group);
+    const glow = new THREE.PointLight(0xffcf75, 2.6, 3.2, 1.6);
+    glow.position.set(0, -0.16, 0.3);
+    this.fires.push({ light: glow, base: 2.6, phase: rand() * 6.28 });
+    group.add(glow);
+    return group;
   }
 
   private addCamp(p: Placed, rand: () => number): void {
@@ -287,7 +486,10 @@ export class Decorations {
       new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffc83a, emissiveIntensity: 1 }),
     );
     orb.position.set(p.x, p.top + 0.4, p.z);
-    this.glows.push(beam, orb);
+    this.glows.push(
+      { mesh: beam, base: 0.22, amp: 0.12, phase: 0 },
+      { mesh: orb, base: 0.7, amp: 0.5, phase: 0 },
+    );
     this.group.add(beam, orb, new THREE.PointLight(0xffd877, 0.8, 4));
   }
 
@@ -332,14 +534,16 @@ export class Decorations {
   }
 
   /** Advance time-based effects: campfire flicker, beacon pulse. */
-  update(t: number): void {
+  update(t: number): boolean {
     for (const f of this.fires) {
       f.light.intensity = f.base * (0.75 + 0.35 * Math.sin(t * 11 + f.phase)) + Math.sin(t * 27 + f.phase) * 0.1;
     }
     for (const g of this.glows) {
-      const m = g.material as THREE.Material & { emissiveIntensity?: number; opacity: number };
-      if (m.emissiveIntensity !== undefined) m.emissiveIntensity = 0.7 + 0.5 * Math.sin(t * 2.2);
-      else m.opacity = 0.16 + 0.12 * (0.5 + 0.5 * Math.sin(t * 2.2));
+      const m = g.mesh.material as THREE.Material & { emissiveIntensity?: number; opacity: number };
+      const pulse = g.base + g.amp * (0.5 + 0.5 * Math.sin(t * 2.2 + g.phase));
+      if (m.emissiveIntensity !== undefined) m.emissiveIntensity = pulse;
+      else m.opacity = pulse;
     }
+    return this.fires.length > 0 || this.glows.length > 0;
   }
 }

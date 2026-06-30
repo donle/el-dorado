@@ -21,6 +21,7 @@ import {
 import {
   BLOCKADE_WIDTH,
   BLOCKADE_HEIGHT,
+  COST_LABEL_SIZE,
 } from '../shared/constants.js';
 import {
   blockadePlateGeometry,
@@ -328,7 +329,7 @@ export class BlockadeRenderer {
     let mat = this.labelMaterialCache.get(cacheKey);
     if (!mat) {
       const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 128;
+      canvas.width = canvas.height = COST_LABEL_SIZE;
       const ctx = canvas.getContext('2d')!;
       const tex = new THREE.CanvasTexture(canvas);
       tex.colorSpace = THREE.SRGBColorSpace;

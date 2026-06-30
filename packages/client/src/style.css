@@ -1737,16 +1737,18 @@ body.mobile-device .player-hand-panel { top: 156px; width: min(310px, calc(100vw
 
 /* Short / landscape phones: shrink the hand so it doesn't eat the board. */
 @media (max-height: 500px) and (orientation: landscape) {
-  .topbar { top: 1px; }
+  #hud .topbar.panel { top: 1px; pointer-events: none; }
   .mobile-toolbar { top: 4px; }
   .dock { padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
-  .hand-tray { padding: 12px 8px 6px; gap: 6px; }
+  .hand-tray { padding: 12px 8px 6px; gap: 6px; pointer-events: none; }
+  .hand-tray .card { pointer-events: auto; }
   .card { width: 54px; height: 76px; }
   .card-use-btn {
     bottom: 4px; height: 17px; padding: 0 5px;
     border-radius: 5px; font-size: 9px; line-height: 15px;
   }
   .players-panel, .market-panel { max-height: 88vh; }
+  .action-log { display: none; }
   .action-bar { bottom: calc(92px + env(safe-area-inset-bottom)); }
   .terrain-panel { bottom: calc(176px + env(safe-area-inset-bottom)); max-height: 44vh; }
 }

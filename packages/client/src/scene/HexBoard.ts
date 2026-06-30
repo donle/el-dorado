@@ -18,6 +18,7 @@ import {
   TERMINAL_HEIGHT,
   TERRAIN_DEMAND_DARKEN_STEP,
   TERRAIN_DEMAND_DARKEN_MIN,
+  COST_LABEL_SIZE,
 } from '../shared/constants.js';
 import {
   terminalPlateGeometry,
@@ -118,6 +119,10 @@ export class HexBoard {
     }
 
     this.addTerminalPlate(terminal);
+  }
+
+  updateDecorations(timeSeconds: number): boolean {
+    return this.decor.update(timeSeconds);
   }
 
   // --- accessors used by BlockadeRenderer + BoardInput -------------------
@@ -279,7 +284,7 @@ export class HexBoard {
     let mat = this.costLabelMaterialCache.get(cacheKey);
     if (!mat) {
       const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 128;
+      canvas.width = canvas.height = COST_LABEL_SIZE;
       const ctx = canvas.getContext('2d')!;
       const tex = new THREE.CanvasTexture(canvas);
       tex.colorSpace = THREE.SRGBColorSpace;
