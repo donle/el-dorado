@@ -196,6 +196,7 @@ class App {
 
   constructor(BoardClass: BoardConstructor) {
     this.setupMobileLayoutClasses();
+    this.setupFullscreenButton();
     document.body.appendChild(this.preview);
     document.body.appendChild(this.terrainPanel);
     this.board = new BoardClass(document.getElementById('board') as HTMLCanvasElement);
@@ -228,6 +229,26 @@ class App {
   private isMobileDevice(): boolean {
     const uaMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
     return uaMobile || (navigator.maxTouchPoints > 1 && this.mobileDeviceQuery.matches);
+  }
+
+  /**
+   * Mobile browser chrome (address bar / nav bar) eats into the viewport so it never
+   * reaches a true 100vh. requestFullscreen() reclaims that space, but iOS Safari has
+   * no Fullscreen API for non-video elements (fullscreenEnabled is always false there),
+   * so the button simply isn't created on unsupported browsers.
+   */
+  private setupFullscreenButton(): void {
+    if (!document.fullscreenEnabled) return;
+    const btn = button('⛶', () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else document.documentElement.requestFullscreen().catch(() => {});
+    }, true);
+    btn.className = 'fullscreen-btn';
+    btn.title = '全屏';
+    document.addEventListener('fullscreenchange', () => {
+      btn.classList.toggle('active', !!document.fullscreenElement);
+    });
+    document.body.appendChild(btn);
   }
 
   private isCompactLandscape(): boolean {

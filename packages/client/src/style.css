@@ -31,7 +31,7 @@
 html, body { margin: 0; height: 100%; overflow: hidden;
   font-family: system-ui, -apple-system, "PingFang SC", "Segoe UI", sans-serif;
   color: var(--ink); background: var(--bg); }
-#app { position: relative; width: 100vw; height: 100vh; }
+#app { position: relative; width: 100vw; height: 100vh; height: 100dvh; }
 #board { display: block; width: 100%; height: 100%; touch-action: none; }
 
 /* ---------- First-load screen ---------- */
@@ -235,7 +235,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 
 /* ---------- Right: market ---------- */
 .market-panel { position: absolute; top: 76px; right: 14px; width: 224px; padding: 14px;
-  max-height: calc(100vh - 292px); overflow-y: auto; }
+  max-height: calc(100vh - 292px); max-height: calc(100dvh - 292px); overflow-y: auto; }
 .shop-card { display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 9px;
   min-height: 52px; padding: 6px 10px; border-radius: 8px; margin-bottom: 6px; cursor: pointer;
   background: rgba(255,255,255,0.04); border: 1px solid transparent; transition: .12s; }
@@ -462,7 +462,8 @@ button:disabled::after { display: none; }
   position: absolute; top: 14px; left: 14px; z-index: 44; pointer-events: auto;
 }
 .settings-gear,
-.settings-close {
+.settings-close,
+.fullscreen-btn {
   width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0;
   display: grid; place-items: center;
   border-radius: 10px; border: 1px solid rgba(255,225,142,0.52);
@@ -481,11 +482,14 @@ button:disabled::after { display: none; }
 .settings-gear::before,
 .settings-gear::after,
 .settings-close::before,
-.settings-close::after {
+.settings-close::after,
+.fullscreen-btn::before,
+.fullscreen-btn::after {
   display: none;
 }
 .settings-gear:not(:disabled):hover,
-.settings-close:not(:disabled):hover {
+.settings-close:not(:disabled):hover,
+.fullscreen-btn:not(:disabled):hover {
   transform: translateY(-1px);
   filter: brightness(1.08) saturate(1.08);
   border-color: rgba(255,238,182,0.78);
@@ -497,14 +501,16 @@ button:disabled::after { display: none; }
     inset 0 0 0 1px rgba(255,255,255,0.1);
 }
 .settings-gear:not(:disabled):active,
-.settings-close:not(:disabled):active {
+.settings-close:not(:disabled):active,
+.fullscreen-btn:not(:disabled):active {
   transform: translateY(1px) scale(.98);
   box-shadow:
     0 3px 9px rgba(0,0,0,0.18),
     inset 0 3px 8px rgba(0,0,0,0.32),
     inset 0 1px 0 rgba(255,255,255,0.12);
 }
-.settings-gear.active {
+.settings-gear.active,
+.fullscreen-btn.active {
   border-color: rgba(255,233,166,0.82);
   background:
     radial-gradient(circle at 31% 22%, rgba(255,255,255,0.4), transparent 24%),
@@ -516,6 +522,14 @@ button:disabled::after { display: none; }
     0 0 18px rgba(69,213,193,0.28),
     inset 0 1px 0 rgba(255,255,255,0.35);
 }
+/* Mobile-only: browser chrome (address/nav bars) eats into the viewport, so this
+   button reclaims real 100vh via the Fullscreen API. iOS Safari lacks that API for
+   non-video elements, so the button is never created there (see setupFullscreenButton). */
+.fullscreen-btn {
+  display: none;
+  position: fixed; top: 14px; left: 66px; z-index: 44;
+}
+body.mobile-device .fullscreen-btn { display: grid; place-items: center; }
 .settings-scrim {
   position: absolute; inset: 0; z-index: 88; pointer-events: auto;
   background:
@@ -614,6 +628,7 @@ button:disabled::after { display: none; }
 .action-log-list {
   position: relative; display: flex; flex-direction: column; gap: 7px;
   height: 206px; max-height: max(96px, min(206px, calc(100vh - 584px)));
+  max-height: max(96px, min(206px, calc(100dvh - 584px)));
   overflow-y: auto; padding-right: 3px;
 }
 .action-log-entry {
@@ -665,7 +680,7 @@ body.mobile-device .action-log { display: none; }
 /* ---------- Left: terrain inspector ---------- */
 .terrain-panel {
   z-index: 50;
-  width: 286px; max-height: calc(100vh - 170px); overflow-y: auto;
+  width: 286px; max-height: calc(100vh - 170px); max-height: calc(100dvh - 170px); overflow-y: auto;
   padding: 14px; pointer-events: auto;
 }
 .terrain-head { display: grid; grid-template-columns: 42px 1fr 28px; align-items: center; gap: 10px; }
@@ -1159,6 +1174,7 @@ body.mobile-device .action-log { display: none; }
   .view-toggle, .exit-btn { padding: 6px 8px; font-size: 12px; }
   .settings-dock { top: 8px; left: 8px; }
   .settings-gear { width: 40px; height: 40px; min-width: 40px; min-height: 40px; padding: 0; font-size: 19px; }
+  .fullscreen-btn { top: 8px; left: 56px; width: 40px; height: 40px; min-width: 40px; min-height: 40px; padding: 0; font-size: 19px; }
   .settings-menu { padding: 18px; }
 
   /* Players & market become bottom sheets, hidden until toggled open. */
@@ -1239,6 +1255,7 @@ body.mobile-device .action-log { display: none; }
   #lobby { padding: 14px; align-items: flex-end; }
   .lobby-modal {
     width: 100%; min-height: 0; max-height: calc(100vh - 28px);
+    max-height: calc(100dvh - 28px);
     grid-template-columns: 1fr; overflow-y: auto;
   }
   .lobby-art { min-height: 170px; }
@@ -1454,6 +1471,7 @@ body.mobile-device .action-log { display: none; }
   body.mobile-device .lobby-modal {
     width: calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));
     height: calc(100vh - 12px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    height: calc(100dvh - 12px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
     min-height: 0;
     max-height: none;
     grid-template-columns: minmax(190px, 0.78fr) minmax(280px, 1.22fr);
@@ -2036,6 +2054,7 @@ body.mobile-device .action-log { display: none; }
     top: calc(142px + env(safe-area-inset-top)) !important;
     width: min(188px, calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right)));
     max-height: calc(100vh - 326px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(100dvh - 326px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
     overflow-y: auto;
     padding: 8px;
   }
